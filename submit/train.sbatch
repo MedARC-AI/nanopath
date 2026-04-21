@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=baseline
+#SBATCH --job-name=jepa-baseline
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-task=1
@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-# Default launcher for the checked-in nano baseline run.
+# Default launcher for the checked-in nano JEPA baseline run.
 CONFIG_FILE="/admin/home/paul/nanopath/configs/nano.yaml"
 NPROC_PER_NODE=1
 

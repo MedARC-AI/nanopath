@@ -1,7 +1,7 @@
 # This file is the TCGA input path for pretraining.
 # It reads the same OpenMidnight-style sample list used to choose TCGA patches,
 # builds cached train/val line-offset indices from that list by hashing TCGA patient IDs,
-# opens WSIs with lazyslide, and turns each listed patch into the JEPA global/local/latent views.
+# opens WSIs with lazyslide, and turns each listed patch into the JEPA global/local views.
 # The patch source is therefore fixed by `/block/TCGA/sample_dataset_30.txt`, while the
 # multi-view augmentation stack remains specific to this repo rather than copying OpenMidnight.
 
@@ -184,10 +184,9 @@ class RandomTCGADataset(Dataset):
         self.sample_list_path = Path(data["sample_list"])
         if not self.sample_list_path.is_file():
             raise FileNotFoundError(f"sample list not found at {self.sample_list_path}")
-        if int(train["global_size"]) > SAMPLE_LIST_PATCH_SIZE or int(train["latent_size"]) > SAMPLE_LIST_PATCH_SIZE:
+        if int(train["global_size"]) > SAMPLE_LIST_PATCH_SIZE:
             raise ValueError(
-                f"global_size and latent_size must be <= {SAMPLE_LIST_PATCH_SIZE} when using sample_dataset_30.txt, "
-                f"got global_size={train['global_size']} latent_size={train['latent_size']}"
+                f"global_size must be <= {SAMPLE_LIST_PATCH_SIZE} when using sample_dataset_30.txt, got global_size={train['global_size']}"
             )
         offset_paths = split_offset_paths(data)
         offsets_path = offset_paths[split]
@@ -218,14 +217,6 @@ class RandomTCGADataset(Dataset):
                 v2.RandomHorizontalFlip(),
                 v2.RandomVerticalFlip(),
                 v2.ColorJitter(data["color_jitter"], data["color_jitter"], data["color_jitter"], 0.0),
-                v2.Normalize(mean=mean, std=std),
-            ]
-        )
-        self.latent_aug = v2.Compose(
-            [
-                v2.RandomResizedCrop(train["latent_size"], scale=tuple(data["latent_crop_scale"]), antialias=True),
-                v2.RandomHorizontalFlip(),
-                v2.RandomVerticalFlip(),
                 v2.Normalize(mean=mean, std=std),
             ]
         )
@@ -272,7 +263,6 @@ class RandomTCGADataset(Dataset):
             return {
                 "global_views": torch.stack([self.global_aug(context_tile) for _ in range(self.global_views)]),
                 "local_views": torch.stack([self.local_aug(context_tile) for _ in range(self.local_views)]),
-                "latent_view": self.latent_aug(tile),
                 "sampled_mpp": torch.tensor(sampled_mpp, dtype=torch.float32),
                 "sample_idx": torch.tensor(int(idx), dtype=torch.int64),
                 "slide_id": torch.tensor(slide_key, dtype=torch.int64),
@@ -283,11 +273,9 @@ class RandomTCGADataset(Dataset):
             context_tile = self.hed_jitter(tile) if self.hed_jitter is not None else tile
             global_views = torch.stack([self.global_aug(context_tile) for _ in range(self.global_views)])
             local_views = torch.stack([self.local_aug(context_tile) for _ in range(self.local_views)])
-            latent_view = self.latent_aug(tile)
         return {
             "global_views": global_views,
             "local_views": local_views,
-            "latent_view": latent_view,
             "sampled_mpp": torch.tensor(sampled_mpp, dtype=torch.float32),
             "sample_idx": torch.tensor(int(idx), dtype=torch.int64),
             "slide_id": torch.tensor(slide_key, dtype=torch.int64),

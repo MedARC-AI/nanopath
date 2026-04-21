@@ -15,7 +15,6 @@ import torch
 import torch.distributed as dist
 import torch.distributed.nn.functional as dist_nn
 import torch.nn as nn
-import torch.nn.functional as F
 import wandb
 import yaml
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -27,8 +26,8 @@ from probe import collect_probe_results, prepare_probe_state, probe_enabled, que
 
 
 GNS_EVERY = 100
-EVAL_KEYS = ("jepa_pred", "sig", "latent", "total", "jepa_proxy")
-TRAIN_KEYS = ("jepa_pred", "sig", "latent", "total", "jepa_proxy", "proj_std", "target_std", "pred_target_cos", "mask_fraction")
+EVAL_KEYS = ("jepa_pred", "sig", "total", "jepa_proxy")
+TRAIN_KEYS = ("jepa_pred", "sig", "total", "jepa_proxy", "proj_std")
 
 
 def load_config():
@@ -39,22 +38,18 @@ def load_config():
     return cfg
 
 
-def loss_terms(sigreg, proj, full, latent_pred, mask, train_cfg, sigreg_generator, proj_sigreg=None):
+def loss_terms(sigreg, proj, train_cfg, sigreg_generator, proj_sigreg=None):
     # jepa_pred_loss is the JEPA-style multi-view consistency term on the projector outputs:
     # if global/local views of the same tile disagree, this grows.
     # sig_loss is the anti-collapse regularizer on those same projector outputs.
-    # latent_loss is the masked latent prediction term: MAE in encoder feature space
-    # between the predictor output and detached latent targets.
-    # total_loss is the objective we backprop through, while jepa_proxy intentionally tracks
-    # only the JEPA branch (lambda_jepa_pred * jepa_pred + lambda_sig * sig) on a normalized scale.
+    # total_loss is the objective we backprop through, and jepa_proxy tracks that same
+    # JEPA branch on the historical normalized scale used for model selection.
     proj_sigreg = proj if proj_sigreg is None else proj_sigreg
     jepa_pred_loss = (proj - proj.mean(dim=1, keepdim=True)).square().mean()
     sig_loss = sigreg(proj_sigreg.transpose(0, 1), generator=sigreg_generator)
-    latent_loss = F.l1_loss(latent_pred, full) if train_cfg["latent_predict_visible"] else F.l1_loss(latent_pred[mask], full[mask])
-    jepa_branch = train_cfg["lambda_jepa_pred"] * jepa_pred_loss + train_cfg["lambda_sig"] * sig_loss
-    total_loss = jepa_branch + train_cfg["lambda_lat"] * latent_loss
-    jepa_proxy = jepa_branch / (train_cfg["lambda_sig"] ** 0.4) if train_cfg["lambda_sig"] > 0 else jepa_branch
-    return jepa_pred_loss, sig_loss, latent_loss, total_loss, jepa_proxy
+    total_loss = train_cfg["lambda_jepa_pred"] * jepa_pred_loss + train_cfg["lambda_sig"] * sig_loss
+    jepa_proxy = total_loss / (train_cfg["lambda_sig"] ** 0.4) if train_cfg["lambda_sig"] > 0 else total_loss
+    return jepa_pred_loss, sig_loss, total_loss, jepa_proxy
 
 
 def evaluate(model, sigreg, loader, cfg, device, world_size):
@@ -70,19 +65,15 @@ def evaluate(model, sigreg, loader, cfg, device, world_size):
             with autocast:
                 global_views = batch["global_views"].to(device, non_blocking=True)
                 local_views = batch["local_views"].to(device, non_blocking=True)
-                latent_view = batch["latent_view"].to(device, non_blocking=True)
-                proj, full, latent_pred, mask = model(global_views, local_views, latent_view, train_cfg, mask_generator=eval_generator)
-                jepa_pred_loss, sig_loss, latent_loss, total_loss, jepa_proxy = loss_terms(
+                proj = model(global_views, local_views, train_cfg)
+                jepa_pred_loss, sig_loss, total_loss, jepa_proxy = loss_terms(
                     sigreg,
                     proj,
-                    full,
-                    latent_pred,
-                    mask,
                     train_cfg,
                     eval_generator,
                     torch.cat(dist_nn.all_gather(proj), dim=0) if world_size > 1 else proj,
                 )
-            for i, value in enumerate((jepa_pred_loss, sig_loss, latent_loss, total_loss, jepa_proxy)):
+            for i, value in enumerate((jepa_pred_loss, sig_loss, total_loss, jepa_proxy)):
                 losses[i] += value.item()
             batches += 1
             if batches >= train_cfg["val_batches"]:
@@ -126,7 +117,7 @@ def main():
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
-        if param.ndim < 2 or name.endswith("bias") or "norm" in name or "register_tokens" in name or "predictor_query" in name:
+        if param.ndim < 2 or name.endswith("bias") or "norm" in name or "register_tokens" in name:
             no_decay.append(param)
         else:
             decay.append(param)
@@ -143,7 +134,6 @@ def main():
     lr = train_cfg["lr_ref"] * math.sqrt((batch_size * world_size) / train_cfg["batch_ref"])
     examples_seen = 0
     visible_patch_presentations = 0
-    masked_target_presentations = 0
     train_flops = 0
     best_val_jepa_proxy = float("inf")
     best_val_mean_probe_f1 = float("-inf")
@@ -178,7 +168,6 @@ def main():
             best_val_jepa_proxy,
             examples_seen,
             visible_patch_presentations,
-            masked_target_presentations,
             train_flops,
             best_val_mean_probe_f1,
             best_val_mean_probe_f1_step,
@@ -189,7 +178,6 @@ def main():
             float(checkpoint["best_val_jepa_proxy"]),
             int(checkpoint["examples_seen"]),
             int(checkpoint["visible_patch_presentations"]),
-            int(checkpoint["masked_target_presentations"]),
             int(checkpoint["train_flops"]),
             float(checkpoint["best_val_mean_probe_f1"]),
             int(checkpoint["best_val_mean_probe_f1_step"]),
@@ -253,14 +241,12 @@ def main():
     root_model = model.module if distributed else model
     global_patches = (train_cfg["global_size"] // cfg["model"]["patch_size"]) ** 2
     local_patches = (train_cfg["local_size"] // cfg["model"]["patch_size"]) ** 2
-    latent_patches = (train_cfg["latent_size"] // cfg["model"]["patch_size"]) ** 2
     last_time = time.time()
     last_examples = examples_seen
     last_visible_patch_presentations = visible_patch_presentations
     last_train_flops = train_flops
     last_gns_simple = None
     last_gns_batch_ratio = None
-    latent_visible_patches = int(round(latent_patches * (1.0 - train_cfg["latent_mask_ratio"])))
     unique_tile_patch_count = (SAMPLE_LIST_PATCH_SIZE // cfg["model"]["patch_size"]) ** 2
     seen_sample_ids = set()
     seen_slide_ids = set()
@@ -279,7 +265,6 @@ def main():
             "best_val_mean_probe_f1_step": best_val_mean_probe_f1_step,
             "examples_seen": examples_seen,
             "visible_patch_presentations": visible_patch_presentations,
-            "masked_target_presentations": masked_target_presentations,
             "train_flops": train_flops,
             "batch_size": batch_size,
             "best_probe_scores": best_probe_scores,
@@ -349,8 +334,8 @@ def main():
             pending_sample_ids.update(int(x) for x in batch["sample_idx"].tolist())
             pending_slide_ids.update(int(x) for x in batch["slide_id"].tolist())
             pending_patient_ids.update(int(x) for x in batch["patient_id"].tolist())
-            global_views, local_views, latent_view = [batch[key].to(device, non_blocking=True) for key in ("global_views", "local_views", "latent_view")]
-            current_batch = latent_view.shape[0]
+            global_views, local_views = [batch[key].to(device, non_blocking=True) for key in ("global_views", "local_views")]
+            current_batch = global_views.shape[0]
             finite_mpp = batch["sampled_mpp"].float()
             finite_mpp = finite_mpp[torch.isfinite(finite_mpp)]
             sampled_mpp_mean = float(finite_mpp.mean().item()) if finite_mpp.numel() > 0 else float("nan")
@@ -368,13 +353,10 @@ def main():
                     opt.zero_grad(set_to_none=True)
                     with model.no_sync():
                         with autocast:
-                            proj, full, latent_pred, mask = model(global_views, local_views, latent_view, train_cfg)
-                            jepa_pred_loss, sig_loss, latent_loss, total_loss, _ = loss_terms(
+                            proj = model(global_views, local_views, train_cfg)
+                            jepa_pred_loss, sig_loss, total_loss, _ = loss_terms(
                                 root_model.sigreg,
                                 proj,
-                                full,
-                                latent_pred,
-                                mask,
                                 train_cfg,
                                 sigreg_generator,
                                 torch.cat(dist_nn.all_gather(proj), dim=0),
@@ -396,18 +378,14 @@ def main():
                     for start in [0, half]:
                         opt.zero_grad(set_to_none=True)
                         with autocast:
-                            proj, full, latent_pred, mask = model(
+                            proj = model(
                                 global_views[start : start + half],
                                 local_views[start : start + half],
-                                latent_view[start : start + half],
                                 train_cfg,
                             )
-                            jepa_pred_loss, sig_loss, latent_loss, total_loss, _ = loss_terms(
+                            jepa_pred_loss, sig_loss, total_loss, _ = loss_terms(
                                 root_model.sigreg,
                                 proj,
-                                full,
-                                latent_pred,
-                                mask,
                                 train_cfg,
                                 sigreg_generator,
                             )
@@ -422,27 +400,15 @@ def main():
                     gns_batch_big = current_batch
                     opt.zero_grad(set_to_none=True)
             with autocast:
-                proj, full, latent_pred, mask = model(global_views, local_views, latent_view, train_cfg)
-                jepa_pred_loss, sig_loss, latent_loss, total_loss, jepa_proxy = loss_terms(
+                proj = model(global_views, local_views, train_cfg)
+                jepa_pred_loss, sig_loss, total_loss, jepa_proxy = loss_terms(
                     root_model.sigreg,
                     proj,
-                    full,
-                    latent_pred,
-                    mask,
                     train_cfg,
                     sigreg_generator,
                     torch.cat(dist_nn.all_gather(proj), dim=0) if distributed else proj,
                 )
                 proj_std = proj.float().reshape(-1, proj.shape[-1]).std(dim=0).mean()
-                target_std = full.float().reshape(-1, full.shape[-1]).std(dim=0).mean()
-                if train_cfg["latent_predict_visible"]:
-                    latent_pred_flat = latent_pred.float().reshape(-1, latent_pred.shape[-1])
-                    full_flat = full.float().reshape(-1, full.shape[-1])
-                else:
-                    latent_pred_flat = latent_pred[mask].float()
-                    full_flat = full[mask].float()
-                pred_target_cos = F.cosine_similarity(latent_pred_flat, full_flat, dim=-1).mean()
-                mask_fraction = mask.float().mean()
             opt.zero_grad(set_to_none=True)
             total_loss.backward()
             grad_sq = 0.0
@@ -471,31 +437,25 @@ def main():
             opt.step()
             completed_step = step + 1
             global_batch = current_batch * world_size
-            visible_now = global_batch * (train_cfg["global_views"] * global_patches + train_cfg["local_views"] * local_patches + latent_patches + latent_visible_patches)
-            masked_now = global_batch * (latent_patches - latent_visible_patches)
+            visible_now = global_batch * (train_cfg["global_views"] * global_patches + train_cfg["local_views"] * local_patches)
             examples_seen += global_batch
             visible_patch_presentations += visible_now
-            masked_target_presentations += masked_now
             train_flops += int(6 * model_params * visible_now)
             if distributed:
                 reduced = torch.tensor(
                     [
                         jepa_pred_loss.item(),
                         sig_loss.item(),
-                        latent_loss.item(),
                         total_loss.item(),
                         jepa_proxy.item(),
                         proj_std.item(),
-                        target_std.item(),
-                        pred_target_cos.item(),
-                        mask_fraction.item(),
                     ],
                     device=device,
                 )
                 dist.all_reduce(reduced, op=dist.ReduceOp.SUM)
                 reduced = (reduced / world_size).tolist()
             else:
-                reduced = [jepa_pred_loss.item(), sig_loss.item(), latent_loss.item(), total_loss.item(), jepa_proxy.item(), proj_std.item(), target_std.item(), pred_target_cos.item(), mask_fraction.item()]
+                reduced = [jepa_pred_loss.item(), sig_loss.item(), total_loss.item(), jepa_proxy.item(), proj_std.item()]
             reduced = dict(zip(TRAIN_KEYS, reduced))
             should_log = completed_step == 1 or completed_step % train_cfg["log_every"] == 0
             unique_counts = flush_unique_counts() if should_log else None
@@ -526,7 +486,6 @@ def main():
                     "global_batch_size": global_batch,
                     "examples_seen": examples_seen,
                     "visible_patch_presentations": visible_patch_presentations,
-                    "masked_target_presentations": masked_target_presentations,
                     "train_flops": train_flops,
                     "grad_norm": grad_norm,
                     "param_norm": param_norm,
@@ -626,7 +585,6 @@ def main():
             "best_val_mean_probe_f1_step": best_val_mean_probe_f1_step,
             "tile_presentations": examples_seen,
             "visible_patch_presentations": visible_patch_presentations,
-            "masked_target_presentations": masked_target_presentations,
             **final_unique_counts,
             "train_flops": train_flops,
             "flop_fraction": min(1.0, float(train_flops) / float(max_train_flops)),

@@ -1,6 +1,6 @@
 # NanoPath
 
-Lean single-stage pathology pretraining code.
+Lean JEPA pathology pretraining code.
 
 ## Setup
 
@@ -25,7 +25,7 @@ mkdir -p /data/nanopath
 ## Main files
 
 - `train.py`: training loop
-- `model.py`: model and loss stack
+- `model.py`: model and projector stack
 - `dataloader.py`: TCGA sample-list loader
 - `probe.py`: async Thunder linear probes
 - `thunder_adapter.py`: Thunder checkpoint adapter
@@ -61,7 +61,7 @@ Edit [train.sbatch](/admin/home/paul/nanopath/submit/train.sbatch) before submit
 - sample-list cache: `/data/nanopath/cache`
 - SLURM logs from `train.sbatch`: `/data/nanopath/slurm`
 - Thunder scratch: `/tmp/nanopath-thunder`
-- checked-in nano baseline: `/data/nanopath/nano/baseline`
+- checked-in nano baseline: `/data/nanopath/nano/new-baseline-only-jepa`
 
 Fresh non-resume launches delete and recreate `project.output_dir` before training starts.
 Thunder probes are launched asynchronously from eval steps and continue chaining after the training job exits; monitor `project.output_dir/thunder/state.json` plus the Thunder SLURM logs for pending probe progress.
