@@ -138,6 +138,7 @@ def submit_probe_job(state, request):
     runtime_dir = f"{state['paths']['scratch_root']}/step_{request['checkpoint_step']:07d}-$SLURM_JOB_ID"
     script = f"""#!/usr/bin/env bash
 set -euo pipefail
+unset WANDB_SERVICE
 export NANOPATH_THUNDER_RUNTIME_DIR="{runtime_dir}"
 trap 'rm -rf "$NANOPATH_THUNDER_RUNTIME_DIR"' EXIT
 "{THUNDER_PYTHON}" "{Path(__file__).resolve()}" "{request['request_path']}"
@@ -470,6 +471,7 @@ def collect_finished_probe_results(output_dir):
     wandb_meta = checkpoint["wandb"]
     if wandb_meta is None:
         raise ValueError(f"missing wandb metadata in {training_checkpoints[-1]}")
+    os.environ.pop("WANDB_SERVICE", None)
     wandb_run = wandb.init(
         project=wandb_meta["project"],
         name=wandb_meta["name"],

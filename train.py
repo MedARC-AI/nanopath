@@ -334,12 +334,10 @@ def main():
         log_probe_results(step)
     if distributed:
         dist.barrier()
-    max_wall_seconds = int(train_cfg["max_wall_seconds"])
+    max_train_flops = int(train_cfg["max_train_flops"])
     train_loop_started_at = time.monotonic()
     train_loop_wall_seconds = 0.0
-    stop_reason = None
-    cooldown_started_step = None
-    cooldown_started_wall_seconds = None
+    stop_reason = "max_train_flops" if train_flops >= max_train_flops else None
     last_eval_step = step if math.isfinite(best_val_jepa_proxy) else -1
     last_saved_step = step if resume_path is not None else 0
 
@@ -522,7 +520,7 @@ def main():
                     "visible_patches_per_sec": visible_patches_per_sec,
                     "flops_per_sec": flops_per_sec,
                     "wall_seconds": train_loop_wall_seconds,
-                    "wall_fraction": min(1.0, train_loop_wall_seconds / max_wall_seconds),
+                    "flop_fraction": min(1.0, float(train_flops) / float(max_train_flops)),
                     "lr": opt.param_groups[0]["lr"],
                     "batch_size": batch_size,
                     "global_batch_size": global_batch,
@@ -579,10 +577,8 @@ def main():
                 val_loader = make_loader(val_ds, False, batch_size)
             step = completed_step
             train_loop_wall_seconds = time.monotonic() - train_loop_started_at
-            if train_loop_wall_seconds >= max_wall_seconds:
-                stop_reason = "max_wall_seconds"
-                cooldown_started_step = step
-                cooldown_started_wall_seconds = train_loop_wall_seconds
+            if train_flops >= max_train_flops:
+                stop_reason = "max_train_flops"
                 break
             if cbs_trigger:
                 break
@@ -598,9 +594,9 @@ def main():
             best_val_jepa_proxy = val["jepa_proxy"]
         last_eval_step = step
         if rank == 0:
-            log_val(step, val, "cooldown_eval")
+            log_val(step, val, "final_eval")
     if not math.isfinite(best_val_jepa_proxy):
-        raise ValueError("run finished without a finite best_val_jepa_proxy; check max_wall_seconds, eval_every, validation data, and loss stability")
+        raise ValueError("run finished without a finite best_val_jepa_proxy; check max_train_flops, eval_every, validation data, and loss stability")
     if rank == 0:
         if probe_state is not None:
             log_probe_results(step)
@@ -621,11 +617,9 @@ def main():
             "world_size": world_size,
             "batch_size_per_rank": batch_size,
             "global_batch_size": batch_size * world_size,
-            "max_wall_seconds": max_wall_seconds,
+            "max_train_flops": max_train_flops,
             "train_loop_wall_seconds": train_loop_wall_seconds,
             "stop_reason": stop_reason,
-            "cooldown_started_step": cooldown_started_step,
-            "cooldown_started_wall_seconds": cooldown_started_wall_seconds,
             "steps_completed": step,
             "best_val_jepa_proxy": best_val_jepa_proxy,
             "best_val_mean_probe_f1": None if not math.isfinite(best_val_mean_probe_f1) else best_val_mean_probe_f1,
@@ -635,6 +629,7 @@ def main():
             "masked_target_presentations": masked_target_presentations,
             **final_unique_counts,
             "train_flops": train_flops,
+            "flop_fraction": min(1.0, float(train_flops) / float(max_train_flops)),
             "last_gns_simple": last_gns_simple,
             "last_gns_batch_ratio": last_gns_batch_ratio,
             "thunder_probe_active_job_id": None if active_probe is None else active_probe["job_id"],
