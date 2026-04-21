@@ -332,7 +332,7 @@ def run_probe_job(request_path):
         thunder_name = THUNDER_DATASET_NAMES[dataset]
         base = runtime_dir / "outputs"
         best_ckpt_path = base / "ckpts" / thunder_name / request["model_name"] / "frozen" / "best_model.pth"
-        val_metrics = torch.load(best_ckpt_path, map_location="cpu", weights_only=True)["val_metrics"]
+        val_metrics = torch.load(best_ckpt_path, map_location="cpu", weights_only=False)["val_metrics"]
         metrics[f"probe_{dataset}_val_f1"] = float(val_metrics["f1"]["metric_score"])
         results[dataset] = {"val_metrics": val_metrics}
     f1_keys = [key for key in metrics if key.endswith("_val_f1")]
@@ -367,6 +367,7 @@ def run_probe_job(request_path):
 def collect_probe_results(state, wandb_run, metrics_path, output_dir, best_val_mean_probe_f1, best_val_mean_probe_f1_step, best_probe_scores, log_step):
     if wandb_run is None:
         return best_val_mean_probe_f1, best_val_mean_probe_f1_step, best_probe_scores
+    state["data"] = json.loads(state["paths"]["state_path"].read_text())
     active = state["data"]["active"]
     if active is not None and not Path(active["result_path"]).exists():
         if subprocess.run(["squeue", "--noheader", "--jobs", str(active["job_id"]), "--format", "%T"], check=True, capture_output=True, text=True).stdout.strip() == "":
