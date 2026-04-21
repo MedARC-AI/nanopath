@@ -41,5 +41,5 @@ class NanoPathThunderModel(PretrainedModel):
     def get_segmentation_embeddings(self, x):
         autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if x.device.type == "cuda" else contextlib.nullcontext()
         with torch.inference_mode(), autocast:
-            tokens, _ = self.model.encode_image(x, checkpoint=False)
+            tokens = self.model.encode_image(x, checkpoint=False)
             return tokens[:, self.model.registers :].float()

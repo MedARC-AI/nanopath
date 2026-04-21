@@ -1,7 +1,7 @@
 project:
   name: nanopath-small
   family: small
-  recipe_id: lejepa-samplelist30-v1
+  recipe_id: jepa-samplelist30-v2
   output_dir: /data/nanopath/small/nanopath-small
 
 data:
@@ -16,7 +16,6 @@ data:
   std: [0.229, 0.224, 0.225]
   global_crop_scale: [0.5, 1.0]
   local_crop_scale: [0.2, 0.5]
-  latent_crop_scale: [0.8, 1.0]
   color_jitter: 0.15
   hed_jitter: 0.02
 
@@ -31,8 +30,6 @@ model:
   qk_norm: true
   qkv_bias: false
   projector_dim: 768
-  predictor_dim: 512
-  predictor_depth: 6
 
 train:
   seed: 1337
@@ -54,15 +51,8 @@ train:
   local_views: 8
   global_size: 224
   local_size: 96
-  latent_size: 224
   lambda_jepa_pred: 1.0
   lambda_sig: 0.05
-  lambda_lat: 0.25
-  latent_mask_ratio: 0.5
-  latent_mask_mode: random
-  latent_mask_roll: true
-  latent_predict_visible: false
-  latent_use_outpainting: false
   lr_ref: 1.5e-4
   batch_ref: 256
   weight_decay: 0.05
