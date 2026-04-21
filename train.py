@@ -46,13 +46,14 @@ def loss_terms(sigreg, proj, full, latent_pred, mask, train_cfg, sigreg_generato
     # latent_loss is the masked latent prediction term: MAE in encoder feature space
     # between the predictor output and detached latent targets.
     # total_loss is the objective we backprop through, while jepa_proxy intentionally tracks
-    # only the JEPA branch (jepa_pred + lambda_sig * sig) on a normalized scale.
+    # only the JEPA branch (lambda_jepa_pred * jepa_pred + lambda_sig * sig) on a normalized scale.
     proj_sigreg = proj if proj_sigreg is None else proj_sigreg
     jepa_pred_loss = (proj - proj.mean(dim=1, keepdim=True)).square().mean()
     sig_loss = sigreg(proj_sigreg.transpose(0, 1), generator=sigreg_generator)
     latent_loss = F.l1_loss(latent_pred, full) if train_cfg["latent_predict_visible"] else F.l1_loss(latent_pred[mask], full[mask])
-    total_loss = jepa_pred_loss + train_cfg["lambda_sig"] * sig_loss + train_cfg["lambda_lat"] * latent_loss
-    jepa_proxy = (jepa_pred_loss + train_cfg["lambda_sig"] * sig_loss) / (train_cfg["lambda_sig"] ** 0.4)
+    jepa_branch = train_cfg["lambda_jepa_pred"] * jepa_pred_loss + train_cfg["lambda_sig"] * sig_loss
+    total_loss = jepa_branch + train_cfg["lambda_lat"] * latent_loss
+    jepa_proxy = jepa_branch / (train_cfg["lambda_sig"] ** 0.4) if train_cfg["lambda_sig"] > 0 else jepa_branch
     return jepa_pred_loss, sig_loss, latent_loss, total_loss, jepa_proxy
 
 
