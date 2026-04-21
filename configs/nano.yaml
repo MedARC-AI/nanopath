@@ -60,7 +60,7 @@ train:
   latent_mask_ratio: 0.5
   latent_mask_mode: random
   latent_mask_roll: true
-  latent_predict_visible: true
+  latent_predict_visible: false
   latent_use_outpainting: false
   lr_ref: 5.0e-3
   batch_ref: 256

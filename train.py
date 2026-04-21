@@ -27,9 +27,8 @@ from probe import collect_probe_results, prepare_probe_state, probe_enabled, que
 
 
 GNS_EVERY = 100
-EVAL_KEYS = ("pred", "sig", "latent", "proxy")
-TRAIN_KEYS = ("pred", "sig", "latent", "proxy", "total", "proj_std", "target_std", "pred_target_cos", "mask_fraction")
-VAL_NAMES = {"pred": "pred", "sig": "sig", "latent": "latent", "proxy": "lejepa_proxy"}
+EVAL_KEYS = ("jepa_pred", "sig", "latent", "total", "jepa_proxy")
+TRAIN_KEYS = ("jepa_pred", "sig", "latent", "total", "jepa_proxy", "proj_std", "target_std", "pred_target_cos", "mask_fraction")
 
 
 def load_config():
@@ -40,14 +39,21 @@ def load_config():
     return cfg
 
 
-def loss_terms(sigreg, proj, full, pred, mask, train_cfg, sigreg_generator, proj_sigreg=None):
+def loss_terms(sigreg, proj, full, latent_pred, mask, train_cfg, sigreg_generator, proj_sigreg=None):
+    # jepa_pred_loss is the JEPA-style multi-view consistency term on the projector outputs:
+    # if global/local views of the same tile disagree, this grows.
+    # sig_loss is the anti-collapse regularizer on those same projector outputs.
+    # latent_loss is the masked latent prediction term: MAE in encoder feature space
+    # between the predictor output and detached latent targets.
+    # total_loss is the objective we backprop through, while jepa_proxy intentionally tracks
+    # only the JEPA branch (jepa_pred + lambda_sig * sig) on a normalized scale.
     proj_sigreg = proj if proj_sigreg is None else proj_sigreg
-    pred_loss = (proj - proj.mean(dim=1, keepdim=True)).square().mean()
+    jepa_pred_loss = (proj - proj.mean(dim=1, keepdim=True)).square().mean()
     sig_loss = sigreg(proj_sigreg.transpose(0, 1), generator=sigreg_generator)
-    latent_loss = F.l1_loss(pred, full) if train_cfg["latent_predict_visible"] else F.l1_loss(pred[mask], full[mask])
-    total_loss = pred_loss + train_cfg["lambda_sig"] * sig_loss + train_cfg["lambda_lat"] * latent_loss
-    proxy = (pred_loss + train_cfg["lambda_sig"] * sig_loss) / (train_cfg["lambda_sig"] ** 0.4)
-    return pred_loss, sig_loss, latent_loss, total_loss, proxy
+    latent_loss = F.l1_loss(latent_pred, full) if train_cfg["latent_predict_visible"] else F.l1_loss(latent_pred[mask], full[mask])
+    total_loss = jepa_pred_loss + train_cfg["lambda_sig"] * sig_loss + train_cfg["lambda_lat"] * latent_loss
+    jepa_proxy = (jepa_pred_loss + train_cfg["lambda_sig"] * sig_loss) / (train_cfg["lambda_sig"] ** 0.4)
+    return jepa_pred_loss, sig_loss, latent_loss, total_loss, jepa_proxy
 
 
 def evaluate(model, sigreg, loader, cfg, device, world_size):
@@ -64,18 +70,18 @@ def evaluate(model, sigreg, loader, cfg, device, world_size):
                 global_views = batch["global_views"].to(device, non_blocking=True)
                 local_views = batch["local_views"].to(device, non_blocking=True)
                 latent_view = batch["latent_view"].to(device, non_blocking=True)
-                proj, full, pred, mask = model(global_views, local_views, latent_view, train_cfg, mask_generator=eval_generator)
-                pred_loss, sig_loss, latent_loss, _, proxy = loss_terms(
+                proj, full, latent_pred, mask = model(global_views, local_views, latent_view, train_cfg, mask_generator=eval_generator)
+                jepa_pred_loss, sig_loss, latent_loss, total_loss, jepa_proxy = loss_terms(
                     sigreg,
                     proj,
                     full,
-                    pred,
+                    latent_pred,
                     mask,
                     train_cfg,
                     eval_generator,
                     torch.cat(dist_nn.all_gather(proj), dim=0) if world_size > 1 else proj,
                 )
-            for i, value in enumerate((pred_loss, sig_loss, latent_loss, proxy)):
+            for i, value in enumerate((jepa_pred_loss, sig_loss, latent_loss, total_loss, jepa_proxy)):
                 losses[i] += value.item()
             batches += 1
             if batches >= train_cfg["val_batches"]:
@@ -138,7 +144,7 @@ def main():
     visible_patch_presentations = 0
     masked_target_presentations = 0
     train_flops = 0
-    best_val_proxy = float("inf")
+    best_val_jepa_proxy = float("inf")
     best_val_mean_probe_f1 = float("-inf")
     best_val_mean_probe_f1_step = -1
     best_probe_scores = {}
@@ -168,7 +174,7 @@ def main():
             step,
             batch_size,
             lr,
-            best_val_proxy,
+            best_val_jepa_proxy,
             examples_seen,
             visible_patch_presentations,
             masked_target_presentations,
@@ -179,7 +185,7 @@ def main():
             int(checkpoint["step"]),
             int(checkpoint["batch_size"]),
             float(checkpoint["lr"]),
-            float(checkpoint["best_val_proxy"]),
+            float(checkpoint["best_val_jepa_proxy"]),
             int(checkpoint["examples_seen"]),
             int(checkpoint["visible_patch_presentations"]),
             int(checkpoint["masked_target_presentations"]),
@@ -267,7 +273,7 @@ def main():
             "model": root_model.state_dict(),
             "opt": opt.state_dict(),
             "step": next_step,
-            "best_val_proxy": best_val_proxy,
+            "best_val_jepa_proxy": best_val_jepa_proxy,
             "best_val_mean_probe_f1": best_val_mean_probe_f1,
             "best_val_mean_probe_f1_step": best_val_mean_probe_f1_step,
             "examples_seen": examples_seen,
@@ -316,12 +322,12 @@ def main():
         )
 
     def log_val(step_value, val, event=None):
-        payload = {"step": step_value, **{f"val_{VAL_NAMES[key]}": val[key] for key in EVAL_KEYS}}
+        payload = {"step": step_value, **{f"val_{key}": val[key] for key in EVAL_KEYS}}
         if event is not None:
             payload["event"] = event
         with metrics_path.open("a") as handle:
             handle.write(json.dumps(payload) + "\n")
-        wandb_run.log({f"val/{VAL_NAMES[key]}": val[key] for key in EVAL_KEYS}, step=step_value)
+        wandb_run.log({f"val/{key}": val[key] for key in EVAL_KEYS}, step=step_value)
 
     if rank == 0 and probe_state is not None:
         log_probe_results(step)
@@ -333,7 +339,7 @@ def main():
     stop_reason = None
     cooldown_started_step = None
     cooldown_started_wall_seconds = None
-    last_eval_step = step if math.isfinite(best_val_proxy) else -1
+    last_eval_step = step if math.isfinite(best_val_jepa_proxy) else -1
     last_saved_step = step if resume_path is not None else 0
 
     while stop_reason is None:
@@ -363,12 +369,12 @@ def main():
                     opt.zero_grad(set_to_none=True)
                     with model.no_sync():
                         with autocast:
-                            proj, full, pred, mask = model(global_views, local_views, latent_view, train_cfg)
-                            pred_loss, sig_loss, latent_loss, total_loss, _ = loss_terms(
+                            proj, full, latent_pred, mask = model(global_views, local_views, latent_view, train_cfg)
+                            jepa_pred_loss, sig_loss, latent_loss, total_loss, _ = loss_terms(
                                 root_model.sigreg,
                                 proj,
                                 full,
-                                pred,
+                                latent_pred,
                                 mask,
                                 train_cfg,
                                 sigreg_generator,
@@ -391,17 +397,17 @@ def main():
                     for start in [0, half]:
                         opt.zero_grad(set_to_none=True)
                         with autocast:
-                            proj, full, pred, mask = model(
+                            proj, full, latent_pred, mask = model(
                                 global_views[start : start + half],
                                 local_views[start : start + half],
                                 latent_view[start : start + half],
                                 train_cfg,
                             )
-                            pred_loss, sig_loss, latent_loss, total_loss, _ = loss_terms(
+                            jepa_pred_loss, sig_loss, latent_loss, total_loss, _ = loss_terms(
                                 root_model.sigreg,
                                 proj,
                                 full,
-                                pred,
+                                latent_pred,
                                 mask,
                                 train_cfg,
                                 sigreg_generator,
@@ -417,12 +423,12 @@ def main():
                     gns_batch_big = current_batch
                     opt.zero_grad(set_to_none=True)
             with autocast:
-                proj, full, pred, mask = model(global_views, local_views, latent_view, train_cfg)
-                pred_loss, sig_loss, latent_loss, total_loss, proxy = loss_terms(
+                proj, full, latent_pred, mask = model(global_views, local_views, latent_view, train_cfg)
+                jepa_pred_loss, sig_loss, latent_loss, total_loss, jepa_proxy = loss_terms(
                     root_model.sigreg,
                     proj,
                     full,
-                    pred,
+                    latent_pred,
                     mask,
                     train_cfg,
                     sigreg_generator,
@@ -431,12 +437,12 @@ def main():
                 proj_std = proj.float().reshape(-1, proj.shape[-1]).std(dim=0).mean()
                 target_std = full.float().reshape(-1, full.shape[-1]).std(dim=0).mean()
                 if train_cfg["latent_predict_visible"]:
-                    pred_flat = pred.float().reshape(-1, pred.shape[-1])
+                    latent_pred_flat = latent_pred.float().reshape(-1, latent_pred.shape[-1])
                     full_flat = full.float().reshape(-1, full.shape[-1])
                 else:
-                    pred_flat = pred[mask].float()
+                    latent_pred_flat = latent_pred[mask].float()
                     full_flat = full[mask].float()
-                pred_target_cos = F.cosine_similarity(pred_flat, full_flat, dim=-1).mean()
+                pred_target_cos = F.cosine_similarity(latent_pred_flat, full_flat, dim=-1).mean()
                 mask_fraction = mask.float().mean()
             opt.zero_grad(set_to_none=True)
             total_loss.backward()
@@ -475,11 +481,11 @@ def main():
             if distributed:
                 reduced = torch.tensor(
                     [
-                        pred_loss.item(),
+                        jepa_pred_loss.item(),
                         sig_loss.item(),
                         latent_loss.item(),
-                        proxy.item(),
                         total_loss.item(),
+                        jepa_proxy.item(),
                         proj_std.item(),
                         target_std.item(),
                         pred_target_cos.item(),
@@ -490,7 +496,7 @@ def main():
                 dist.all_reduce(reduced, op=dist.ReduceOp.SUM)
                 reduced = (reduced / world_size).tolist()
             else:
-                reduced = [pred_loss.item(), sig_loss.item(), latent_loss.item(), proxy.item(), total_loss.item(), proj_std.item(), target_std.item(), pred_target_cos.item(), mask_fraction.item()]
+                reduced = [jepa_pred_loss.item(), sig_loss.item(), latent_loss.item(), total_loss.item(), jepa_proxy.item(), proj_std.item(), target_std.item(), pred_target_cos.item(), mask_fraction.item()]
             reduced = dict(zip(TRAIN_KEYS, reduced))
             should_log = completed_step == 1 or completed_step % train_cfg["log_every"] == 0
             unique_counts = flush_unique_counts() if should_log else None
@@ -552,8 +558,8 @@ def main():
             if completed_step % train_cfg["eval_every"] == 0:
                 val = evaluate(model, root_model.sigreg, val_loader, cfg, device, world_size)
                 run_probe = probe_enabled(cfg) and completed_step % cfg["probe"]["every"] == 0
-                if val["proxy"] < best_val_proxy:
-                    best_val_proxy = val["proxy"]
+                if val["jepa_proxy"] < best_val_jepa_proxy:
+                    best_val_jepa_proxy = val["jepa_proxy"]
                 last_eval_step = completed_step
                 if rank == 0:
                     log_val(completed_step, val)
@@ -587,13 +593,13 @@ def main():
         dist.barrier()
     if step > 0 and last_eval_step != step:
         val = evaluate(model, root_model.sigreg, val_loader, cfg, device, world_size)
-        if val["proxy"] < best_val_proxy:
-            best_val_proxy = val["proxy"]
+        if val["jepa_proxy"] < best_val_jepa_proxy:
+            best_val_jepa_proxy = val["jepa_proxy"]
         last_eval_step = step
         if rank == 0:
             log_val(step, val, "cooldown_eval")
-    if not math.isfinite(best_val_proxy):
-        raise ValueError("run finished without a finite best_val_proxy; check max_wall_seconds, eval_every, validation data, and loss stability")
+    if not math.isfinite(best_val_jepa_proxy):
+        raise ValueError("run finished without a finite best_val_jepa_proxy; check max_wall_seconds, eval_every, validation data, and loss stability")
     if rank == 0:
         if probe_state is not None:
             log_probe_results(step)
@@ -620,7 +626,7 @@ def main():
             "cooldown_started_step": cooldown_started_step,
             "cooldown_started_wall_seconds": cooldown_started_wall_seconds,
             "steps_completed": step,
-            "best_val_lejepa_proxy": best_val_proxy,
+            "best_val_jepa_proxy": best_val_jepa_proxy,
             "best_val_mean_probe_f1": None if not math.isfinite(best_val_mean_probe_f1) else best_val_mean_probe_f1,
             "best_val_mean_probe_f1_step": best_val_mean_probe_f1_step,
             "tile_presentations": examples_seen,
