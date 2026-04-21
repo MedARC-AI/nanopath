@@ -1,0 +1,80 @@
+project:
+  name: nanopath-small
+  family: small
+  recipe_id: lejepa-samplelist30-v1
+  output_dir: /data/nanopath/small
+
+data:
+  sample_list: /block/TCGA/sample_dataset_30.txt
+  sample_list_cache_dir: /data/nanopath/cache
+  split_seed: 1337
+  val_fraction: 0.05
+  train_split: train
+  val_split: val
+  max_open_wsi: 8
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+  global_crop_scale: [0.5, 1.0]
+  local_crop_scale: [0.2, 0.5]
+  latent_crop_scale: [0.8, 1.0]
+  color_jitter: 0.15
+  hed_jitter: 0.02
+
+model:
+  dim: 768
+  depth: 20
+  heads: 12
+  patch_size: 16
+  mlp_ratio: 4.0
+  rope_base: 10000
+  registers: 4
+  qk_norm: true
+  qkv_bias: false
+  projector_dim: 768
+  predictor_dim: 512
+  predictor_depth: 6
+
+train:
+  seed: 1337
+  device: cuda
+  bf16: true
+  activation_checkpointing: false
+  batch_size: 24
+  num_workers: 8
+  prefetch_factor: 4
+  persistent_workers: true
+  max_wall_seconds: 3600
+  warmup_steps: 132
+  # Validation only runs on these steps.
+  eval_every: 544
+  val_batches: 32
+  log_every: 20
+  save_every: 2176
+  global_views: 2
+  local_views: 8
+  global_size: 224
+  local_size: 96
+  latent_size: 224
+  lambda_sig: 0.05
+  lambda_lat: 0.25
+  latent_mask_ratio: 0.5
+  latent_mask_mode: random
+  latent_mask_roll: true
+  latent_predict_visible: true
+  latent_use_outpainting: false
+  lr_ref: 1.5e-4
+  batch_ref: 256
+  weight_decay: 0.05
+  grad_clip: 1.0
+  # Leave CBS empty in the checked-in default until branched measurements justify promotion.
+  cbs_doubling_steps: []
+  resume: null
+
+probe:
+  enabled: true
+  # Thunder probes are submitted only on eval steps, and only the latest queued checkpoint is kept.
+  every: 544
+  datasets:
+    - bach
+    - break_his
+    - mhist
