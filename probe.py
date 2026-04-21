@@ -1,14 +1,17 @@
 import json
+import math
 import os
 import random
 import shutil
 import subprocess
 import sys
+import fcntl
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
+import wandb
 
 
 THUNDER_REPO = Path("/admin/home/paul/thunder")
@@ -21,17 +24,19 @@ SLURM_QOS = "normal"
 SLURM_GRES = "gpu:nvidia_h100_80gb_hbm3:1"
 SLURM_CPUS_PER_TASK = "16"
 SLURM_TIME_LIMIT = "08:00:00"
-LINEAR_PROBE_PARALLEL_DATASETS = 4
+LINEAR_PROBE_PARALLEL_DATASETS = 5
 PATCH_CAMELYON_SUBSET_SEED = 1337
 PATCH_CAMELYON_SUBSET_SIZES = {"train": 3072, "valid": 768, "test": 768}
 DATASET_ROOTS = {
     "bach": Path("/block/eva-data/bach"),
+    "bracs": Path("/block/eva-data/bracs"),
     "break_his": Path("/block/eva-data/breakhis"),
     "mhist": Path("/block/eva-data/mhist"),
     "pcam": Path("/block/eva-data/patch_camelyon"),
 }
 THUNDER_DATASET_NAMES = {
     "bach": "bach",
+    "bracs": "bracs",
     "break_his": "break_his",
     "mhist": "mhist",
     "pcam": "patch_camelyon",
@@ -44,6 +49,7 @@ def probe_paths(output_dir):
     return {
         "probe_dir": probe_dir,
         "state_path": probe_dir / "state.json",
+        "lock_path": probe_dir / "state.lock",
         "results_dir": probe_dir / "results",
         "slurm_dir": probe_dir / "slurm",
         "scratch_root": Path("/tmp/nanopath-thunder") / output_dir.name,
@@ -108,16 +114,19 @@ def checkpoint_request(state, checkpoint_step):
 def queue_probe_job(cfg, state, checkpoint_payload, checkpoint_step):
     if not probe_enabled(cfg):
         return state
-    request = checkpoint_request(state, checkpoint_step)
-    if not Path(request["checkpoint_path"]).exists():
-        torch.save(checkpoint_payload, request["checkpoint_path"])
-    if state["data"]["active"] is None:
-        submit_probe_job(state, request)
-        return state
-    if state["data"]["queued"] is not None and Path(state["data"]["queued"]["checkpoint_path"]).exists():
-        Path(state["data"]["queued"]["checkpoint_path"]).unlink()
-    state["data"]["queued"] = request
-    write_probe_state(state)
+    with state["paths"]["lock_path"].open("w") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        state["data"] = json.loads(state["paths"]["state_path"].read_text())
+        request = checkpoint_request(state, checkpoint_step)
+        if not Path(request["checkpoint_path"]).exists():
+            torch.save(checkpoint_payload, request["checkpoint_path"])
+        if state["data"]["active"] is None:
+            submit_probe_job(state, request)
+            return state
+        if state["data"]["queued"] is not None and Path(state["data"]["queued"]["checkpoint_path"]).exists():
+            Path(state["data"]["queued"]["checkpoint_path"]).unlink()
+        state["data"]["queued"] = request
+        write_probe_state(state)
     return state
 
 
@@ -356,91 +365,162 @@ def run_probe_job(request_path):
         + "\n"
     )
     paths = probe_paths(Path(request["checkpoint_path"]).parents[1])
-    state = {"paths": paths, "data": json.loads(paths["state_path"].read_text())}
-    if state["data"]["active"] is not None and str(state["data"]["active"]["job_id"]) == os.environ["SLURM_JOB_ID"]:
-        state["data"]["active"] = None
-        write_probe_state(state)
-    if state["data"]["active"] is None and state["data"]["queued"] is not None:
-        submit_probe_job(state, state["data"]["queued"])
+    with paths["lock_path"].open("w") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        state = {"paths": paths, "data": json.loads(paths["state_path"].read_text())}
+        if state["data"]["active"] is not None and str(state["data"]["active"]["job_id"]) == os.environ["SLURM_JOB_ID"]:
+            state["data"]["active"] = None
+        if state["data"]["active"] is None and state["data"]["queued"] is not None:
+            submit_probe_job(state, state["data"]["queued"])
+        else:
+            write_probe_state(state)
+    output_dir = Path(request["checkpoint_path"]).parents[1]
+    if (output_dir / "summary.json").exists():
+        collect_finished_probe_results(output_dir)
 
 
 def collect_probe_results(state, wandb_run, metrics_path, output_dir, best_val_mean_probe_f1, best_val_mean_probe_f1_step, best_probe_scores, log_step):
     if wandb_run is None:
         return best_val_mean_probe_f1, best_val_mean_probe_f1_step, best_probe_scores
-    state["data"] = json.loads(state["paths"]["state_path"].read_text())
-    active = state["data"]["active"]
-    if active is not None and not Path(active["result_path"]).exists():
-        if subprocess.run(["squeue", "--noheader", "--jobs", str(active["job_id"]), "--format", "%T"], check=True, capture_output=True, text=True).stdout.strip() == "":
-            slurm_state = "UNKNOWN"
-            for line in subprocess.run(
-                ["sacct", "-X", "-n", "-j", str(active["job_id"]), "--format", "State"],
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.splitlines():
-                line = line.strip()
-                if line != "":
-                    slurm_state = line.split()[0]
-                    break
-            Path(active["result_path"]).write_text(
-                json.dumps(
-                    {
-                        "created_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        "slurm_job_id": active["job_id"],
-                        "checkpoint_step": active["checkpoint_step"],
-                        "train_step": active["train_step"],
-                        "checkpoint_path": active["checkpoint_path"],
-                        "model_name": active["model_name"],
-                        "datasets": state["data"]["datasets"],
-                        "status": "missing_result" if slurm_state == "COMPLETED" else "failed",
-                        "slurm_state": slurm_state,
-                        "metrics": {},
-                        "results": {},
-                    },
-                    indent=2,
+    with state["paths"]["lock_path"].open("w") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        state["data"] = json.loads(state["paths"]["state_path"].read_text())
+        active = state["data"]["active"]
+        if active is not None and not Path(active["result_path"]).exists():
+            if subprocess.run(["squeue", "--noheader", "--jobs", str(active["job_id"]), "--format", "%T"], check=True, capture_output=True, text=True).stdout.strip() == "":
+                slurm_state = "UNKNOWN"
+                for line in subprocess.run(
+                    ["sacct", "-X", "-n", "-j", str(active["job_id"]), "--format", "State"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.splitlines():
+                    line = line.strip()
+                    if line != "":
+                        slurm_state = line.split()[0]
+                        break
+                Path(active["result_path"]).write_text(
+                    json.dumps(
+                        {
+                            "created_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            "slurm_job_id": active["job_id"],
+                            "checkpoint_step": active["checkpoint_step"],
+                            "train_step": active["train_step"],
+                            "checkpoint_path": active["checkpoint_path"],
+                            "model_name": active["model_name"],
+                            "datasets": state["data"]["datasets"],
+                            "status": "missing_result" if slurm_state == "COMPLETED" else "failed",
+                            "slurm_state": slurm_state,
+                            "metrics": {},
+                            "results": {},
+                        },
+                        indent=2,
+                    )
+                    + "\n"
                 )
-                + "\n"
-            )
-    logged = set(state["data"]["logged_results"])
-    for result_path in sorted(state["paths"]["results_dir"].glob("step_*.json")):
-        result_path_str = str(result_path)
-        if result_path_str in logged:
-            continue
-        result = json.loads(result_path.read_text())
-        metrics = {key: float(value) for key, value in result["metrics"].items()}
-        with metrics_path.open("a") as handle:
-            handle.write(json.dumps({"event": "thunder_probe", "step": result["train_step"], "status": result["status"], **metrics}) + "\n")
-        if len(metrics) > 0:
-            wandb_run.log(
-                {
-                    "probe/step": result["train_step"],
-                    **{f"probe/{key}": value for key, value in metrics.items()},
-                },
-                step=log_step,
-            )
-        if result["status"] == "ok" and "mean_probe_f1" in metrics:
-            for key, value in metrics.items():
-                best_probe_scores[key] = max(best_probe_scores.get(key, float("-inf")), value)
-            if metrics["mean_probe_f1"] > best_val_mean_probe_f1:
-                best_val_mean_probe_f1 = metrics["mean_probe_f1"]
-                best_val_mean_probe_f1_step = int(result["train_step"])
-                shutil.copy2(result["checkpoint_path"], output_dir / "best_mean_probe_f1.pt")
-        checkpoint_path = Path(result["checkpoint_path"])
-        if checkpoint_path.exists():
-            checkpoint_path.unlink()
-        logged.add(result_path_str)
-    state["data"]["logged_results"] = sorted(logged)
-    if active is not None and Path(active["result_path"]).exists():
-        state["data"]["active"] = None
-    if state["data"]["active"] is None and state["data"]["queued"] is not None:
-        submit_probe_job(state, state["data"]["queued"])
-    write_probe_state(state)
+        logged = set(state["data"]["logged_results"])
+        for result_path in sorted(state["paths"]["results_dir"].glob("step_*.json")):
+            result_path_str = str(result_path)
+            if result_path_str in logged:
+                continue
+            result = json.loads(result_path.read_text())
+            metrics = {key: float(value) for key, value in result["metrics"].items()}
+            with metrics_path.open("a") as handle:
+                handle.write(json.dumps({"event": "thunder_probe", "step": result["train_step"], "status": result["status"], **metrics}) + "\n")
+            if len(metrics) > 0:
+                wandb_run.log(
+                    {
+                        "probe/step": result["train_step"],
+                        **{f"probe/{key}": value for key, value in metrics.items()},
+                    },
+                    step=log_step,
+                )
+            if result["status"] == "ok" and "mean_probe_f1" in metrics:
+                for key, value in metrics.items():
+                    best_probe_scores[key] = max(best_probe_scores.get(key, float("-inf")), value)
+                if metrics["mean_probe_f1"] > best_val_mean_probe_f1:
+                    best_val_mean_probe_f1 = metrics["mean_probe_f1"]
+                    best_val_mean_probe_f1_step = int(result["train_step"])
+                    shutil.copy2(result["checkpoint_path"], output_dir / "best_mean_probe_f1.pt")
+            checkpoint_path = Path(result["checkpoint_path"])
+            if checkpoint_path.exists():
+                checkpoint_path.unlink()
+            logged.add(result_path_str)
+        state["data"]["logged_results"] = sorted(logged)
+        active = state["data"]["active"]
+        if active is not None and Path(active["result_path"]).exists():
+            state["data"]["active"] = None
+        if state["data"]["active"] is None and state["data"]["queued"] is not None:
+            submit_probe_job(state, state["data"]["queued"])
+        else:
+            write_probe_state(state)
     return best_val_mean_probe_f1, best_val_mean_probe_f1_step, best_probe_scores
 
 
+def collect_finished_probe_results(output_dir):
+    output_dir = Path(output_dir)
+    summary_path = output_dir / "summary.json"
+    if not summary_path.exists():
+        return
+    state = {"paths": probe_paths(output_dir), "data": json.loads((output_dir / "thunder" / "state.json").read_text())}
+    training_checkpoints = sorted(output_dir.glob("step_*.pt"))
+    if len(training_checkpoints) == 0:
+        raise FileNotFoundError(f"missing training checkpoints in {output_dir}")
+    checkpoint = torch.load(training_checkpoints[-1], map_location="cpu", weights_only=False)
+    wandb_meta = checkpoint["wandb"]
+    if wandb_meta is None:
+        raise ValueError(f"missing wandb metadata in {training_checkpoints[-1]}")
+    wandb_run = wandb.init(
+        project=wandb_meta["project"],
+        name=wandb_meta["name"],
+        id=wandb_meta["id"],
+        resume="must",
+        dir="/data/nanopath/wandb",
+        config=checkpoint["config"],
+        settings=wandb.Settings(
+            console="redirect",
+            console_multipart=True,
+            console_chunk_max_seconds=15,
+        ),
+    )
+    wandb_run.define_metric("probe/step", hidden=True)
+    wandb_run.define_metric("probe/*", step_metric="probe/step")
+    summary = json.loads(summary_path.read_text())
+    best_val_mean_probe_f1 = float("-inf") if summary["best_val_mean_probe_f1"] is None else float(summary["best_val_mean_probe_f1"])
+    best_val_mean_probe_f1_step = int(summary["best_val_mean_probe_f1_step"])
+    best_probe_scores = {}
+    for key, value in summary.items():
+        if key == "mean_probe_f1" or key.startswith("probe_"):
+            best_probe_scores[key] = float(value)
+    best_val_mean_probe_f1, best_val_mean_probe_f1_step, best_probe_scores = collect_probe_results(
+        state,
+        wandb_run,
+        output_dir / "metrics.jsonl",
+        output_dir,
+        best_val_mean_probe_f1,
+        best_val_mean_probe_f1_step,
+        best_probe_scores,
+        int(summary["steps_completed"]) + len(state["data"]["logged_results"]) + 1,
+    )
+    state["data"] = json.loads(state["paths"]["state_path"].read_text())
+    summary["best_val_mean_probe_f1"] = None if not math.isfinite(best_val_mean_probe_f1) else best_val_mean_probe_f1
+    summary["best_val_mean_probe_f1_step"] = best_val_mean_probe_f1_step
+    summary["thunder_probe_active_job_id"] = None if state["data"]["active"] is None else state["data"]["active"]["job_id"]
+    summary["thunder_probe_active_step"] = None if state["data"]["active"] is None else state["data"]["active"]["train_step"]
+    summary["thunder_probe_queued_step"] = None if state["data"]["queued"] is None else state["data"]["queued"]["train_step"]
+    summary.update(best_probe_scores)
+    summary_path.write_text(json.dumps(summary, indent=2) + "\n")
+    for key, value in summary.items():
+        wandb_run.summary[key] = value
+    wandb_run.finish()
+
+
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "collect":
+        collect_finished_probe_results(sys.argv[2])
+        return
     if len(sys.argv) != 2:
-        raise ValueError("usage: python probe.py <request.json>")
+        raise ValueError("usage: python probe.py <request.json> | python probe.py collect <output_dir>")
     run_probe_job(sys.argv[1])
 
 

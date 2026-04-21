@@ -16,6 +16,7 @@ mkdir -p /data/nanopath
 - training sample list: `/block/TCGA/sample_dataset_30.txt`
 - Thunder probe datasets:
   - `/block/eva-data/bach`
+  - `/block/eva-data/bracs`
   - `/block/eva-data/breakhis`
   - `/block/eva-data/mhist`
   - `/block/eva-data/patch_camelyon`
@@ -60,7 +61,7 @@ Edit [train.sbatch](/admin/home/paul/nanopath/submit/train.sbatch) before submit
 - sample-list cache: `/data/nanopath/cache`
 - SLURM logs from `train.sbatch`: `/data/nanopath/slurm`
 - Thunder scratch: `/tmp/nanopath-thunder`
-- checked-in nano baseline: `/data/nanopath/nano/nano-baseline`
+- checked-in nano baseline: `/data/nanopath/nano/baseline`
 
 Fresh non-resume launches delete and recreate `project.output_dir` before training starts.
 Thunder probes are launched asynchronously from eval steps and continue chaining after the training job exits; monitor `project.output_dir/thunder/state.json` plus the Thunder SLURM logs for pending probe progress.
