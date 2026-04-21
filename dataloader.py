@@ -6,6 +6,7 @@
 # multi-view augmentation stack remains specific to this repo rather than copying OpenMidnight.
 
 import hashlib
+import json
 import math
 import os
 import time
@@ -74,10 +75,21 @@ def split_offset_paths(data):
 
 
 def resolve_slide_mpp(wsi, slide_path):
-    mpp = float(wsi.properties.mpp)
-    if not np.isfinite(mpp) or mpp <= 0:
-        raise ValueError(f"invalid wsi.properties.mpp for {slide_path}: {mpp}")
-    return mpp
+    mpp = wsi.properties.mpp
+    if mpp is not None:
+        mpp = float(mpp)
+        if np.isfinite(mpp) and mpp > 0:
+            return mpp
+    raw = wsi.properties.to_dict()["raw"]
+    props = json.loads(raw) if isinstance(raw, str) else raw
+    for key in ("openslide.mpp-x", "openslide.mpp-y", "aperio.MPP"):
+        value = props.get(key)
+        if value is None:
+            continue
+        value = float(value)
+        if np.isfinite(value) and value > 0:
+            return value
+    return float("nan")
 
 
 def prepare_sample_list_offsets(cfg):
