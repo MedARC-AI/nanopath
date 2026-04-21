@@ -10,5 +10,7 @@ Coding guidelines:
 - Use wandb for logging / plotting / utilization monitoring throughout pretraining. Should include all important metrics useful to validating model training (e.g., gradient norm).
 - Follow /admin/home/paul/papers/repos/nanoGPT as a good example of a clean minimalist codebase, particularly with respect to how they handle train.py and model.py files.
 - Store large files / ckpts / embeddings / pretrained models in the /data/nanopath directory, not the main repo.
-- Checked-in training configs should stop after hitting a total training FLOP budget of 2.5e16 rather than a fixed step count or wall-clock budget, because equal-compute budgets keep recipe and model comparisons fair when throughput differs.
+- Checked-in training configs should stop after hitting a total training FLOP budget of 7.0e15 rather than a fixed step count or wall-clock budget, because equal-compute budgets keep recipe and model comparisons fair when throughput differs.
+- Do not define `#SBATCH --cpus-per-task` in our sbatch scripts.
+- Do not add `OMP_NUM_THREADS` or `MKL_NUM_THREADS` exports to our sbatch scripts.
 - If changes you make lead to comments or code in other files no longer being accurate, make sure to revise those other files and comments as well so everything is accurate and up-to-date.

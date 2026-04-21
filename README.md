@@ -46,11 +46,11 @@ SLURM submit:
 
 ```bash
 sbatch /admin/home/paul/nanopath/submit/train.sbatch
+sbatch --job-name=jepa-baseline-bs256 /admin/home/paul/nanopath/submit/train.sbatch /admin/home/paul/nanopath/configs/nano_bs256.yaml
 ```
 
-Edit [train.sbatch](/admin/home/paul/nanopath/submit/train.sbatch) before submit:
+Edit [train.sbatch](/admin/home/paul/nanopath/submit/train.sbatch) before submit only if you want to change the checked-in defaults:
 
-- `CONFIG_FILE`
 - `NPROC_PER_NODE`
 - `#SBATCH` resources if needed
 
@@ -64,4 +64,4 @@ Edit [train.sbatch](/admin/home/paul/nanopath/submit/train.sbatch) before submit
 - checked-in nano baseline: `/data/nanopath/nano/new-baseline-only-jepa`
 
 Fresh non-resume launches delete and recreate `project.output_dir` before training starts.
-Thunder probes are launched asynchronously from eval steps and continue chaining after the training job exits; monitor `project.output_dir/thunder/state.json` plus the Thunder SLURM logs for pending probe progress.
+Thunder probes are launched asynchronously once training crosses evenly spaced FLOP milestones, using the next validation checkpoint after each milestone and the final validation checkpoint at the end of the run; monitor `project.output_dir/thunder/state.json` plus the Thunder SLURM logs for pending probe progress.

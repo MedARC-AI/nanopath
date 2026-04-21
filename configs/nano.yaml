@@ -40,7 +40,7 @@ train:
   num_workers: 16
   prefetch_factor: 4
   persistent_workers: true
-  max_train_flops: 25000000000000000
+  max_train_flops: 7000000000000000
   warmup_steps: 60
   # Validation only runs on these steps.
   eval_every: 200
@@ -62,8 +62,8 @@ train:
 
 probe:
   enabled: true
-  # Thunder probes are submitted only on eval steps, and only the latest queued checkpoint is kept.
-  every: 400
+  # Probe 4 times total at evenly spaced FLOP milestones; the final milestone is the end of the run.
+  count: 4
   datasets:
     - bach
     - bracs
