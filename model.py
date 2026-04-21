@@ -1,6 +1,6 @@
 # This file defines the model pieces used during pretraining.
 # The backbone is a compact ViT with register tokens and RoPE so one encoder can serve
-# JEPA view encoding and downstream probes without any auxiliary masked-prediction branch.
+# JEPA view encoding and downstream probes without any auxiliary reconstruction objective.
 # The whole stack stays in native PyTorch so the code is easy to reason about, scale with
 # DDP, and change after small-run ablations.
 

@@ -22,7 +22,6 @@ SLURM_PARTITION = "n"
 SLURM_ACCOUNT = "sophont"
 SLURM_QOS = "normal"
 SLURM_GRES = "gpu:nvidia_h100_80gb_hbm3:1"
-SLURM_CPUS_PER_TASK = "16"
 SLURM_TIME_LIMIT = "08:00:00"
 LINEAR_PROBE_PARALLEL_DATASETS = 5
 PATCH_CAMELYON_SUBSET_SEED = 1337
@@ -72,6 +71,7 @@ def prepare_probe_state(cfg, output_dir):
         "version": 5,
         "family": str(cfg["project"]["family"]),
         "datasets": [str(x) for x in cfg["probe"]["datasets"]],
+        "count": int(cfg["probe"]["count"]),
         "active": None,
         "queued": None,
         "logged_results": [],
@@ -84,6 +84,8 @@ def prepare_probe_state(cfg, output_dir):
             raise ValueError(f"Thunder probe family changed from {previous['family']} to {data['family']}")
         if previous["datasets"] != data["datasets"]:
             raise ValueError(f"Thunder probe datasets changed from {previous['datasets']} to {data['datasets']}")
+        if "count" in previous and previous["count"] != data["count"]:
+            raise ValueError(f"Thunder probe count changed from {previous['count']} to {data['count']}")
         data["active"] = previous["active"]
         data["queued"] = previous["queued"]
         data["logged_results"] = previous["logged_results"]
@@ -95,11 +97,15 @@ def prepare_probe_state(cfg, output_dir):
     return state
 
 
-def checkpoint_request(state, checkpoint_step):
+def checkpoint_request(state, checkpoint_step, probe_ordinal, target_flops, target_fraction):
     step_tag = f"step_{checkpoint_step:07d}"
     return {
         "checkpoint_step": int(checkpoint_step),
         "train_step": int(checkpoint_step),
+        "probe_ordinal": int(probe_ordinal),
+        "probe_count": int(state["data"]["count"]),
+        "target_flops": int(target_flops),
+        "target_fraction": float(target_fraction),
         "checkpoint_path": str(state["paths"]["probe_dir"] / f"{step_tag}.pt"),
         "request_path": str(state["paths"]["probe_dir"] / f"{step_tag}.request.json"),
         "result_path": str(state["paths"]["results_dir"] / f"{step_tag}.json"),
@@ -111,13 +117,13 @@ def checkpoint_request(state, checkpoint_step):
     }
 
 
-def queue_probe_job(cfg, state, checkpoint_payload, checkpoint_step):
+def queue_probe_job(cfg, state, checkpoint_payload, checkpoint_step, probe_ordinal, target_flops, target_fraction):
     if not probe_enabled(cfg):
         return state
     with state["paths"]["lock_path"].open("w") as lock_handle:
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
         state["data"] = json.loads(state["paths"]["state_path"].read_text())
-        request = checkpoint_request(state, checkpoint_step)
+        request = checkpoint_request(state, checkpoint_step, probe_ordinal, target_flops, target_fraction)
         if not Path(request["checkpoint_path"]).exists():
             torch.save(checkpoint_payload, request["checkpoint_path"])
         if state["data"]["active"] is None:
@@ -158,8 +164,6 @@ trap 'rm -rf "$NANOPATH_THUNDER_RUNTIME_DIR"' EXIT
             "1",
             "--ntasks",
             "1",
-            "--cpus-per-task",
-            SLURM_CPUS_PER_TASK,
             "--time",
             SLURM_TIME_LIMIT,
             "--gres",
@@ -354,6 +358,10 @@ def run_probe_job(request_path):
                 "slurm_job_id": os.environ["SLURM_JOB_ID"],
                 "checkpoint_step": request["checkpoint_step"],
                 "train_step": request["train_step"],
+                "probe_ordinal": request["probe_ordinal"],
+                "probe_count": request["probe_count"],
+                "target_flops": request["target_flops"],
+                "target_fraction": request["target_fraction"],
                 "checkpoint_path": request["checkpoint_path"],
                 "model_name": request["model_name"],
                 "datasets": request["datasets"],
@@ -407,6 +415,10 @@ def collect_probe_results(state, wandb_run, metrics_path, output_dir, best_val_m
                             "slurm_job_id": active["job_id"],
                             "checkpoint_step": active["checkpoint_step"],
                             "train_step": active["train_step"],
+                            "probe_ordinal": active["probe_ordinal"],
+                            "probe_count": active["probe_count"],
+                            "target_flops": active["target_flops"],
+                            "target_fraction": active["target_fraction"],
                             "checkpoint_path": active["checkpoint_path"],
                             "model_name": active["model_name"],
                             "datasets": state["data"]["datasets"],
@@ -492,7 +504,7 @@ def collect_finished_probe_results(output_dir):
     best_val_mean_probe_f1_step = int(summary["best_val_mean_probe_f1_step"])
     best_probe_scores = {}
     for key, value in summary.items():
-        if key == "mean_probe_f1" or key.startswith("probe_"):
+        if key == "mean_probe_f1" or (key.startswith("probe_") and key.endswith("_val_f1")):
             best_probe_scores[key] = float(value)
     best_val_mean_probe_f1, best_val_mean_probe_f1_step, best_probe_scores = collect_probe_results(
         state,

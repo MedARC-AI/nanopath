@@ -89,10 +89,6 @@ def evaluate(model, sigreg, loader, cfg, device, world_size):
 def main():
     cfg = load_config()
     train_cfg = cfg["train"]
-    if probe_enabled(cfg) and cfg["probe"]["every"] % train_cfg["eval_every"] != 0:
-        raise ValueError(
-            f"probe.every={cfg['probe']['every']} must be a multiple of train.eval_every={train_cfg['eval_every']}"
-        )
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     rank = int(os.environ.get("RANK", "0"))
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
@@ -320,6 +316,22 @@ def main():
     if distributed:
         dist.barrier()
     max_train_flops = int(train_cfg["max_train_flops"])
+    probe_targets = []
+    next_probe_idx = 0
+    if probe_enabled(cfg):
+        probe_count = int(cfg["probe"]["count"])
+        if probe_count < 1:
+            raise ValueError(f"probe.count must be at least 1, got {probe_count}")
+        probe_targets = [math.ceil(max_train_flops * (i + 1) / probe_count) for i in range(probe_count)]
+        if len(set(probe_targets)) != len(probe_targets):
+            raise ValueError(f"probe.count={probe_count} is too large for max_train_flops={max_train_flops}")
+        if probe_state is not None:
+            next_probe_idx = min(
+                len(probe_targets),
+                len(probe_state["data"]["logged_results"])
+                + int(probe_state["data"]["active"] is not None)
+                + int(probe_state["data"]["queued"] is not None),
+            )
     train_loop_started_at = time.monotonic()
     train_loop_wall_seconds = 0.0
     stop_reason = "max_train_flops" if train_flops >= max_train_flops else None
@@ -515,14 +527,23 @@ def main():
                     torch.cuda.reset_peak_memory_stats(device)
             if completed_step % train_cfg["eval_every"] == 0:
                 val = evaluate(model, root_model.sigreg, val_loader, cfg, device, world_size)
-                run_probe = probe_enabled(cfg) and completed_step % cfg["probe"]["every"] == 0
+                run_probe = probe_state is not None and next_probe_idx < len(probe_targets) and train_flops >= probe_targets[next_probe_idx]
                 if val["jepa_proxy"] < best_val_jepa_proxy:
                     best_val_jepa_proxy = val["jepa_proxy"]
                 last_eval_step = completed_step
                 if rank == 0:
                     log_val(completed_step, val)
                     if run_probe and probe_state is not None:
-                        queue_probe_job(cfg, probe_state, {"model": root_model.state_dict(), "step": completed_step, "config": cfg}, completed_step)
+                        queue_probe_job(
+                            cfg,
+                            probe_state,
+                            {"model": root_model.state_dict(), "step": completed_step, "config": cfg},
+                            completed_step,
+                            next_probe_idx + 1,
+                            probe_targets[next_probe_idx],
+                            probe_targets[next_probe_idx] / max_train_flops,
+                        )
+                        next_probe_idx += 1
                     if probe_state is not None:
                         log_probe_results(completed_step)
             if rank == 0 and completed_step % train_cfg["save_every"] == 0:
@@ -554,6 +575,19 @@ def main():
         last_eval_step = step
         if rank == 0:
             log_val(step, val, "final_eval")
+            if probe_state is not None and next_probe_idx < len(probe_targets) and train_flops >= probe_targets[next_probe_idx]:
+                queue_probe_job(
+                    cfg,
+                    probe_state,
+                    {"model": root_model.state_dict(), "step": step, "config": cfg},
+                    step,
+                    next_probe_idx + 1,
+                    probe_targets[next_probe_idx],
+                    probe_targets[next_probe_idx] / max_train_flops,
+                )
+                next_probe_idx += 1
+            if probe_state is not None:
+                log_probe_results(step)
     if not math.isfinite(best_val_jepa_proxy):
         raise ValueError("run finished without a finite best_val_jepa_proxy; check max_train_flops, eval_every, validation data, and loss stability")
     if rank == 0:
@@ -590,6 +624,8 @@ def main():
             "flop_fraction": min(1.0, float(train_flops) / float(max_train_flops)),
             "last_gns_simple": last_gns_simple,
             "last_gns_batch_ratio": last_gns_batch_ratio,
+            "probe_target_flops": probe_targets,
+            "probe_target_fractions": [None if max_train_flops == 0 else target / max_train_flops for target in probe_targets],
             "thunder_probe_active_job_id": None if active_probe is None else active_probe["job_id"],
             "thunder_probe_active_step": None if active_probe is None else active_probe["train_step"],
             "thunder_probe_queued_step": None if queued_probe is None else queued_probe["train_step"],

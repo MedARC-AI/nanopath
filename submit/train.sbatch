@@ -12,8 +12,8 @@
 
 set -euo pipefail
 
-# Default launcher for the checked-in nano JEPA baseline run.
-CONFIG_FILE="/admin/home/paul/nanopath/configs/nano.yaml"
+# Default launcher for the checked-in nano JEPA runs.
+CONFIG_FILE="${1:-/admin/home/paul/nanopath/configs/nano.yaml}"
 NPROC_PER_NODE=1
 
 cd /admin/home/paul/nanopath
