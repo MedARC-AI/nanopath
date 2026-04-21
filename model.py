@@ -297,5 +297,5 @@ class NanoPathFM(nn.Module):
         checkpoint = bool(train_cfg["activation_checkpointing"])
         proj = self.encode_views(global_views, local_views, checkpoint)
         full = self.latent_targets(latent_view, checkpoint).detach()
-        pred, mask = self.latent_predictions(latent_view, train_cfg, generator=mask_generator)
-        return proj, full, pred, mask
+        latent_pred, mask = self.latent_predictions(latent_view, train_cfg, generator=mask_generator)
+        return proj, full, latent_pred, mask
