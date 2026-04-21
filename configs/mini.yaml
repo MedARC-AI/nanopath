@@ -2,7 +2,7 @@ project:
   name: nanopath-mini
   family: mini
   recipe_id: lejepa-samplelist30-v1
-  output_dir: /data/nanopath/mini
+  output_dir: /data/nanopath/mini/nanopath-mini
 
 data:
   sample_list: /block/TCGA/sample_dataset_30.txt
@@ -77,3 +77,4 @@ probe:
     - bach
     - break_his
     - mhist
+    - pcam

@@ -7,7 +7,8 @@
 
 import hashlib
 import math
-import re
+import os
+import time
 from collections import OrderedDict
 from pathlib import Path
 
@@ -58,49 +59,25 @@ def patient_id_from_slide_path(slide_path):
 def split_offset_paths(data):
     cache_dir = Path(data["sample_list_cache_dir"])
     cache_dir.mkdir(parents=True, exist_ok=True)
-    sample_list_name = Path(data["sample_list"]).name
+    sample_list = Path(data["sample_list"]).resolve()
+    sample_list_stat = sample_list.stat()
+    sample_list_tag = hashlib.blake2b(
+        f"{sample_list}:{sample_list_stat.st_size}:{sample_list_stat.st_mtime_ns}".encode(),
+        digest_size=8,
+    ).hexdigest()
     val_tag = str(float(data["val_fraction"])).replace(".", "p")
-    prefix = f"{sample_list_name}.seed{int(data['split_seed'])}.val{val_tag}"
+    prefix = f"{sample_list.stem}.{sample_list_tag}.seed{int(data['split_seed'])}.val{val_tag}"
     return {
         data["train_split"]: cache_dir / f"{prefix}.{data['train_split']}.offsets.npy",
         data["val_split"]: cache_dir / f"{prefix}.{data['val_split']}.offsets.npy",
     }
 
 
-def resolve_slide_mpp(wsi):
-    mpp = getattr(wsi.properties, "mpp", None)
-    if mpp is not None:
-        mpp = float(mpp)
-        if np.isfinite(mpp) and mpp > 0:
-            return mpp
-    props_obj = getattr(wsi.reader, "properties", None)
-    if props_obj is None:
-        return None
-    props = None
-    raw = getattr(props_obj, "raw", None)
-    if raw is not None and hasattr(raw, "get"):
-        props = raw
-    elif hasattr(props_obj, "to_dict"):
-        raw = props_obj.to_dict()
-        if hasattr(raw, "get"):
-            props = raw
-    if props is None:
-        return None
-    for key in ["openslide.mpp-x", "openslide.mpp-y", "aperio.MPP"]:
-        raw = props.get(key)
-        if raw is None:
-            continue
-        value = float(raw)
-        if np.isfinite(value) and value > 0:
-            return value
-    comment = props.get("openslide.comment")
-    if comment is not None:
-        match = re.search(r"MPP\s*=\s*([0-9.]+)", comment)
-        if match is not None:
-            value = float(match.group(1))
-            if np.isfinite(value) and value > 0:
-                return value
-    return None
+def resolve_slide_mpp(wsi, slide_path):
+    mpp = float(wsi.properties.mpp)
+    if not np.isfinite(mpp) or mpp <= 0:
+        raise ValueError(f"invalid wsi.properties.mpp for {slide_path}: {mpp}")
+    return mpp
 
 
 def prepare_sample_list_offsets(cfg):
@@ -134,8 +111,9 @@ def prepare_sample_list_offsets(cfg):
                 val_count += 1
             else:
                 raise ValueError(f"unexpected split {split} while counting sample list offsets at byte {offset}")
-    train_tmp = Path(f"{train_offsets_path}.tmp")
-    val_tmp = Path(f"{val_offsets_path}.tmp")
+    tmp_tag = f".{os.getpid()}.{time.time_ns()}.tmp"
+    train_tmp = Path(f"{train_offsets_path}{tmp_tag}")
+    val_tmp = Path(f"{val_offsets_path}{tmp_tag}")
     train_offsets = open_memmap(train_tmp, mode="w+", dtype=np.uint64, shape=(train_count,))
     val_offsets = open_memmap(val_tmp, mode="w+", dtype=np.uint64, shape=(val_count,))
     train_i = 0
@@ -190,9 +168,7 @@ class RandomTCGADataset(Dataset):
     def __init__(self, cfg, split):
         data = cfg["data"]
         train = cfg["train"]
-        self.split = split
-        self.train_split = data["train_split"]
-        self.is_train = split == self.train_split
+        self.is_train = split == data["train_split"]
         self.sample_list_path = Path(data["sample_list"])
         if not self.sample_list_path.is_file():
             raise FileNotFoundError(f"sample list not found at {self.sample_list_path}")
@@ -249,11 +225,14 @@ class RandomTCGADataset(Dataset):
         if self.sample_list_handle is None:
             self.sample_list_handle = self.sample_list_path.open("rb")
         self.sample_list_handle.seek(int(self.offsets[idx]))
-        return self.sample_list_handle.readline().decode("utf-8").rstrip("\n")
+        return self.sample_list_handle.readline().decode("utf-8").rstrip("\r\n")
 
     def __getitem__(self, idx):
         seed = ((idx + 1) * 1103515245 + 12345) & 0x7FFFFFFF
         slide_path, x_str, y_str, level_str = self.sample_line(idx).rsplit(" ", 3)
+        patient_id = patient_id_from_slide_path(slide_path)
+        slide_key = int.from_bytes(hashlib.blake2b(slide_path.encode("utf-8"), digest_size=8).digest(), "big") & 0x7FFFFFFFFFFFFFFF
+        patient_key = int.from_bytes(hashlib.blake2b(patient_id.encode("utf-8"), digest_size=8).digest(), "big") & 0x7FFFFFFFFFFFFFFF
         x = int(x_str)
         y = int(y_str)
         level = int(level_str)
@@ -264,7 +243,7 @@ class RandomTCGADataset(Dataset):
         self.handles.move_to_end(slide_path)
         while len(self.handles) > self.max_open_wsi:
             self.handles.popitem(last=False)[1].close()
-        slide_mpp = resolve_slide_mpp(wsi)
+        slide_mpp = resolve_slide_mpp(wsi, slide_path)
         level_downsample = np.asarray(wsi.properties.level_downsample, dtype=np.float64)
         if level < 0 or level >= len(level_downsample):
             raise ValueError(f"invalid level {level} for {slide_path} with {len(level_downsample)} pyramid levels")
@@ -275,7 +254,7 @@ class RandomTCGADataset(Dataset):
         if tile.shape[0] != SAMPLE_LIST_PATCH_SIZE or tile.shape[1] != SAMPLE_LIST_PATCH_SIZE:
             tile = np.asarray(Image.fromarray(tile).resize((SAMPLE_LIST_PATCH_SIZE, SAMPLE_LIST_PATCH_SIZE), Image.Resampling.BILINEAR)).copy()
         tile = self.to_tensor(tile)
-        sampled_mpp = float("nan") if slide_mpp is None else slide_mpp * float(level_downsample[level])
+        sampled_mpp = slide_mpp * float(level_downsample[level])
         if self.is_train:
             context_tile = self.hed_jitter(tile) if self.hed_jitter is not None else tile
             return {
@@ -283,6 +262,9 @@ class RandomTCGADataset(Dataset):
                 "local_views": torch.stack([self.local_aug(context_tile) for _ in range(self.local_views)]),
                 "latent_view": self.latent_aug(tile),
                 "sampled_mpp": torch.tensor(sampled_mpp, dtype=torch.float32),
+                "sample_idx": torch.tensor(int(idx), dtype=torch.int64),
+                "slide_id": torch.tensor(slide_key, dtype=torch.int64),
+                "patient_id": torch.tensor(patient_key, dtype=torch.int64),
             }
         with torch.random.fork_rng(devices=[]):
             torch.manual_seed(seed)
@@ -295,4 +277,7 @@ class RandomTCGADataset(Dataset):
             "local_views": local_views,
             "latent_view": latent_view,
             "sampled_mpp": torch.tensor(sampled_mpp, dtype=torch.float32),
+            "sample_idx": torch.tensor(int(idx), dtype=torch.int64),
+            "slide_id": torch.tensor(slide_key, dtype=torch.int64),
+            "patient_id": torch.tensor(patient_key, dtype=torch.int64),
         }
