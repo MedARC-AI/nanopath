@@ -75,6 +75,7 @@ probe:
   every: 400
   datasets:
     - bach
+    - bracs
     - break_his
     - mhist
     - pcam
