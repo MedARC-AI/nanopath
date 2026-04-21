@@ -346,7 +346,9 @@ def main():
             pending_patient_ids.update(int(x) for x in batch["patient_id"].tolist())
             global_views, local_views, latent_view = [batch[key].to(device, non_blocking=True) for key in ("global_views", "local_views", "latent_view")]
             current_batch = latent_view.shape[0]
-            sampled_mpp_mean = float(batch["sampled_mpp"].float().mean().item())
+            finite_mpp = batch["sampled_mpp"].float()
+            finite_mpp = finite_mpp[torch.isfinite(finite_mpp)]
+            sampled_mpp_mean = float(finite_mpp.mean().item()) if finite_mpp.numel() > 0 else float("nan")
             warmup = min(1.0, float(step + 1) / float(train_cfg["warmup_steps"]))
             for group in opt.param_groups:
                 group["lr"] = lr * warmup
