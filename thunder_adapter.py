@@ -18,7 +18,7 @@ class NanoPathThunderModel(PretrainedModel):
         self.model.eval()
         for param in self.model.parameters():
             param.requires_grad = False
-        self.name = os.environ.get("NANOPATH_THUNDER_MODEL_NAME", f"nanopath_step_{int(checkpoint['step']):07d}")
+        self.name = os.environ["NANOPATH_THUNDER_MODEL_NAME"]
         self.emb_dim = int(self.cfg["model"]["dim"])
         self.vlm = False
         self.transform = transforms.Compose(

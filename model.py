@@ -23,7 +23,7 @@ class RMSNorm(nn.Module):
         x_dtype = x.dtype
         x = x.float()
         x = x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
-        return self.weight * x.to(x_dtype)
+        return (self.weight * x).to(x_dtype)
 
 
 def apply_rotary_1d(x, positions, inv_freq):
@@ -46,9 +46,13 @@ def apply_rotary_2d(x, positions, inv_freq):
 class Attention(nn.Module):
     def __init__(self, dim, heads, rope_base, qkv_bias, qk_norm, context_dim=None):
         super().__init__()
+        if dim % heads != 0:
+            raise ValueError(f"dim={dim} must be divisible by heads={heads}")
         self.dim = dim
         self.heads = heads
         self.head_dim = dim // heads
+        if self.head_dim % 4 != 0:
+            raise ValueError(f"head_dim={self.head_dim} must be divisible by 4 for 2D RoPE")
         self.q = nn.Linear(dim, dim, bias=qkv_bias)
         self.kv = nn.Linear(dim if context_dim is None else context_dim, dim * 2, bias=qkv_bias)
         self.proj = nn.Linear(dim, dim, bias=True)
@@ -163,8 +167,8 @@ class NanoPathFM(nn.Module):
                     max(1, model["predictor_dim"] // 64),
                     model["mlp_ratio"],
                     model["rope_base"],
-                    False,
-                    True,
+                    model["qkv_bias"],
+                    model["qk_norm"],
                     context_dim=model["predictor_dim"],
                 )
                 for _ in range(model["predictor_depth"])
@@ -288,3 +292,10 @@ class NanoPathFM(nn.Module):
             else:
                 query = blk(query, query_positions, context, context_positions)
         return self.predictor_out(self.predictor_norm(query)), mask
+
+    def forward(self, global_views, local_views, latent_view, train_cfg, mask_generator=None):
+        checkpoint = bool(train_cfg["activation_checkpointing"])
+        proj = self.encode_views(global_views, local_views, checkpoint)
+        full = self.latent_targets(latent_view, checkpoint).detach()
+        pred, mask = self.latent_predictions(latent_view, train_cfg, generator=mask_generator)
+        return proj, full, pred, mask

@@ -1,10 +1,4 @@
-# This file is the main pretraining loop for NanoPath.
-# It keeps the recipe in one place: YAML load, DDP setup, dataloaders, forward/backward,
-# logging, evaluation, checkpointing, one-hour exits, CBS batch doublings, and resume.
-# The goal is a lean nanoGPT-style script rather than a framework stack.
-# The training objective is single-stage LeJEPA plus latent masked prediction so we can
-# scale one coherent recipe from 1xH100 micro runs to 8xH100 node runs without adding
-# stage boundaries, hidden automation, or launcher-specific behavior.
+# NanoPath pretraining loop: YAML config, DDP, logging, checkpointing, and async probes.
 
 import contextlib
 import json
@@ -27,12 +21,15 @@ import yaml
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
 
-from dataloader import RandomTCGADataset, prepare_sample_list_offsets
+from dataloader import RandomTCGADataset, SAMPLE_LIST_PATCH_SIZE, prepare_sample_list_offsets
 from model import SIGReg, NanoPathFM
 from probe import collect_probe_results, prepare_probe_state, probe_enabled, queue_probe_job
 
 
 GNS_EVERY = 100
+EVAL_KEYS = ("pred", "sig", "latent", "proxy")
+TRAIN_KEYS = ("pred", "sig", "latent", "proxy", "total", "proj_std", "target_std", "pred_target_cos", "mask_fraction")
+VAL_NAMES = {"pred": "pred", "sig": "sig", "latent": "latent", "proxy": "lejepa_proxy"}
 
 
 def load_config():
@@ -43,15 +40,20 @@ def load_config():
     return cfg
 
 
-def evaluate(model, loader, cfg, device, world_size):
+def loss_terms(sigreg, proj, full, pred, mask, train_cfg, sigreg_generator, proj_sigreg=None):
+    proj_sigreg = proj if proj_sigreg is None else proj_sigreg
+    pred_loss = (proj - proj.mean(dim=1, keepdim=True)).square().mean()
+    sig_loss = sigreg(proj_sigreg.transpose(0, 1), generator=sigreg_generator)
+    latent_loss = F.l1_loss(pred, full) if train_cfg["latent_predict_visible"] else F.l1_loss(pred[mask], full[mask])
+    total_loss = pred_loss + train_cfg["lambda_sig"] * sig_loss + train_cfg["lambda_lat"] * latent_loss
+    proxy = (pred_loss + train_cfg["lambda_sig"] * sig_loss) / (train_cfg["lambda_sig"] ** 0.4)
+    return pred_loss, sig_loss, latent_loss, total_loss, proxy
+
+
+def evaluate(model, sigreg, loader, cfg, device, world_size):
     model.eval()
     train_cfg = cfg["train"]
-    # These four validation logs are not interchangeable (lower is better for all of them):
-    # val/pred is the JEPA view-consistency term, val/sig is the anti-collapse regularizer,
-    # val/latent is the latent masked-prediction loss, and val/lejepa_proxy is only a
-    # JEPA-side recipe-selection proxy. Lower is better for all four, but only the probe
-    # accuracies are directly interpretable as downstream task performance.
-    losses = {"pred": 0.0, "sig": 0.0, "latent": 0.0, "proxy": 0.0}
+    losses = [0.0] * len(EVAL_KEYS)
     batches = 0
     autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if device.type == "cuda" and train_cfg["bf16"] else contextlib.nullcontext()
     eval_generator = torch.Generator(device=device.type)
@@ -62,42 +64,37 @@ def evaluate(model, loader, cfg, device, world_size):
                 global_views = batch["global_views"].to(device, non_blocking=True)
                 local_views = batch["local_views"].to(device, non_blocking=True)
                 latent_view = batch["latent_view"].to(device, non_blocking=True)
-                proj = model.encode_views(global_views, local_views, False)
-                proj_sigreg = torch.cat(dist_nn.all_gather(proj), dim=0) if world_size > 1 else proj
-                full = model.latent_targets(latent_view, False).detach()
-                pred, mask = model.latent_predictions(latent_view, train_cfg, generator=eval_generator)
-                pred_loss = (proj - proj.mean(dim=1, keepdim=True)).square().mean()
-                sig_loss = model.sigreg(proj_sigreg.transpose(0, 1), generator=eval_generator)
-                latent_loss = F.l1_loss(pred, full) if train_cfg["latent_predict_visible"] else F.l1_loss(pred[mask], full[mask])
-                proxy = (pred_loss + train_cfg["lambda_sig"] * sig_loss) / (train_cfg["lambda_sig"] ** 0.4)
-            losses["pred"] += pred_loss.item()
-            losses["sig"] += sig_loss.item()
-            losses["latent"] += latent_loss.item()
-            losses["proxy"] += proxy.item()
+                proj, full, pred, mask = model(global_views, local_views, latent_view, train_cfg, mask_generator=eval_generator)
+                pred_loss, sig_loss, latent_loss, _, proxy = loss_terms(
+                    sigreg,
+                    proj,
+                    full,
+                    pred,
+                    mask,
+                    train_cfg,
+                    eval_generator,
+                    torch.cat(dist_nn.all_gather(proj), dim=0) if world_size > 1 else proj,
+                )
+            for i, value in enumerate((pred_loss, sig_loss, latent_loss, proxy)):
+                losses[i] += value.item()
             batches += 1
             if batches >= train_cfg["val_batches"]:
                 break
     if world_size > 1:
-        tensor = torch.tensor([losses["pred"], losses["sig"], losses["latent"], losses["proxy"], batches], device=device)
+        tensor = torch.tensor([*losses, batches], device=device)
         dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
-        losses["pred"], losses["sig"], losses["latent"], losses["proxy"], batches = tensor.tolist()
-    return {k: v / batches for k, v in losses.items()}
-
-
-def estimate_flops(model_params, visible_patch_presentations):
-    return int(6 * model_params * visible_patch_presentations)
-
-
-def positive_finite_mean(x):
-    valid = torch.isfinite(x) & (x > 0)
-    if not valid.any():
-        return -1.0
-    return float(x[valid].mean().item())
+        losses = tensor[:-1].tolist()
+        batches = int(tensor[-1].item())
+    return {key: value / batches for key, value in zip(EVAL_KEYS, losses)}
 
 
 def main():
     cfg = load_config()
     train_cfg = cfg["train"]
+    if probe_enabled(cfg) and cfg["probe"]["every"] % train_cfg["eval_every"] != 0:
+        raise ValueError(
+            f"probe.every={cfg['probe']['every']} must be a multiple of train.eval_every={train_cfg['eval_every']}"
+        )
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     rank = int(os.environ.get("RANK", "0"))
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
@@ -112,6 +109,9 @@ def main():
     np.random.seed(train_cfg["seed"] + rank)
     torch.manual_seed(train_cfg["seed"] + rank)
     torch.set_float32_matmul_precision("high")
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
     model = NanoPathFM(cfg).to(device)
     model.sigreg = SIGReg().to(device)
     model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -144,6 +144,9 @@ def main():
     best_probe_scores = {}
     output_dir = Path(cfg["project"]["output_dir"])
     wandb_dir = Path("/data/nanopath/wandb")
+    slurm_job_id = os.environ.get("SLURM_JOB_ID")
+    slurm_stdout_path = os.environ.get("NANOPATH_SLURM_STDOUT")
+    slurm_stderr_path = os.environ.get("NANOPATH_SLURM_STDERR")
     # Fresh launches fully replace the run directory so repeated use of a checked-in
     # output_dir like /data/nanopath/nano never trips over stale artifacts.
     if train_cfg["resume"] is None:
@@ -155,37 +158,62 @@ def main():
     wandb_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = output_dir / "metrics.jsonl"
     summary_path = output_dir / "summary.json"
-    resume = None
     wandb_meta = None
-    if train_cfg["resume"] is not None:
-        resume = torch.load(train_cfg["resume"], map_location=device, weights_only=False)
-        model.load_state_dict(resume["model"])
-        opt.load_state_dict(resume["opt"])
-        step = int(resume["step"])
-        batch_size = int(resume["batch_size"])
-        lr = float(resume["lr"])
-        best_val_proxy = float(resume["best_val_proxy"])
-        examples_seen = int(resume["examples_seen"])
-        visible_patch_presentations = int(resume["visible_patch_presentations"])
-        masked_target_presentations = int(resume["masked_target_presentations"])
-        train_flops = int(resume["train_flops"])
-        best_probe_scores = dict(resume["best_probe_scores"])
-        best_val_mean_probe_f1 = float(resume["best_val_mean_probe_f1"])
-        best_val_mean_probe_f1_step = int(resume["best_val_mean_probe_f1_step"])
-        wandb_meta = dict(resume["wandb"])
+    resume_path = train_cfg["resume"]
+    if resume_path is not None:
+        checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
+        model.load_state_dict(checkpoint["model"])
+        opt.load_state_dict(checkpoint["opt"])
+        (
+            step,
+            batch_size,
+            lr,
+            best_val_proxy,
+            examples_seen,
+            visible_patch_presentations,
+            masked_target_presentations,
+            train_flops,
+            best_val_mean_probe_f1,
+            best_val_mean_probe_f1_step,
+        ) = (
+            int(checkpoint["step"]),
+            int(checkpoint["batch_size"]),
+            float(checkpoint["lr"]),
+            float(checkpoint["best_val_proxy"]),
+            int(checkpoint["examples_seen"]),
+            int(checkpoint["visible_patch_presentations"]),
+            int(checkpoint["masked_target_presentations"]),
+            int(checkpoint["train_flops"]),
+            float(checkpoint["best_val_mean_probe_f1"]),
+            int(checkpoint["best_val_mean_probe_f1_step"]),
+        )
+        best_probe_scores = dict(checkpoint["best_probe_scores"])
+        wandb_meta = dict(checkpoint["wandb"])
     if rank == 0:
         wandb_init = {
             "project": "nanopath",
             "name": cfg["project"]["name"],
             "dir": str(wandb_dir),
             "config": cfg,
+            "settings": wandb.Settings(
+                console="redirect",
+                console_multipart=True,
+                console_chunk_max_seconds=15,
+            ),
         }
         if wandb_meta is not None:
             wandb_init["id"] = wandb_meta["id"]
             wandb_init["resume"] = "must"
         wandb_run = wandb.init(**wandb_init)
-        wandb_run.define_metric("val_thunder/step")
-        wandb_run.define_metric("val_thunder/*", step_metric="val_thunder/step")
+        wandb_run.define_metric("probe/step", hidden=True)
+        wandb_run.define_metric("probe/*", step_metric="probe/step")
+        source_artifact = wandb.Artifact(f"nanopath-source-{wandb_run.id}", type="code")
+        repo_dir = Path(__file__).resolve().parent
+        for path in sorted({*repo_dir.rglob("*"), *repo_dir.glob(".*")}):
+            if not path.is_file() or any(part in {".git", ".venv", "__pycache__"} for part in path.parts):
+                continue
+            source_artifact.add_file(str(path), name=str(path.relative_to(repo_dir)))
+        wandb_run.log_artifact(source_artifact)
         wandb_meta = {"project": "nanopath", "id": wandb_run.id, "name": cfg["project"]["name"]}
     else:
         wandb_run = None
@@ -225,6 +253,14 @@ def main():
     last_train_flops = train_flops
     last_gns_simple = None
     last_gns_batch_ratio = None
+    latent_visible_patches = int(round(latent_patches * (1.0 - train_cfg["latent_mask_ratio"])))
+    unique_tile_patch_count = (SAMPLE_LIST_PATCH_SIZE // cfg["model"]["patch_size"]) ** 2
+    seen_sample_ids = set()
+    seen_slide_ids = set()
+    seen_patient_ids = set()
+    pending_sample_ids = set()
+    pending_slide_ids = set()
+    pending_patient_ids = set()
 
     def checkpoint_payload(next_step):
         return {
@@ -245,24 +281,50 @@ def main():
             "config": cfg,
         }
 
-    def probe_checkpoint_payload(next_step):
-        return {
-            "model": root_model.state_dict(),
-            "step": next_step,
-            "config": cfg,
-        }
+    def flush_unique_counts():
+        nonlocal pending_sample_ids, pending_slide_ids, pending_patient_ids
+        payload = {"samples": list(pending_sample_ids), "slides": list(pending_slide_ids), "patients": list(pending_patient_ids)}
+        if distributed:
+            gathered = [None] * world_size
+            dist.all_gather_object(gathered, payload)
+        else:
+            gathered = [payload]
+        if rank == 0:
+            for entry in gathered:
+                seen_sample_ids.update(entry["samples"])
+                seen_slide_ids.update(entry["slides"])
+                seen_patient_ids.update(entry["patients"])
+        pending_sample_ids.clear()
+        pending_slide_ids.clear()
+        pending_patient_ids.clear()
+        if rank == 0:
+            unique_tiles_seen = len(seen_sample_ids)
+            return {
+                "unique_slides_seen": len(seen_slide_ids),
+                "unique_patients_seen": len(seen_patient_ids),
+                "unique_tiles_seen": unique_tiles_seen,
+                "unique_patches_seen": unique_tiles_seen * unique_tile_patch_count,
+            }
+        return None
+
+    def log_probe_results(log_step):
+        nonlocal best_val_mean_probe_f1, best_val_mean_probe_f1_step, best_probe_scores
+        if probe_state is None:
+            return
+        best_val_mean_probe_f1, best_val_mean_probe_f1_step, best_probe_scores = collect_probe_results(
+            probe_state, wandb_run, metrics_path, output_dir, best_val_mean_probe_f1, best_val_mean_probe_f1_step, best_probe_scores, log_step
+        )
+
+    def log_val(step_value, val, event=None):
+        payload = {"step": step_value, **{f"val_{VAL_NAMES[key]}": val[key] for key in EVAL_KEYS}}
+        if event is not None:
+            payload["event"] = event
+        with metrics_path.open("a") as handle:
+            handle.write(json.dumps(payload) + "\n")
+        wandb_run.log({f"val/{VAL_NAMES[key]}": val[key] for key in EVAL_KEYS}, step=step_value)
 
     if rank == 0 and probe_state is not None:
-        best_val_mean_probe_f1, best_val_mean_probe_f1_step, best_probe_scores = collect_probe_results(
-            probe_state,
-            wandb_run,
-            metrics_path,
-            output_dir,
-            best_val_mean_probe_f1,
-            best_val_mean_probe_f1_step,
-            best_probe_scores,
-            step,
-        )
+        log_probe_results(step)
     if distributed:
         dist.barrier()
     max_wall_seconds = int(train_cfg["max_wall_seconds"])
@@ -272,18 +334,19 @@ def main():
     cooldown_started_step = None
     cooldown_started_wall_seconds = None
     last_eval_step = step if math.isfinite(best_val_proxy) else -1
-    last_saved_step = step if train_cfg["resume"] is not None else 0
+    last_saved_step = step if resume_path is not None else 0
 
-    while True:
+    while stop_reason is None:
         if distributed:
             train_loader.sampler.set_epoch(step + train_cfg["seed"])
         for batch in train_loader:
-            root_model.train()
-            global_views = batch["global_views"].to(device, non_blocking=True)
-            local_views = batch["local_views"].to(device, non_blocking=True)
-            latent_view = batch["latent_view"].to(device, non_blocking=True)
+            model.train()
+            pending_sample_ids.update(int(x) for x in batch["sample_idx"].tolist())
+            pending_slide_ids.update(int(x) for x in batch["slide_id"].tolist())
+            pending_patient_ids.update(int(x) for x in batch["patient_id"].tolist())
+            global_views, local_views, latent_view = [batch[key].to(device, non_blocking=True) for key in ("global_views", "local_views", "latent_view")]
             current_batch = latent_view.shape[0]
-            sampled_mpp_mean = positive_finite_mean(batch["sampled_mpp"].float())
+            sampled_mpp_mean = float(batch["sampled_mpp"].float().mean().item())
             warmup = min(1.0, float(step + 1) / float(train_cfg["warmup_steps"]))
             for group in opt.param_groups:
                 group["lr"] = lr * warmup
@@ -298,14 +361,17 @@ def main():
                     opt.zero_grad(set_to_none=True)
                     with model.no_sync():
                         with autocast:
-                            proj = root_model.encode_views(global_views, local_views, train_cfg["activation_checkpointing"])
-                            proj_sigreg = torch.cat(dist_nn.all_gather(proj), dim=0)
-                            full = root_model.latent_targets(latent_view, train_cfg["activation_checkpointing"]).detach()
-                            pred, mask = root_model.latent_predictions(latent_view, train_cfg)
-                            pred_loss = (proj - proj.mean(dim=1, keepdim=True)).square().mean()
-                            sig_loss = root_model.sigreg(proj_sigreg.transpose(0, 1), generator=sigreg_generator)
-                            latent_loss = F.l1_loss(pred, full) if train_cfg["latent_predict_visible"] else F.l1_loss(pred[mask], full[mask])
-                            total_loss = pred_loss + train_cfg["lambda_sig"] * sig_loss + train_cfg["lambda_lat"] * latent_loss
+                            proj, full, pred, mask = model(global_views, local_views, latent_view, train_cfg)
+                            pred_loss, sig_loss, latent_loss, total_loss, _ = loss_terms(
+                                root_model.sigreg,
+                                proj,
+                                full,
+                                pred,
+                                mask,
+                                train_cfg,
+                                sigreg_generator,
+                                torch.cat(dist_nn.all_gather(proj), dim=0),
+                            )
                         total_loss.backward()
                     grad_sq_small = 0.0
                     for param in root_model.parameters():
@@ -323,13 +389,21 @@ def main():
                     for start in [0, half]:
                         opt.zero_grad(set_to_none=True)
                         with autocast:
-                            proj = root_model.encode_views(global_views[start : start + half], local_views[start : start + half], train_cfg["activation_checkpointing"])
-                            full = root_model.latent_targets(latent_view[start : start + half], train_cfg["activation_checkpointing"]).detach()
-                            pred, mask = root_model.latent_predictions(latent_view[start : start + half], train_cfg)
-                            pred_loss = (proj - proj.mean(dim=1, keepdim=True)).square().mean()
-                            sig_loss = root_model.sigreg(proj.transpose(0, 1), generator=sigreg_generator)
-                            latent_loss = F.l1_loss(pred, full) if train_cfg["latent_predict_visible"] else F.l1_loss(pred[mask], full[mask])
-                            total_loss = pred_loss + train_cfg["lambda_sig"] * sig_loss + train_cfg["lambda_lat"] * latent_loss
+                            proj, full, pred, mask = model(
+                                global_views[start : start + half],
+                                local_views[start : start + half],
+                                latent_view[start : start + half],
+                                train_cfg,
+                            )
+                            pred_loss, sig_loss, latent_loss, total_loss, _ = loss_terms(
+                                root_model.sigreg,
+                                proj,
+                                full,
+                                pred,
+                                mask,
+                                train_cfg,
+                                sigreg_generator,
+                            )
                         total_loss.backward()
                         grad_sq_small = 0.0
                         for param in root_model.parameters():
@@ -341,15 +415,17 @@ def main():
                     gns_batch_big = current_batch
                     opt.zero_grad(set_to_none=True)
             with autocast:
-                proj = root_model.encode_views(global_views, local_views, train_cfg["activation_checkpointing"])
-                proj_sigreg = torch.cat(dist_nn.all_gather(proj), dim=0) if distributed else proj
-                full = root_model.latent_targets(latent_view, train_cfg["activation_checkpointing"]).detach()
-                pred, mask = root_model.latent_predictions(latent_view, train_cfg)
-                pred_loss = (proj - proj.mean(dim=1, keepdim=True)).square().mean()
-                sig_loss = root_model.sigreg(proj_sigreg.transpose(0, 1), generator=sigreg_generator)
-                latent_loss = F.l1_loss(pred, full) if train_cfg["latent_predict_visible"] else F.l1_loss(pred[mask], full[mask])
-                total_loss = pred_loss + train_cfg["lambda_sig"] * sig_loss + train_cfg["lambda_lat"] * latent_loss
-                proxy = (pred_loss + train_cfg["lambda_sig"] * sig_loss) / (train_cfg["lambda_sig"] ** 0.4)
+                proj, full, pred, mask = model(global_views, local_views, latent_view, train_cfg)
+                pred_loss, sig_loss, latent_loss, total_loss, proxy = loss_terms(
+                    root_model.sigreg,
+                    proj,
+                    full,
+                    pred,
+                    mask,
+                    train_cfg,
+                    sigreg_generator,
+                    torch.cat(dist_nn.all_gather(proj), dim=0) if distributed else proj,
+                )
                 proj_std = proj.float().reshape(-1, proj.shape[-1]).std(dim=0).mean()
                 target_std = full.float().reshape(-1, full.shape[-1]).std(dim=0).mean()
                 if train_cfg["latent_predict_visible"]:
@@ -373,14 +449,12 @@ def main():
             grad_param_ratio = grad_norm / max(param_norm, 1e-12)
             grad_clip_scale = min(1.0, train_cfg["grad_clip"] / max(grad_norm, 1e-12)) if train_cfg["grad_clip"] > 0 else 1.0
             gns_simple = None
-            gns_noise = None
-            gns_signal = None
             gns_batch_ratio = None
             if gns_grad_sq_small is not None:
-                gns_noise = max(0.0, (gns_batch_small * gns_batch_big * (gns_grad_sq_small - grad_sq)) / (gns_batch_big - gns_batch_small))
-                gns_signal = max(0.0, (gns_batch_big * grad_sq - gns_batch_small * gns_grad_sq_small) / (gns_batch_big - gns_batch_small))
-                if gns_signal > 0.0:
-                    gns_simple = gns_noise / gns_signal
+                noise = max(0.0, (gns_batch_small * gns_batch_big * (gns_grad_sq_small - grad_sq)) / (gns_batch_big - gns_batch_small))
+                signal = max(0.0, (gns_batch_big * grad_sq - gns_batch_small * gns_grad_sq_small) / (gns_batch_big - gns_batch_small))
+                if signal > 0.0:
+                    gns_simple = noise / signal
                     last_gns_simple = gns_simple
                     if gns_simple > 0.0:
                         gns_batch_ratio = gns_batch_big / gns_simple
@@ -388,18 +462,14 @@ def main():
             if train_cfg["grad_clip"] > 0:
                 nn.utils.clip_grad_norm_(root_model.parameters(), train_cfg["grad_clip"])
             opt.step()
+            completed_step = step + 1
             global_batch = current_batch * world_size
-            visible_now = global_batch * (
-                train_cfg["global_views"] * global_patches
-                + train_cfg["local_views"] * local_patches
-                + latent_patches
-                + int(round(latent_patches * (1.0 - train_cfg["latent_mask_ratio"])))
-            )
-            masked_now = global_batch * (latent_patches - int(round(latent_patches * (1.0 - train_cfg["latent_mask_ratio"]))))
+            visible_now = global_batch * (train_cfg["global_views"] * global_patches + train_cfg["local_views"] * local_patches + latent_patches + latent_visible_patches)
+            masked_now = global_batch * (latent_patches - latent_visible_patches)
             examples_seen += global_batch
             visible_patch_presentations += visible_now
             masked_target_presentations += masked_now
-            train_flops += estimate_flops(model_params, visible_now)
+            train_flops += int(6 * model_params * visible_now)
             if distributed:
                 reduced = torch.tensor(
                     [
@@ -419,7 +489,10 @@ def main():
                 reduced = (reduced / world_size).tolist()
             else:
                 reduced = [pred_loss.item(), sig_loss.item(), latent_loss.item(), proxy.item(), total_loss.item(), proj_std.item(), target_std.item(), pred_target_cos.item(), mask_fraction.item()]
-            if rank == 0 and step % train_cfg["log_every"] == 0:
+            reduced = dict(zip(TRAIN_KEYS, reduced))
+            should_log = completed_step == 1 or completed_step % train_cfg["log_every"] == 0
+            unique_counts = flush_unique_counts() if should_log else None
+            if rank == 0 and should_log:
                 now = time.time()
                 elapsed = max(1e-6, now - last_time)
                 items_per_sec = (examples_seen - last_examples) / elapsed
@@ -433,29 +506,21 @@ def main():
                 gpu_mem_gb = torch.cuda.memory_allocated(device) / (1024**3) if device.type == "cuda" else 0.0
                 gpu_peak_mem_gb = torch.cuda.max_memory_allocated(device) / (1024**3) if device.type == "cuda" else 0.0
                 train_log = {
-                    "step": step,
-                    "train_pred": reduced[0],
-                    "train_sig": reduced[1],
-                    "train_latent": reduced[2],
-                    "train_lejepa_proxy": reduced[3],
-                    "train_total": reduced[4],
-                    "train_proj_std": reduced[5],
-                    "train_target_std": reduced[6],
-                    "train_pred_target_cos": reduced[7],
-                    "train_mask_fraction": reduced[8],
-                    "examples_seen": examples_seen,
-                    "visible_patch_presentations": visible_patch_presentations,
-                    "masked_target_presentations": masked_target_presentations,
-                    "train_flops": train_flops,
+                    "step": completed_step,
+                    **reduced,
                     "sampled_mpp_mean": sampled_mpp_mean,
                     "items_per_sec": items_per_sec,
                     "visible_patches_per_sec": visible_patches_per_sec,
                     "flops_per_sec": flops_per_sec,
-                    "train_loop_wall_seconds": train_loop_wall_seconds,
-                    "train_loop_wall_fraction": min(1.0, train_loop_wall_seconds / max_wall_seconds),
+                    "wall_seconds": train_loop_wall_seconds,
+                    "wall_fraction": min(1.0, train_loop_wall_seconds / max_wall_seconds),
                     "lr": opt.param_groups[0]["lr"],
                     "batch_size": batch_size,
                     "global_batch_size": global_batch,
+                    "examples_seen": examples_seen,
+                    "visible_patch_presentations": visible_patch_presentations,
+                    "masked_target_presentations": masked_target_presentations,
+                    "train_flops": train_flops,
                     "grad_norm": grad_norm,
                     "param_norm": param_norm,
                     "grad_param_ratio": grad_param_ratio,
@@ -463,101 +528,47 @@ def main():
                     "gpu_mem_gb": gpu_mem_gb,
                     "gpu_peak_mem_gb": gpu_peak_mem_gb,
                 }
+                train_log.update(unique_counts)
                 if gns_simple is not None:
                     train_log["gns_simple"] = gns_simple
-                    train_log["gns_noise"] = gns_noise
-                    train_log["gns_signal"] = gns_signal
-                    train_log["gns_batch_small"] = gns_batch_small
-                    train_log["gns_batch_big"] = gns_batch_big
-                    if gns_batch_ratio is not None:
-                        train_log["gns_batch_ratio"] = gns_batch_ratio
-                with metrics_path.open("a") as f:
-                    f.write(json.dumps(train_log) + "\n")
-                wandb_log = {
-                    "train/pred": reduced[0],
-                    "train/sig": reduced[1],
-                    "train/latent": reduced[2],
-                    "train/lejepa_proxy": reduced[3],
-                    "train/total": reduced[4],
-                    "train/proj_std": reduced[5],
-                    "train/target_std": reduced[6],
-                    "train/pred_target_cos": reduced[7],
-                    "train/mask_fraction": reduced[8],
-                    "train/examples_seen": examples_seen,
-                    "train/visible_patch_presentations": visible_patch_presentations,
-                    "train/masked_target_presentations": masked_target_presentations,
-                    "train/flops": train_flops,
-                    "train/sampled_mpp_mean": sampled_mpp_mean,
-                    "train/items_per_sec": items_per_sec,
-                    "train/visible_patches_per_sec": visible_patches_per_sec,
-                    "train/flops_per_sec": flops_per_sec,
-                    "train/wall_seconds": train_loop_wall_seconds,
-                    "train/wall_fraction": min(1.0, train_loop_wall_seconds / max_wall_seconds),
-                    "train/lr": opt.param_groups[0]["lr"],
-                    "train/batch_size": batch_size,
-                    "train/global_batch_size": global_batch,
-                    "train/grad_norm": grad_norm,
-                    "train/param_norm": param_norm,
-                    "train/grad_param_ratio": grad_param_ratio,
-                    "train/grad_clip_scale": grad_clip_scale,
-                    "train/gpu_mem_gb": gpu_mem_gb,
-                    "train/gpu_peak_mem_gb": gpu_peak_mem_gb,
-                }
-                if gns_simple is not None:
-                    wandb_log["train/gns_simple"] = gns_simple
-                    wandb_log["train/gns_noise"] = gns_noise
-                    wandb_log["train/gns_signal"] = gns_signal
-                    wandb_log["train/gns_batch_small"] = gns_batch_small
-                    wandb_log["train/gns_batch_big"] = gns_batch_big
-                    if gns_batch_ratio is not None:
-                        wandb_log["train/gns_batch_ratio"] = gns_batch_ratio
-                wandb_run.log(wandb_log, step=step)
+                if gns_batch_ratio is not None:
+                    train_log["gns_batch_ratio"] = gns_batch_ratio
+                with metrics_path.open("a") as handle:
+                    handle.write(json.dumps(train_log) + "\n")
+                wandb_run.log(
+                    {
+                        f"train/{key}": value
+                        for key, value in train_log.items()
+                        if key != "step"
+                    },
+                    step=completed_step,
+                )
                 if probe_state is not None:
-                    best_val_mean_probe_f1, best_val_mean_probe_f1_step, best_probe_scores = collect_probe_results(
-                        probe_state,
-                        wandb_run,
-                        metrics_path,
-                        output_dir,
-                        best_val_mean_probe_f1,
-                        best_val_mean_probe_f1_step,
-                        best_probe_scores,
-                        step,
-                    )
+                    log_probe_results(completed_step)
                 if device.type == "cuda":
                     torch.cuda.reset_peak_memory_stats(device)
-            if (step + 1) % train_cfg["eval_every"] == 0:
-                val = evaluate(root_model, val_loader, cfg, device, world_size)
-                run_probe = cfg["probe"]["enabled"] and (step + 1) % cfg["probe"]["every"] == 0
+            if completed_step % train_cfg["eval_every"] == 0:
+                val = evaluate(model, root_model.sigreg, val_loader, cfg, device, world_size)
+                run_probe = probe_enabled(cfg) and completed_step % cfg["probe"]["every"] == 0
                 if val["proxy"] < best_val_proxy:
                     best_val_proxy = val["proxy"]
-                last_eval_step = step + 1
+                last_eval_step = completed_step
                 if rank == 0:
-                    with metrics_path.open("a") as f:
-                        f.write(json.dumps({"step": step, "val_pred": val["pred"], "val_sig": val["sig"], "val_latent": val["latent"], "val_lejepa_proxy": val["proxy"]}) + "\n")
-                    wandb_run.log({"val/pred": val["pred"], "val/sig": val["sig"], "val/latent": val["latent"], "val/lejepa_proxy": val["proxy"]}, step=step)
+                    log_val(completed_step, val)
                     if run_probe and probe_state is not None:
-                        queue_probe_job(cfg, probe_state, probe_checkpoint_payload(step + 1), step + 1)
+                        queue_probe_job(cfg, probe_state, {"model": root_model.state_dict(), "step": completed_step, "config": cfg}, completed_step)
                     if probe_state is not None:
-                        best_val_mean_probe_f1, best_val_mean_probe_f1_step, best_probe_scores = collect_probe_results(
-                            probe_state,
-                            wandb_run,
-                            metrics_path,
-                            output_dir,
-                            best_val_mean_probe_f1,
-                            best_val_mean_probe_f1_step,
-                            best_probe_scores,
-                            step,
-                        )
-            if rank == 0 and (step + 1) % train_cfg["save_every"] == 0:
-                torch.save(checkpoint_payload(step + 1), output_dir / f"step_{step + 1:07d}.pt")
-                last_saved_step = step + 1
-            cbs_trigger = step + 1 in train_cfg["cbs_doubling_steps"]
+                        log_probe_results(completed_step)
+            if rank == 0 and completed_step % train_cfg["save_every"] == 0:
+                torch.save(checkpoint_payload(completed_step), output_dir / f"step_{completed_step:07d}.pt")
+                last_saved_step = completed_step
+            cbs_trigger = completed_step in train_cfg["cbs_doubling_steps"]
             if cbs_trigger:
                 batch_size *= 2
                 lr *= 2 ** 0.5
                 train_loader = make_loader(train_ds, True, batch_size)
                 val_loader = make_loader(val_ds, False, batch_size)
-            step += 1
+            step = completed_step
             train_loop_wall_seconds = time.monotonic() - train_loop_started_at
             if train_loop_wall_seconds >= max_wall_seconds:
                 stop_reason = "max_wall_seconds"
@@ -566,129 +577,64 @@ def main():
                 break
             if cbs_trigger:
                 break
-        if stop_reason is not None:
-            break
+            if stop_reason is not None:
+                break
     train_loop_wall_seconds = time.monotonic() - train_loop_started_at
+    final_unique_counts = flush_unique_counts()
     if distributed:
         dist.barrier()
-    if rank == 0 and stop_reason is not None:
-        with metrics_path.open("a") as f:
-            f.write(
-                json.dumps(
-                    {
-                        "event": "cooldown_start",
-                        "step": cooldown_started_step,
-                        "stop_reason": stop_reason,
-                        "train_loop_wall_seconds": cooldown_started_wall_seconds,
-                    }
-                )
-                + "\n"
-            )
-        wandb_run.log(
-            {
-                "train/cooldown_start_wall_seconds": cooldown_started_wall_seconds,
-                "train/cooldown_start_fraction": min(1.0, cooldown_started_wall_seconds / max_wall_seconds),
-            },
-            step=cooldown_started_step,
-        )
     if step > 0 and last_eval_step != step:
-        val = evaluate(root_model, val_loader, cfg, device, world_size)
+        val = evaluate(model, root_model.sigreg, val_loader, cfg, device, world_size)
         if val["proxy"] < best_val_proxy:
             best_val_proxy = val["proxy"]
         last_eval_step = step
         if rank == 0:
-            with metrics_path.open("a") as f:
-                f.write(
-                    json.dumps(
-                        {
-                            "event": "cooldown_eval",
-                            "step": step,
-                            "val_pred": val["pred"],
-                            "val_sig": val["sig"],
-                            "val_latent": val["latent"],
-                            "val_lejepa_proxy": val["proxy"],
-                        }
-                    )
-                    + "\n"
-                )
-            wandb_run.log(
-                {
-                    "val/pred": val["pred"],
-                    "val/sig": val["sig"],
-                    "val/latent": val["latent"],
-                    "val/lejepa_proxy": val["proxy"],
-                },
-                step=step,
-            )
+            log_val(step, val, "cooldown_eval")
     if not math.isfinite(best_val_proxy):
         raise ValueError("run finished without a finite best_val_proxy; check max_wall_seconds, eval_every, validation data, and loss stability")
     if rank == 0:
         if probe_state is not None:
-            best_val_mean_probe_f1, best_val_mean_probe_f1_step, best_probe_scores = collect_probe_results(
-                probe_state,
-                wandb_run,
-                metrics_path,
-                output_dir,
-                best_val_mean_probe_f1,
-                best_val_mean_probe_f1_step,
-                best_probe_scores,
-                step,
-            )
+            log_probe_results(step)
         if step > 0 and step != last_saved_step:
             torch.save(checkpoint_payload(step), output_dir / f"step_{step:07d}.pt")
             last_saved_step = step
-        summary_path.write_text(
-            json.dumps(
-                {
-                    "project": cfg["project"]["name"],
-                    "family": cfg["project"]["family"],
-                    "recipe_id": cfg["project"]["recipe_id"],
-                    "config_path": cfg["config_path"],
-                    "model_params": model_params,
-                    "world_size": world_size,
-                    "batch_size_per_rank": batch_size,
-                    "global_batch_size": batch_size * world_size,
-                    "max_wall_seconds": max_wall_seconds,
-                    "train_loop_wall_seconds": train_loop_wall_seconds,
-                    "stop_reason": stop_reason,
-                    "cooldown_started_step": cooldown_started_step,
-                    "cooldown_started_wall_seconds": cooldown_started_wall_seconds,
-                    "steps_completed": step,
-                    "best_val_lejepa_proxy": best_val_proxy,
-                    "best_val_mean_probe_f1": None if not math.isfinite(best_val_mean_probe_f1) else best_val_mean_probe_f1,
-                    "best_val_mean_probe_f1_step": best_val_mean_probe_f1_step,
-                    "tile_presentations": examples_seen,
-                    "visible_patch_presentations": visible_patch_presentations,
-                    "masked_target_presentations": masked_target_presentations,
-                    "train_flops": train_flops,
-                    "last_gns_simple": last_gns_simple,
-                    "last_gns_batch_ratio": last_gns_batch_ratio,
-                    "thunder_probe_active_job_id": None if probe_state is None or probe_state["data"]["active"] is None else probe_state["data"]["active"]["job_id"],
-                    "thunder_probe_active_step": None if probe_state is None or probe_state["data"]["active"] is None else probe_state["data"]["active"]["train_step"],
-                    "thunder_probe_queued_step": None if probe_state is None or probe_state["data"]["queued"] is None else probe_state["data"]["queued"]["train_step"],
-                    **best_probe_scores,
-                },
-                indent=2,
-            )
-        )
-        wandb_run.summary["max_wall_seconds"] = max_wall_seconds
-        wandb_run.summary["train_loop_wall_seconds"] = train_loop_wall_seconds
-        wandb_run.summary["stop_reason"] = stop_reason
-        wandb_run.summary["cooldown_started_step"] = cooldown_started_step
-        wandb_run.summary["cooldown_started_wall_seconds"] = cooldown_started_wall_seconds
-        wandb_run.summary["best_val_lejepa_proxy"] = best_val_proxy
-        if math.isfinite(best_val_mean_probe_f1):
-            wandb_run.summary["best_val_mean_probe_f1"] = best_val_mean_probe_f1
-            wandb_run.summary["best_val_mean_probe_f1_step"] = best_val_mean_probe_f1_step
-        if last_gns_simple is not None:
-            wandb_run.summary["last_gns_simple"] = last_gns_simple
-            wandb_run.summary["last_gns_batch_ratio"] = last_gns_batch_ratio
-        if probe_state is not None and probe_state["data"]["active"] is not None:
-            wandb_run.summary["thunder_probe_active_job_id"] = probe_state["data"]["active"]["job_id"]
-            wandb_run.summary["thunder_probe_active_step"] = probe_state["data"]["active"]["train_step"]
-        if probe_state is not None and probe_state["data"]["queued"] is not None:
-            wandb_run.summary["thunder_probe_queued_step"] = probe_state["data"]["queued"]["train_step"]
-        for key, value in best_probe_scores.items():
+        active_probe = None if probe_state is None else probe_state["data"]["active"]
+        queued_probe = None if probe_state is None else probe_state["data"]["queued"]
+        summary = {
+            "project": cfg["project"]["name"],
+            "family": cfg["project"]["family"],
+            "recipe_id": cfg["project"]["recipe_id"],
+            "config_path": cfg["config_path"],
+            "slurm_job_id": slurm_job_id,
+            "slurm_stdout_path": slurm_stdout_path,
+            "slurm_stderr_path": slurm_stderr_path,
+            "model_params": model_params,
+            "world_size": world_size,
+            "batch_size_per_rank": batch_size,
+            "global_batch_size": batch_size * world_size,
+            "max_wall_seconds": max_wall_seconds,
+            "train_loop_wall_seconds": train_loop_wall_seconds,
+            "stop_reason": stop_reason,
+            "cooldown_started_step": cooldown_started_step,
+            "cooldown_started_wall_seconds": cooldown_started_wall_seconds,
+            "steps_completed": step,
+            "best_val_lejepa_proxy": best_val_proxy,
+            "best_val_mean_probe_f1": None if not math.isfinite(best_val_mean_probe_f1) else best_val_mean_probe_f1,
+            "best_val_mean_probe_f1_step": best_val_mean_probe_f1_step,
+            "tile_presentations": examples_seen,
+            "visible_patch_presentations": visible_patch_presentations,
+            "masked_target_presentations": masked_target_presentations,
+            **final_unique_counts,
+            "train_flops": train_flops,
+            "last_gns_simple": last_gns_simple,
+            "last_gns_batch_ratio": last_gns_batch_ratio,
+            "thunder_probe_active_job_id": None if active_probe is None else active_probe["job_id"],
+            "thunder_probe_active_step": None if active_probe is None else active_probe["train_step"],
+            "thunder_probe_queued_step": None if queued_probe is None else queued_probe["train_step"],
+            **best_probe_scores,
+        }
+        summary_path.write_text(json.dumps(summary, indent=2) + "\n")
+        for key, value in summary.items():
             wandb_run.summary[key] = value
         wandb_run.finish()
     if distributed:
