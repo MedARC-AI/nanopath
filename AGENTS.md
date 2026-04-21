@@ -1,0 +1,14 @@
+Coding guidelines:
+- source our venv via `source /admin/home/paul/nanopath/.venv/bin/activate`
+- use flat organization (as few folders and files and lines of code as possible; functional elegance is the goal)
+- no try/except code nor fallbacks — if something is wrong, it should fail loudly
+- use less environmental variables, instead hardcode and don't support modular options nor fallbacks
+- prefer native PyTorch as opposed to Accelerate, Lightning, etc. Multi-GPU can be accomplished with PyTorch DDP.
+- do not use argparser, instead all meaningful variables can be defined from YAML config files (e.g., cfg.train.lr) and if the YAML doesn't define a variable used in the training script, it's ok for that to simply error; only store variables in YAML if they are actually things we are meant to frequently be tuning, otherwise hard-code it in
+- I hate simple helper functions / classes that are only a handful of lines of code; I strongly prefer you just put the code directly where it needs to go.
+- You are currently on a login node that has no GPU access but you can submit SLURM jobs into our H100 nodes (n-#) or CPU nodes (c-1).
+- Use wandb for logging / plotting / utilization monitoring throughout pretraining. Should include all important metrics useful to validating model training (e.g., gradient norm).
+- Follow /admin/home/paul/papers/repos/nanoGPT as a good example of a clean minimalist codebase, particularly with respect to how they handle train.py and model.py files.
+- Store large files / ckpts / embeddings / pretrained models in the /data/nanopath directory, not the main repo.
+- Checked-in training configs should stop after exactly 1 hour of in-loop wall time rather than a fixed step count, because equal-time budgets keep recipe and model comparisons fair when throughput differs.
+- If changes you make lead to comments or code in other files no longer being accurate, make sure to revise those other files and comments as well so everything is accurate and up-to-date.
