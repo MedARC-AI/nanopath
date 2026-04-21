@@ -55,6 +55,7 @@ train:
   global_size: 224
   local_size: 96
   latent_size: 224
+  lambda_jepa_pred: 1.0
   lambda_sig: 0.05
   lambda_lat: 0.25
   latent_mask_ratio: 0.5
