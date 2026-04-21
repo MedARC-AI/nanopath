@@ -2,9 +2,8 @@
 #SBATCH --job-name=baseline
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=24
-#SBATCH --gres=gpu:nvidia_h100_80gb_hbm3:1
-#SBATCH --time=01:30:00
+#SBATCH --gpus-per-task=1
+#SBATCH --time=02:00:00
 #SBATCH --output=/data/nanopath/slurm/%j.out
 #SBATCH --error=/data/nanopath/slurm/%j.err
 #SBATCH --partition=n
