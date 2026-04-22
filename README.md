@@ -46,7 +46,9 @@ SLURM submit:
 
 ```bash
 sbatch /admin/home/paul/nanopath/submit/train.sbatch
-sbatch --job-name=jepa-baseline-bs256 /admin/home/paul/nanopath/submit/train.sbatch /admin/home/paul/nanopath/configs/nano_bs256.yaml
+sbatch --job-name=nano-lr-low /admin/home/paul/nanopath/submit/train.sbatch /admin/home/paul/nanopath/configs/nano_lr_low.yaml
+sbatch --job-name=nano-lr-mid /admin/home/paul/nanopath/submit/train.sbatch /admin/home/paul/nanopath/configs/nano_lr_mid.yaml
+sbatch --job-name=nano-lr-high /admin/home/paul/nanopath/submit/train.sbatch /admin/home/paul/nanopath/configs/nano_lr_high.yaml
 ```
 
 Edit [train.sbatch](/admin/home/paul/nanopath/submit/train.sbatch) before submit only if you want to change the checked-in defaults:

@@ -40,8 +40,9 @@ train:
   num_workers: 16
   prefetch_factor: 4
   persistent_workers: true
-  max_train_flops: 7000000000000000
-  warmup_steps: 60
+  max_train_flops: 5500000000000000
+  # Warm up over about 0.35% of total train FLOPs; with the 5.5e15 budget this matches the old nano bs32 60-step warmup.
+  warmup_flop_fraction: 0.0035
   # Validation only runs on these steps.
   eval_every: 200
   val_batches: 32
