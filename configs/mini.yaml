@@ -40,8 +40,8 @@ train:
   num_workers: 8
   prefetch_factor: 4
   persistent_workers: true
-  max_train_flops: 7000000000000000
-  warmup_steps: 384
+  max_train_flops: 5500000000000000
+  warmup_flop_fraction: 0.0035
   # Validation only runs on these steps.
   eval_every: 1280
   val_batches: 32

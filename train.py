@@ -316,6 +316,10 @@ def main():
     if distributed:
         dist.barrier()
     max_train_flops = int(train_cfg["max_train_flops"])
+    warmup_flop_fraction = float(train_cfg["warmup_flop_fraction"])
+    if warmup_flop_fraction <= 0.0 or warmup_flop_fraction > 1.0:
+        raise ValueError(f"warmup_flop_fraction must be in (0, 1], got {warmup_flop_fraction}")
+    warmup_train_flops = math.ceil(max_train_flops * warmup_flop_fraction)
     probe_targets = []
     next_probe_idx = 0
     if probe_enabled(cfg):
@@ -348,10 +352,13 @@ def main():
             pending_patient_ids.update(int(x) for x in batch["patient_id"].tolist())
             global_views, local_views = [batch[key].to(device, non_blocking=True) for key in ("global_views", "local_views")]
             current_batch = global_views.shape[0]
+            global_batch = current_batch * world_size
+            visible_now = global_batch * (train_cfg["global_views"] * global_patches + train_cfg["local_views"] * local_patches)
+            step_train_flops = int(6 * model_params * visible_now)
             finite_mpp = batch["sampled_mpp"].float()
             finite_mpp = finite_mpp[torch.isfinite(finite_mpp)]
             sampled_mpp_mean = float(finite_mpp.mean().item()) if finite_mpp.numel() > 0 else float("nan")
-            warmup = min(1.0, float(step + 1) / float(train_cfg["warmup_steps"]))
+            warmup = min(1.0, float(train_flops + step_train_flops) / float(warmup_train_flops))
             for group in opt.param_groups:
                 group["lr"] = lr * warmup
             autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if device.type == "cuda" and train_cfg["bf16"] else contextlib.nullcontext()
@@ -448,11 +455,9 @@ def main():
                 nn.utils.clip_grad_norm_(root_model.parameters(), train_cfg["grad_clip"])
             opt.step()
             completed_step = step + 1
-            global_batch = current_batch * world_size
-            visible_now = global_batch * (train_cfg["global_views"] * global_patches + train_cfg["local_views"] * local_patches)
             examples_seen += global_batch
             visible_patch_presentations += visible_now
-            train_flops += int(6 * model_params * visible_now)
+            train_flops += step_train_flops
             if distributed:
                 reduced = torch.tensor(
                     [
@@ -622,6 +627,8 @@ def main():
             **final_unique_counts,
             "train_flops": train_flops,
             "flop_fraction": min(1.0, float(train_flops) / float(max_train_flops)),
+            "warmup_flop_fraction": warmup_flop_fraction,
+            "warmup_train_flops": warmup_train_flops,
             "last_gns_simple": last_gns_simple,
             "last_gns_batch_ratio": last_gns_batch_ratio,
             "probe_target_flops": probe_targets,
