@@ -25,7 +25,7 @@ SLURM_GRES = "gpu:nvidia_h100_80gb_hbm3:1"
 SLURM_TIME_LIMIT = "08:00:00"
 LINEAR_PROBE_PARALLEL_DATASETS = 5
 PATCH_CAMELYON_SUBSET_SEED = 1337
-PATCH_CAMELYON_SUBSET_SIZES = {"train": 3072, "valid": 768, "test": 768}
+PATCH_CAMELYON_SUBSET_SIZES = {"train": 3072, "valid": 768}
 DATASET_ROOTS = {
     "bach": Path("/block/eva-data/bach"),
     "bracs": Path("/block/eva-data/bracs"),
@@ -197,7 +197,7 @@ def prepare_patch_camelyon(runtime_dir):
     dst_root.mkdir(parents=True, exist_ok=True)
     custom_dir = runtime_dir / "custom_datasets"
     custom_dir.mkdir(parents=True, exist_ok=True)
-    for split_idx, split in enumerate(["train", "valid", "test"]):
+    for split_idx, split in enumerate(["train", "valid"]):
         src_x = DATASET_ROOTS["pcam"] / f"camelyonpatch_level_2_split_{split}_x.h5"
         src_y = DATASET_ROOTS["pcam"] / f"camelyonpatch_level_2_split_{split}_y.h5"
         dst_x = dst_root / src_x.name
@@ -219,10 +219,6 @@ def prepare_patch_camelyon(runtime_dir):
         "val": {
             "images": "camelyonpatch_level_2_split_valid_x.h5",
             "labels": "camelyonpatch_level_2_split_valid_y.h5",
-        },
-        "test": {
-            "images": "camelyonpatch_level_2_split_test_x.h5",
-            "labels": "camelyonpatch_level_2_split_test_y.h5",
         },
         "train_few_shot": {str(k): {"images": [], "labels": []} for k in [1, 2, 4, 8, 16]},
     }
@@ -264,7 +260,7 @@ def prepare_patch_camelyon(runtime_dir):
                 ],
                 "nb_train_samples": PATCH_CAMELYON_SUBSET_SIZES["train"],
                 "nb_val_samples": PATCH_CAMELYON_SUBSET_SIZES["valid"],
-                "nb_test_samples": PATCH_CAMELYON_SUBSET_SIZES["test"],
+                "nb_test_samples": 0,
                 "image_sizes": [[96, 96]],
                 "mpp": 1.0,
                 "cancer_type": "breast",
@@ -445,8 +441,7 @@ def collect_probe_results(state, wandb_run, metrics_path, output_dir, best_val_m
                     {
                         "probe/step": result["train_step"],
                         **{f"probe/{key}": value for key, value in metrics.items()},
-                    },
-                    step=log_step,
+                    }
                 )
             if result["status"] == "ok" and "mean_probe_f1" in metrics:
                 for key, value in metrics.items():

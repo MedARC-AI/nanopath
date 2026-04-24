@@ -6,6 +6,7 @@ import math
 import os
 import random
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -487,6 +488,22 @@ def main():
                 last_examples = examples_seen
                 last_visible_patch_presentations = visible_patch_presentations
                 last_train_flops = train_flops
+                gpu_util_pct = (
+                    float(
+                        subprocess.check_output(
+                            [
+                                "nvidia-smi",
+                                "--query-gpu=utilization.gpu",
+                                "--format=csv,noheader,nounits",
+                                "-i",
+                                str(torch.cuda.current_device()),
+                            ],
+                            text=True,
+                        ).strip()
+                    )
+                    if device.type == "cuda"
+                    else 0.0
+                )
                 gpu_mem_gb = torch.cuda.memory_allocated(device) / (1024**3) if device.type == "cuda" else 0.0
                 gpu_peak_mem_gb = torch.cuda.max_memory_allocated(device) / (1024**3) if device.type == "cuda" else 0.0
                 train_log = {
@@ -508,6 +525,7 @@ def main():
                     "param_norm": param_norm,
                     "grad_param_ratio": grad_param_ratio,
                     "grad_clip_scale": grad_clip_scale,
+                    "gpu_util_pct": gpu_util_pct,
                     "gpu_mem_gb": gpu_mem_gb,
                     "gpu_peak_mem_gb": gpu_peak_mem_gb,
                 }
