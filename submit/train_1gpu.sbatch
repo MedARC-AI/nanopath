@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=jepa-baseline
+#SBATCH --job-name=jepa-seedvar
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-task=4
-#SBATCH --time=04:00:00
+#SBATCH --gpus-per-task=1
+#SBATCH --time=08:00:00
 #SBATCH --output=/data/nanopath/slurm/%j.out
 #SBATCH --error=/data/nanopath/slurm/%j.err
 #SBATCH --partition=n
@@ -12,9 +12,9 @@
 
 set -euo pipefail
 
-# Default launcher for the checked-in small JEPA screen.
+# Single-GPU launcher for seed-variability runs.
 CONFIG_FILE="${1:-/admin/home/paul/nanopath/configs/small.yaml}"
-NPROC_PER_NODE=4
+NPROC_PER_NODE=1
 
 cd /admin/home/paul/nanopath
 mkdir -p /data/nanopath

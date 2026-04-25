@@ -13,8 +13,13 @@ class NanoPathThunderModel(PretrainedModel):
         super().__init__()
         checkpoint = torch.load(os.environ["NANOPATH_THUNDER_CKPT"], map_location="cpu", weights_only=False)
         self.cfg = checkpoint["config"]
+        model_weights = str(self.cfg["probe"]["model_weights"])
+        if model_weights not in {"raw", "ema"}:
+            raise ValueError(f"probe.model_weights must be raw or ema, got {model_weights}")
         self.model = NanoPathFM(self.cfg)
-        self.model.load_state_dict(checkpoint["model"])
+        if model_weights == "ema" and "model_ema" not in checkpoint:
+            raise KeyError(f"checkpoint is missing model_ema: {os.environ['NANOPATH_THUNDER_CKPT']}")
+        self.model.load_state_dict(checkpoint["model_ema" if model_weights == "ema" else "model"])
         self.model.eval()
         for param in self.model.parameters():
             param.requires_grad = False

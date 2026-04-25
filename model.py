@@ -25,15 +25,13 @@ class RMSNorm(nn.Module):
 
 
 def apply_rotary_1d(x, positions, inv_freq):
-    valid = (positions >= 0).to(dtype=x.dtype)[:, None, :, None]
-    positions = positions.clamp_min(0).to(dtype=x.dtype)
+    positions = positions.to(dtype=x.dtype)
     angles = positions[:, None, :, None] * inv_freq[None, None, None, :].to(dtype=x.dtype, device=x.device)
     cos = angles.cos()
     sin = angles.sin()
     x_even = x[..., 0::2]
     x_odd = x[..., 1::2]
-    rotated = torch.stack([x_even * cos - x_odd * sin, x_even * sin + x_odd * cos], dim=-1).flatten(-2)
-    return rotated * valid + x * (1.0 - valid)
+    return torch.stack([x_even * cos - x_odd * sin, x_even * sin + x_odd * cos], dim=-1).flatten(-2)
 
 
 def apply_rotary_2d(x, positions, inv_freq):
@@ -98,6 +96,10 @@ class Block(nn.Module):
 
 
 class SIGReg(nn.Module):
+    # Sliced characteristic-function regularizer. The statistic is computed across
+    # the rows of `proj`, so its gradient depends on the size of the batch passed in.
+    # train.py all-gathers across ranks before calling this, which is why
+    # `global_batch_size` is a recipe-level constant rather than a per-GPU knob.
     def __init__(self, knots=17, t_max=5.0, num_slices=1024):
         super().__init__()
         t = torch.linspace(0.0, t_max, knots, dtype=torch.float32)
