@@ -14,11 +14,9 @@ import torch
 import wandb
 
 
-THUNDER_REPO = Path("/admin/home/paul/thunder")
-THUNDER_PYTHON = THUNDER_REPO / ".venv" / "bin" / "python"
-THUNDER_BIN = THUNDER_REPO / ".venv" / "bin" / "thunder"
-THUNDER_MODEL = Path(__file__).resolve().with_name("thunder_adapter.py")
-PRECOMPUTE_EMBEDDING_BATCH_SIZE = 512
+DATA_SPLITS_CACHE = Path("/data/nanopath/cache/data_splits")
+EMBED_BATCH_SIZE = 128
+EMBED_NUM_WORKERS = 4
 SEGMENTATION_EPOCHS = 30
 SEGMENTATION_LR = 1e-3
 SEGMENTATION_WEIGHT_DECAY = 1e-4
@@ -29,8 +27,8 @@ LINEAR_PROBE_LRS = (1e-3, 1e-4, 1e-5)
 LINEAR_PROBE_WEIGHT_DECAY = 1e-4
 LINEAR_PROBE_EPOCHS = 200
 LINEAR_PROBE_BATCH_SIZE = 64
-PATCH_CAMELYON_SUBSET_SEED = 1337
-PATCH_CAMELYON_SUBSET_SIZES = {"train": 3072, "valid": 768}
+PCAM_SUBSET_SEED = 1337
+PCAM_SUBSET_SIZES = {"train": 3072, "val": 768}
 FEWSHOT_SHOTS = [1, 2, 4, 8, 16]
 FEWSHOT_TRIALS = 1000
 FEWSHOT_SEED = 1337
@@ -45,14 +43,6 @@ DATASET_ROOTS = {
     "mhist": Path("/block/eva-data/mhist"),
     "pcam": Path("/block/eva-data/patch_camelyon"),
     "pannuke": Path("/block/thunder-data/pannuke"),
-}
-THUNDER_DATASET_NAMES = {
-    "bach": "bach",
-    "bracs": "bracs",
-    "break_his": "break_his",
-    "mhist": "mhist",
-    "pcam": "patch_camelyon",
-    "pannuke": "pannuke",
 }
 
 
@@ -73,7 +63,6 @@ def probe_paths(output_dir):
         "state_path": probe_dir / "state.json",
         "lock_path": probe_dir / "state.lock",
         "results_dir": probe_dir / "results",
-        "scratch_root": Path("/tmp/nanopath-thunder") / output_dir.name,
     }
 
 
@@ -87,7 +76,7 @@ def write_probe_state(state):
 
 def prepare_probe_state(cfg, output_dir):
     paths = probe_paths(output_dir)
-    for path in [paths["probe_dir"], paths["results_dir"], paths["scratch_root"]]:
+    for path in [paths["probe_dir"], paths["results_dir"]]:
         path.mkdir(parents=True, exist_ok=True)
     classification = [str(x) for x in cfg["probe"]["datasets"]]
     segmentation = [str(x) for x in cfg["probe"].get("segmentation_datasets", [])]
@@ -103,22 +92,22 @@ def prepare_probe_state(cfg, output_dir):
     if paths["state_path"].exists():
         previous = json.loads(paths["state_path"].read_text())
         if previous["version"] != 7:
-            raise ValueError(f"unsupported Thunder probe state version: {previous['version']}")
+            raise ValueError(f"unsupported probe state version: {previous['version']}")
         if previous["family"] != data["family"]:
-            raise ValueError(f"Thunder probe family changed from {previous['family']} to {data['family']}")
+            raise ValueError(f"probe family changed from {previous['family']} to {data['family']}")
         if previous["classification_datasets"] != data["classification_datasets"]:
-            raise ValueError(f"Thunder classification datasets changed from {previous['classification_datasets']} to {data['classification_datasets']}")
+            raise ValueError(f"classification datasets changed from {previous['classification_datasets']} to {data['classification_datasets']}")
         if previous["segmentation_datasets"] != data["segmentation_datasets"]:
-            raise ValueError(f"Thunder segmentation datasets changed from {previous['segmentation_datasets']} to {data['segmentation_datasets']}")
+            raise ValueError(f"segmentation datasets changed from {previous['segmentation_datasets']} to {data['segmentation_datasets']}")
         if previous["count"] != data["count"]:
-            raise ValueError(f"Thunder probe count changed from {previous['count']} to {data['count']}")
+            raise ValueError(f"probe count changed from {previous['count']} to {data['count']}")
         data["logged_results"] = previous["logged_results"]
     for dataset in classification:
         if dataset not in CLASSIFICATION_DATASETS:
-            raise ValueError(f"unsupported Thunder classification dataset: {dataset}")
+            raise ValueError(f"unsupported classification dataset: {dataset}")
     for dataset in segmentation:
         if dataset not in SEGMENTATION_DATASETS:
-            raise ValueError(f"unsupported Thunder segmentation dataset: {dataset}")
+            raise ValueError(f"unsupported segmentation dataset: {dataset}")
     state = {"paths": paths, "data": data}
     write_probe_state(state)
     return state
@@ -149,10 +138,10 @@ def queue_probe_job(cfg, state, checkpoint_payload, checkpoint_step, target_flop
         request = checkpoint_request(state, checkpoint_step, target_flops, target_fraction)
         torch.save(checkpoint_payload, request["checkpoint_path"])
         if state["data"]["active"] is not None:
-            raise RuntimeError(f"Thunder probe already active for step {state['data']['active']['train_step']}")
+            raise RuntimeError(f"probe already active for step {state['data']['active']['train_step']}")
         for dataset in request["classification_datasets"] + request["segmentation_datasets"]:
             if not DATASET_ROOTS[dataset].exists():
-                raise FileNotFoundError(f"missing Thunder dataset root for {dataset}: {DATASET_ROOTS[dataset]}")
+                raise FileNotFoundError(f"missing dataset root for {dataset}: {DATASET_ROOTS[dataset]}")
         slurm_id = os.environ.get("SLURM_JOB_ID", f"local-{os.getpid()}")
         request["job_id"] = f"{slurm_id}-{request['checkpoint_step']:07d}"
         request["submitted_at_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -160,11 +149,11 @@ def queue_probe_job(cfg, state, checkpoint_payload, checkpoint_step, target_flop
         state["data"]["active"] = request
         write_probe_state(state)
     torch.cuda.empty_cache()
-    runtime_dir = state["paths"]["scratch_root"] / f"step_{checkpoint_step:07d}-{request['job_id']}"
-    runtime_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env.pop("WANDB_SERVICE", None)
-    env["NANOPATH_THUNDER_RUNTIME_DIR"] = str(runtime_dir)
+    env["WANDB_MODE"] = "disabled"
+    env["WANDB_SILENT"] = "true"
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parent)
     print(
         f"{console_prefix()} Probe  [{checkpoint_step}]  "
         f"start: {request['job_id']}  target_fraction: {target_fraction:.4f}  "
@@ -172,8 +161,7 @@ def queue_probe_job(cfg, state, checkpoint_payload, checkpoint_step, target_flop
         f"segmentation: {','.join(request['segmentation_datasets']) or '-'}",
         flush=True,
     )
-    subprocess.run([str(THUNDER_PYTHON), str(Path(__file__).resolve()), request["request_path"]], env=env, check=True)
-    shutil.rmtree(runtime_dir)
+    subprocess.run([sys.executable, str(Path(__file__).resolve()), request["request_path"]], env=env, check=True)
     print(
         f"{console_prefix()} Probe  [{checkpoint_step}]  "
         f"finished: {request['job_id']}  result: {request['result_path']}",
@@ -182,108 +170,74 @@ def queue_probe_job(cfg, state, checkpoint_payload, checkpoint_step, target_flop
     return state
 
 
-def prepare_patch_camelyon(runtime_dir):
-    import h5py
-    import numpy as np
-    import yaml
+class ClassificationDataset(torch.utils.data.Dataset):
+    # Loads images for the classification probes. For pcam we subsample with a fixed seed
+    # to match Thunder's PATCH_CAMELYON_SUBSET behaviour; the other four datasets use the
+    # cached data_splits JSON (one-time output of `thunder generate-data-splits`).
+    def __init__(self, dataset, split, transform):
+        import h5py
+        import numpy as np
 
-    dst_root = runtime_dir / "datasets" / "patch_camelyon"
-    dst_root.mkdir(parents=True, exist_ok=True)
-    custom_dir = runtime_dir / "custom_datasets"
-    custom_dir.mkdir(parents=True, exist_ok=True)
-    for split_idx, split in enumerate(["train", "valid"]):
-        src_x = DATASET_ROOTS["pcam"] / f"camelyonpatch_level_2_split_{split}_x.h5"
-        src_y = DATASET_ROOTS["pcam"] / f"camelyonpatch_level_2_split_{split}_y.h5"
-        dst_x = dst_root / src_x.name
-        dst_y = dst_root / src_y.name
-        with h5py.File(src_x, "r") as fx, h5py.File(src_y, "r") as fy:
-            x_key = next(iter(fx.keys()))
-            y_key = next(iter(fy.keys()))
-            total = fx[x_key].shape[0]
-            take = min(total, int(PATCH_CAMELYON_SUBSET_SIZES[split]))
-            indices = np.sort(np.random.default_rng(PATCH_CAMELYON_SUBSET_SEED + split_idx).choice(total, size=take, replace=False))
-            with h5py.File(dst_x, "w") as gx, h5py.File(dst_y, "w") as gy:
-                gx.create_dataset(x_key, data=fx[x_key][indices])
-                gy.create_dataset(y_key, data=fy[y_key][indices])
-    data_splits = {
-        "train": {
-            "images": "camelyonpatch_level_2_split_train_x.h5",
-            "labels": "camelyonpatch_level_2_split_train_y.h5",
-        },
-        "val": {
-            "images": "camelyonpatch_level_2_split_valid_x.h5",
-            "labels": "camelyonpatch_level_2_split_valid_y.h5",
-        },
-    }
-    json_path = custom_dir / "patch_camelyon.json"
-    yaml_path = custom_dir / "patch_camelyon.yaml"
-    json_path.write_text(json.dumps(data_splits, indent=2) + "\n")
-    yaml_path.write_text(
-        yaml.safe_dump(
-            {
-                "dataset_name": "patch_camelyon",
-                "nb_classes": 2,
-                "base_data_folder": str(runtime_dir / "datasets"),
-                "compatible_tasks": [
-                    "knn",
-                    "linear_probing",
-                    "pre_computing_embeddings",
-                    "simple_shot",
-                ],
-                "nb_train_samples": PATCH_CAMELYON_SUBSET_SIZES["train"],
-                "nb_val_samples": PATCH_CAMELYON_SUBSET_SIZES["valid"],
-                "nb_test_samples": 0,
-                "image_sizes": [[96, 96]],
-                "mpp": 1.0,
-                "cancer_type": "breast",
-                "h5_format": True,
-                "data_splits": str(json_path),
-                "classes": ["no-metastatic-tissue", "metastatic-tissue"],
-                "class_to_id": {"no-metastatic-tissue": 0, "metastatic-tissue": 1},
-                "id_to_class": {0: "no-metastatic-tissue", 1: "metastatic-tissue"},
-                "id_to_classname": {
-                    0: "lymph node",
-                    1: "lymph node containing metastatic tumor tissue",
-                },
-            },
-            sort_keys=False,
-        )
+        self.transform = transform
+        self.dataset = dataset
+        if dataset == "pcam":
+            pcam_split = "train" if split == "train" else "valid"
+            with h5py.File(DATASET_ROOTS["pcam"] / f"camelyonpatch_level_2_split_{pcam_split}_x.h5", "r") as fx:
+                key_x = next(iter(fx.keys()))
+                idx = np.sort(np.random.default_rng(PCAM_SUBSET_SEED + (0 if split == "train" else 1)).choice(fx[key_x].shape[0], size=PCAM_SUBSET_SIZES[split], replace=False))
+                self.images = np.array(fx[key_x][idx])
+            with h5py.File(DATASET_ROOTS["pcam"] / f"camelyonpatch_level_2_split_{pcam_split}_y.h5", "r") as fy:
+                self.labels = [int(v) for v in np.array(fy[next(iter(fy.keys()))][idx]).reshape(-1)]
+        else:
+            splits = json.loads((DATA_SPLITS_CACHE / f"{dataset}.json").read_text())[split]
+            self.images = splits["images"]
+            self.labels = [int(v) for v in splits["labels"]]
+            self.root = DATASET_ROOTS[dataset]
+
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, idx):
+        from PIL import Image
+        if self.dataset == "pcam":
+            img = Image.fromarray(self.images[idx])
+        else:
+            img = Image.open(self.root / self.images[idx]).convert("RGB")
+        return self.transform(img), self.labels[idx]
+
+
+def embed_classification_dataset(model, mean, std, dataset, split, device, transform):
+    import numpy as np
+
+    loader = torch.utils.data.DataLoader(
+        ClassificationDataset(dataset, split, transform),
+        batch_size=EMBED_BATCH_SIZE,
+        shuffle=False,
+        num_workers=EMBED_NUM_WORKERS,
+        pin_memory=True,
     )
-    return f"custom:{yaml_path}"
+    embs, labels = [], []
+    autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    with torch.no_grad():
+        for x, y in loader:
+            x = x.to(device, non_blocking=True)
+            with autocast:
+                e = model.probe_features((x - mean) / std)
+            embs.append(e.float().cpu().numpy())
+            labels.append(y.numpy())
+    return np.concatenate(embs, axis=0).astype(np.float32), np.concatenate(labels, axis=0).astype(np.int64)
 
 
-def load_pannuke_split(split):
-    import numpy as np
-
-    root = DATASET_ROOTS["pannuke"]
-    images = np.load(root / PANNUKE_FOLDS[split].format(kind="images"), mmap_mode="r")
-    masks = np.load(root / PANNUKE_FOLDS[split].format(kind="masks"), mmap_mode="r")
-    labels = np.zeros((masks.shape[0], 256, 256), dtype=np.int64)
-    for j in range(5):
-        layer = ((j + 1) * np.clip(masks[..., j], 0, 1)).astype(np.int64)
-        labels = np.where(layer != 0, layer, labels)
-    return images, labels
-
-
-def inline_pannuke_jaccard(cfg, model_state):
-    # Reuse the just-pretrained backbone (already-loaded EMA state). Precompute spatial
-    # token features once, then train Thunder's MaskTransformer with multiclass_dice_loss
-    # for SEGMENTATION_EPOCHS, select best epoch by val loss, and report per-image macro
-    # jaccard with Thunder's bg-only weighting (no_bg_only_weight_test=16).
+def inline_pannuke_jaccard(model, mean, std, device):
+    # Precompute spatial token features once with the supplied backbone, then train
+    # MaskTransformer with multiclass_dice_loss for SEGMENTATION_EPOCHS, select best
+    # epoch by val loss, and report per-image macro jaccard with Thunder's bg-only
+    # weighting (no_bg_only_weight_test=16).
     import numpy as np
     from sklearn.metrics import jaccard_score
-    from thunder.models.task_specific_models import MaskTransformer
-    from thunder.utils.dice_loss import multiclass_dice_loss
-    from model import NanoPathFM
+    from thunder_adapter import MaskTransformer, multiclass_dice_loss
 
     started_at = time.monotonic()
-    device = torch.device("cuda")
-    model = NanoPathFM(cfg).to(device).eval()
-    model.load_state_dict(model_state)
-    for param in model.parameters():
-        param.requires_grad = False
-    mean = torch.tensor(cfg["data"]["mean"], device=device).view(1, 3, 1, 1)
-    std = torch.tensor(cfg["data"]["std"], device=device).view(1, 3, 1, 1)
 
     @torch.no_grad()
     def extract(images_np):
@@ -295,16 +249,25 @@ def inline_pannuke_jaccard(cfg, model_state):
                 feats.append(model.encode_image((batch - mean) / std)[:, model.registers :].float().cpu())
         return torch.cat(feats, dim=0)
 
-    train_images, train_labels = load_pannuke_split("train")
-    val_images, val_labels = load_pannuke_split("val")
+    pannuke_root = DATASET_ROOTS["pannuke"]
+
+    def derive_labels(masks):
+        labels = np.zeros((masks.shape[0], 256, 256), dtype=np.int64)
+        for j in range(5):
+            layer = ((j + 1) * np.clip(masks[..., j], 0, 1)).astype(np.int64)
+            labels = np.where(layer != 0, layer, labels)
+        return labels
+
+    train_images = np.load(pannuke_root / PANNUKE_FOLDS["train"].format(kind="images"), mmap_mode="r")
+    val_images = np.load(pannuke_root / PANNUKE_FOLDS["val"].format(kind="images"), mmap_mode="r")
+    train_labels = derive_labels(np.load(pannuke_root / PANNUKE_FOLDS["train"].format(kind="masks"), mmap_mode="r"))
+    val_labels = derive_labels(np.load(pannuke_root / PANNUKE_FOLDS["val"].format(kind="masks"), mmap_mode="r"))
     train_feats = extract(train_images)
     val_feats = extract(val_images)
     d_encoder = train_feats.shape[-1]
-    del model
-    torch.cuda.empty_cache()
     train_labels_t = torch.from_numpy(train_labels)
     val_labels_t = torch.from_numpy(val_labels)
-    head = MaskTransformer(n_cls=PANNUKE_NUM_CLASSES, d_encoder=d_encoder, n_layers=2, n_heads=8, d_model=768, d_ff=3072, drop_path_rate=0.0, dropout=0.0).to(device)
+    head = MaskTransformer(n_cls=PANNUKE_NUM_CLASSES, d_encoder=d_encoder, n_layers=2, n_heads=8, d_model=768, d_ff=3072).to(device)
     opt = torch.optim.Adam(head.parameters(), lr=SEGMENTATION_LR, weight_decay=SEGMENTATION_WEIGHT_DECAY)
     n = len(train_feats)
     best_val_loss = float("inf")
@@ -352,17 +315,14 @@ def inline_pannuke_jaccard(cfg, model_state):
     return float(np.average(per_image_j, weights=weights)), time.monotonic() - started_at
 
 
-def _normalize_rows(x):
-    import numpy as np
-    return x / np.linalg.norm(x, axis=1, keepdims=True)
-
-
 def inline_knn_val_f1(train_embs, train_labels, val_embs, val_labels, k_vals):
     import numpy as np
     from sklearn.metrics import f1_score
 
-    train_n = _normalize_rows(train_embs.astype(np.float32, copy=False))
-    val_n = _normalize_rows(val_embs.astype(np.float32, copy=False))
+    train_f = train_embs.astype(np.float32, copy=False)
+    val_f = val_embs.astype(np.float32, copy=False)
+    train_n = train_f / np.linalg.norm(train_f, axis=1, keepdims=True)
+    val_n = val_f / np.linalg.norm(val_f, axis=1, keepdims=True)
     preds_per_k = {k: [] for k in k_vals}
     for start in range(0, len(val_n), KNN_CHUNK_SIZE):
         chunk = val_n[start : start + KNN_CHUNK_SIZE]
@@ -403,8 +363,9 @@ def inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels, shots,
             mean = support.mean(axis=0)
             support_centered = support - mean
             cls_embs = np.stack([support_centered[support_lbl_arr == l].mean(axis=0) for l in sorted_labels])
-            cls_n = _normalize_rows(cls_embs)
-            val_n = _normalize_rows(val_embs - mean)
+            cls_n = cls_embs / np.linalg.norm(cls_embs, axis=1, keepdims=True)
+            val_centered = val_embs - mean
+            val_n = val_centered / np.linalg.norm(val_centered, axis=1, keepdims=True)
             sim = val_n @ cls_n.T
             trial_preds[trial] = np.asarray(sorted_labels)[sim.argmax(axis=1)]
         final = np.array([np.bincount(trial_preds[:, i]).argmax() for i in range(trial_preds.shape[1])])
@@ -439,21 +400,10 @@ def inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels):
     return best_f1
 
 
-def load_precomputed_embeddings(runtime_dir, thunder_name, model_name):
-    import h5py
-    import numpy as np
-
-    embs_dir = runtime_dir / "embeddings" / thunder_name / model_name
-    out = {}
-    for split in ("train", "val"):
-        with h5py.File(embs_dir / split / "embeddings.h5", "r") as f_e, h5py.File(embs_dir / split / "labels.h5", "r") as f_l:
-            keys = sorted(f_e.keys(), key=int)
-            out[f"{split}_embs"] = np.stack([np.asarray(f_e[k]) for k in keys]).astype(np.float32)
-            out[f"{split}_labels"] = np.asarray([int(np.asarray(f_l[k])) for k in keys], dtype=np.int64)
-    return out
-
-
 def run_probe_job(request_path):
+    from torchvision import transforms
+    from model import NanoPathFM
+
     probe_started_at = time.monotonic()
     request = json.loads(Path(request_path).read_text())
     classification = list(request["classification_datasets"])
@@ -463,95 +413,28 @@ def run_probe_job(request_path):
         f"start: {request['job_id']}  checkpoint: {request['checkpoint_path']}",
         flush=True,
     )
-    runtime_dir = Path(os.environ["NANOPATH_THUNDER_RUNTIME_DIR"])
-    datasets_dir = runtime_dir / "datasets"
-    datasets_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = torch.load(request["checkpoint_path"], map_location="cpu", weights_only=False)
-    checkpoint_cfg = checkpoint["config"]
-    seg_model_state = checkpoint["model_ema" if str(checkpoint_cfg["probe"]["model_weights"]) == "ema" else "model"]
+    cfg = checkpoint["config"]
+    state_key = "model_ema" if str(cfg["probe"]["model_weights"]) == "ema" else "model"
+    model_state = checkpoint[state_key]
     del checkpoint
-    env = os.environ.copy()
-    env.update(
-        {
-            "THUNDER_BASE_DATA_FOLDER": str(runtime_dir),
-            "NANOPATH_THUNDER_CKPT": request["checkpoint_path"],
-            "NANOPATH_THUNDER_MODEL_NAME": request["model_name"],
-            "PYTHONPATH": str(Path(__file__).resolve().parent),
-            "THUNDER_WANDB_MODE": "disabled",
-            "WANDB_MODE": "disabled",
-            "WANDB_SILENT": "true",
-        }
-    )
-    os.environ.update(env)
+    device = torch.device("cuda")
+    model = NanoPathFM(cfg).to(device).eval()
+    model.load_state_dict(model_state)
+    for param in model.parameters():
+        param.requires_grad = False
+    mean = torch.tensor(cfg["data"]["mean"], device=device).view(1, 3, 1, 1)
+    std = torch.tensor(cfg["data"]["std"], device=device).view(1, 3, 1, 1)
+    transform = transforms.Compose([transforms.Resize(256, antialias=True), transforms.CenterCrop(224), transforms.ToTensor()])
 
-    # Set up classification datasets (symlink or custom yaml) and collect builtin names
-    classification_targets = {}
-    classification_builtin = []
-    for dataset in classification:
-        thunder_name = THUNDER_DATASET_NAMES[dataset]
-        if dataset == "pcam":
-            classification_targets[dataset] = prepare_patch_camelyon(runtime_dir)
-        else:
-            (datasets_dir / thunder_name).symlink_to(DATASET_ROOTS[dataset])
-            classification_builtin.append(thunder_name)
-            classification_targets[dataset] = thunder_name
-
-    # Generate Thunder data splits for the classification datasets (pannuke is loaded inline below).
-    if len(classification_builtin) > 0:
-        print(
-            f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
-            f"generate_splits: {','.join(classification_builtin)}",
-            flush=True,
-        )
-        subprocess.run([str(THUNDER_BIN), "generate-data-splits", *classification_builtin], cwd=THUNDER_REPO, env=env, check=True)
-
-    # Launch classification precompute subprocesses; while they run, do inline pannuke segmentation on the same GPU.
-    precompute_procs = []
-    for dataset in classification:
-        args = [str(THUNDER_BIN), "benchmark", f"custom:{THUNDER_MODEL}", classification_targets[dataset], "pre_computing_embeddings"]
-        if dataset != "bracs":
-            args.extend(["--task.pre_comp_emb_batch_size", str(PRECOMPUTE_EMBEDDING_BATCH_SIZE)])
-        precompute_procs.append((dataset, subprocess.Popen(args, cwd=THUNDER_REPO, env=env)))
-    print(
-        f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
-        f"precompute_start: {','.join(classification) or '-'}",
-        flush=True,
-    )
-    seg_jaccards = {}
-    for dataset in segmentation:
-        if dataset != "pannuke":
-            raise NotImplementedError(f"inline segmentation not implemented for {dataset}")
-        print(
-            f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
-            f"inline_seg_start: {dataset}",
-            flush=True,
-        )
-        jaccard, seg_wall = inline_pannuke_jaccard(checkpoint_cfg, seg_model_state)
-        seg_jaccards[dataset] = jaccard
-        print(
-            f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
-            f"inline_seg_done: {dataset}  jaccard={jaccard:.4f}  wall={seg_wall:.2f}s",
-            flush=True,
-        )
-    for dataset, proc in precompute_procs:
-        if proc.wait() != 0:
-            raise RuntimeError(f"Thunder embedding precompute failed for {dataset}")
-
-    # Once precompute subprocesses finish, run inline KNN + SimpleShot + linear probe on the embedding files.
     inline_metrics = {}
     for dataset in classification:
-        thunder_name = THUNDER_DATASET_NAMES[dataset]
-        loaded = load_precomputed_embeddings(runtime_dir, thunder_name, request["model_name"])
-        knn_best_k, knn_best_f1, knn_all = inline_knn_val_f1(
-            loaded["train_embs"], loaded["train_labels"], loaded["val_embs"], loaded["val_labels"], KNN_K_VALS,
-        )
-        fewshot_per_shot = inline_fewshot_val_f1(
-            loaded["train_embs"], loaded["train_labels"], loaded["val_embs"], loaded["val_labels"],
-            FEWSHOT_SHOTS, FEWSHOT_TRIALS, FEWSHOT_SEED + hash(dataset) % (2**31),
-        )
-        linear_f1 = inline_linear_val_f1(
-            loaded["train_embs"], loaded["train_labels"], loaded["val_embs"], loaded["val_labels"],
-        )
+        embed_started = time.monotonic()
+        train_embs, train_labels = embed_classification_dataset(model, mean, std, dataset, "train", device, transform)
+        val_embs, val_labels = embed_classification_dataset(model, mean, std, dataset, "val", device, transform)
+        knn_best_k, knn_best_f1, knn_all = inline_knn_val_f1(train_embs, train_labels, val_embs, val_labels, KNN_K_VALS)
+        fewshot_per_shot = inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels, FEWSHOT_SHOTS, FEWSHOT_TRIALS, FEWSHOT_SEED + CLASSIFICATION_DATASETS.index(dataset))
+        linear_f1 = inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels)
         inline_metrics[dataset] = {
             "linear_val_f1": linear_f1,
             "knn_best_k": knn_best_k,
@@ -563,7 +446,18 @@ def run_probe_job(request_path):
         print(
             f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
             f"inline_done: {dataset}  linear_f1={linear_f1:.4f}  knn_f1={knn_best_f1:.4f}  "
-            f"fewshot_f1={inline_metrics[dataset]['fewshot_val_f1']:.4f}",
+            f"fewshot_f1={inline_metrics[dataset]['fewshot_val_f1']:.4f}  wall={time.monotonic()-embed_started:.2f}s",
+            flush=True,
+        )
+
+    seg_jaccards = {}
+    for dataset in segmentation:
+        print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_seg_start: {dataset}", flush=True)
+        jaccard, seg_wall = inline_pannuke_jaccard(model, mean, std, device)
+        seg_jaccards[dataset] = jaccard
+        print(
+            f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
+            f"inline_seg_done: {dataset}  jaccard={jaccard:.4f}  wall={seg_wall:.2f}s",
             flush=True,
         )
 
@@ -604,7 +498,7 @@ def run_probe_job(request_path):
             {
                 "created_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "wall_seconds": time.monotonic() - probe_started_at,
-                "runner_id": request["job_id"],
+                "job_id": request["job_id"],
                 "checkpoint_step": request["checkpoint_step"],
                 "train_step": request["train_step"],
                 "target_flops": request["target_flops"],
@@ -652,7 +546,7 @@ def collect_probe_results(state, wandb_run, metrics_path, output_dir, best_val_m
             if result_path_str in logged:
                 continue
             event_payload = {
-                "event": "thunder_probe",
+                "event": "probe",
                 "step": result["train_step"],
                 "status": result["status"],
                 "target_flops": result["target_flops"],
@@ -756,8 +650,8 @@ def collect_finished_probe_results(output_dir):
     state["data"] = json.loads(state["paths"]["state_path"].read_text())
     summary["best_val_mean_probe_score"] = None if not math.isfinite(best_val_mean_probe_score) else best_val_mean_probe_score
     summary["best_val_mean_probe_score_step"] = best_val_mean_probe_score_step
-    summary["thunder_probe_active_job_id"] = None if state["data"]["active"] is None else state["data"]["active"]["job_id"]
-    summary["thunder_probe_active_step"] = None if state["data"]["active"] is None else state["data"]["active"]["train_step"]
+    summary["probe_active_job_id"] = None if state["data"]["active"] is None else state["data"]["active"]["job_id"]
+    summary["probe_active_step"] = None if state["data"]["active"] is None else state["data"]["active"]["train_step"]
     summary.update(best_probe_scores)
     summary.update(completed_probe_summary(output_dir))
     summary_path.write_text(json.dumps(summary, indent=2) + "\n")

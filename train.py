@@ -740,8 +740,8 @@ def main():
             "probe_model_weights": probe_model_weights,
             "probe_target_flops": probe_targets,
             "probe_target_fractions": [None if max_train_flops == 0 else target / max_train_flops for target in probe_targets],
-            "thunder_probe_active_job_id": None if active_probe is None else active_probe["job_id"],
-            "thunder_probe_active_step": None if active_probe is None else active_probe["train_step"],
+            "probe_active_job_id": None if active_probe is None else active_probe["job_id"],
+            "probe_active_step": None if active_probe is None else active_probe["train_step"],
             **best_probe_scores,
             **({} if probe_state is None else completed_probe_summary(output_dir)),
         }
