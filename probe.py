@@ -401,9 +401,6 @@ def load_precomputed_embeddings(runtime_dir, thunder_name, model_name):
 
 
 def run_probe_job(request_path):
-    from thunder import benchmark as thunder_benchmark
-    from thunder_adapter import NanoPathThunderModel
-
     probe_started_at = time.monotonic()
     request = json.loads(Path(request_path).read_text())
     classification = list(request["classification_datasets"])
@@ -500,19 +497,21 @@ def run_probe_job(request_path):
         flush=True,
     )
 
-    # Phase A: precompute classification embeddings on GPU (contends with seg subprocess).
-    precompute_model = NanoPathThunderModel()
+    # Phase A: precompute classification embeddings as parallel subprocesses sharing the GPU with seg.
+    precompute_procs = []
     for dataset in classification:
-        thunder_benchmark(
-            precompute_model,
-            classification_targets[dataset],
-            "pre_computing_embeddings",
-            **({} if dataset == "bracs" else {"task.pre_comp_emb_batch_size": PRECOMPUTE_EMBEDDING_BATCH_SIZE}),
-        )
-        wandb.finish()
-    del precompute_model
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+        args = [str(THUNDER_BIN), "benchmark", f"custom:{THUNDER_MODEL}", classification_targets[dataset], "pre_computing_embeddings"]
+        if dataset != "bracs":
+            args.extend(["--task.pre_comp_emb_batch_size", str(PRECOMPUTE_EMBEDDING_BATCH_SIZE)])
+        precompute_procs.append((dataset, subprocess.Popen(args, cwd=THUNDER_REPO, env=env)))
+    print(
+        f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
+        f"precompute_start: {','.join(classification) or '-'}",
+        flush=True,
+    )
+    for dataset, proc in precompute_procs:
+        if proc.wait() != 0:
+            raise RuntimeError(f"Thunder embedding precompute failed for {dataset}")
 
     # Phase B: inline KNN + SimpleShot (CPU) + linear probe (GPU, light) on precomputed embeddings.
     inline_metrics = {}
