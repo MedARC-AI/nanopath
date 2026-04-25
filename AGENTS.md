@@ -35,4 +35,4 @@ Cluster and storage:
 
 Workflow:
 - Do not stop after the first small fix on a difficult ask. Continue through the adjacent tasks needed to make the change credible, such as config updates, probes, throughput checks, README notes, or cleanup.
-- Use parallel agents, git worktrees, or independent jobs when they materially speed up broad exploration or experiments, but keep changes coordinated and easy to review.
+- Use parallel agents, git worktrees, or independent jobs when they materially speed up exploration or experiments, but keep changes easy to review. Make sure to kill hanging or no longer useful sub-agents.

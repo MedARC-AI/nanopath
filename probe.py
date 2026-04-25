@@ -23,7 +23,8 @@ SEGMENTATION_EPOCHS = 30
 SEGMENTATION_LR = 1e-3
 SEGMENTATION_WEIGHT_DECAY = 1e-4
 SEGMENTATION_BATCH_SIZE = 64
-SEGMENTATION_NUM_WORKERS = 4
+PANNUKE_NUM_CLASSES = 6
+PANNUKE_FOLDS = {"train": "Fold1/{kind}/fold1/{kind}.npy", "val": "Fold2/{kind}/fold2/{kind}.npy"}
 LINEAR_PROBE_LRS = (1e-3, 1e-4, 1e-5)
 LINEAR_PROBE_WEIGHT_DECAY = 1e-4
 LINEAR_PROBE_EPOCHS = 200
@@ -76,12 +77,8 @@ def probe_paths(output_dir):
     }
 
 
-def probe_datasets(cfg):
-    return list(cfg["probe"]["datasets"]) + list(cfg["probe"].get("segmentation_datasets", []))
-
-
 def probe_enabled(cfg):
-    return bool(cfg["probe"]["enabled"]) and len(probe_datasets(cfg)) > 0
+    return bool(cfg["probe"]["enabled"]) and (len(cfg["probe"]["datasets"]) + len(cfg["probe"].get("segmentation_datasets", []))) > 0
 
 
 def write_probe_state(state):
@@ -146,34 +143,28 @@ def checkpoint_request(state, checkpoint_step, target_flops, target_fraction):
 
 
 def queue_probe_job(cfg, state, checkpoint_payload, checkpoint_step, target_flops, target_fraction):
-    if not probe_enabled(cfg):
-        return state
     with state["paths"]["lock_path"].open("w") as lock_handle:
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
         state["data"] = json.loads(state["paths"]["state_path"].read_text())
         request = checkpoint_request(state, checkpoint_step, target_flops, target_fraction)
-        if not Path(request["checkpoint_path"]).exists():
-            torch.save(checkpoint_payload, request["checkpoint_path"])
+        torch.save(checkpoint_payload, request["checkpoint_path"])
         if state["data"]["active"] is not None:
             raise RuntimeError(f"Thunder probe already active for step {state['data']['active']['train_step']}")
         for dataset in request["classification_datasets"] + request["segmentation_datasets"]:
             if not DATASET_ROOTS[dataset].exists():
                 raise FileNotFoundError(f"missing Thunder dataset root for {dataset}: {DATASET_ROOTS[dataset]}")
-        if "SLURM_JOB_ID" in os.environ:
-            request["job_id"] = f"{os.environ['SLURM_JOB_ID']}-{request['checkpoint_step']:07d}"
-        else:
-            request["job_id"] = f"local-{os.getpid()}-{request['checkpoint_step']:07d}"
+        slurm_id = os.environ.get("SLURM_JOB_ID", f"local-{os.getpid()}")
+        request["job_id"] = f"{slurm_id}-{request['checkpoint_step']:07d}"
         request["submitted_at_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         Path(request["request_path"]).write_text(json.dumps(request, indent=2) + "\n")
         state["data"]["active"] = request
         write_probe_state(state)
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    torch.cuda.empty_cache()
     runtime_dir = state["paths"]["scratch_root"] / f"step_{checkpoint_step:07d}-{request['job_id']}"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env.pop("WANDB_SERVICE", None)
     env["NANOPATH_THUNDER_RUNTIME_DIR"] = str(runtime_dir)
-    runtime_dir.mkdir(parents=True, exist_ok=True)
     print(
         f"{console_prefix()} Probe  [{checkpoint_step}]  "
         f"start: {request['job_id']}  target_fraction: {target_fraction:.4f}  "
@@ -181,22 +172,13 @@ def queue_probe_job(cfg, state, checkpoint_payload, checkpoint_step, target_flop
         f"segmentation: {','.join(request['segmentation_datasets']) or '-'}",
         flush=True,
     )
-    try:
-        subprocess.run([str(THUNDER_PYTHON), str(Path(__file__).resolve()), request["request_path"]], env=env, check=True)
-        print(
-            f"{console_prefix()} Probe  [{checkpoint_step}]  "
-            f"finished: {request['job_id']}  result: {request['result_path']}",
-            flush=True,
-        )
-    finally:
-        with state["paths"]["lock_path"].open("w") as lock_handle:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-            state["data"] = json.loads(state["paths"]["state_path"].read_text())
-            active = state["data"]["active"]
-            if active is not None and str(active["job_id"]) == str(request["job_id"]):
-                state["data"]["active"] = None
-                write_probe_state(state)
-        shutil.rmtree(runtime_dir)
+    subprocess.run([str(THUNDER_PYTHON), str(Path(__file__).resolve()), request["request_path"]], env=env, check=True)
+    shutil.rmtree(runtime_dir)
+    print(
+        f"{console_prefix()} Probe  [{checkpoint_step}]  "
+        f"finished: {request['job_id']}  result: {request['result_path']}",
+        flush=True,
+    )
     return state
 
 
@@ -270,33 +252,104 @@ def prepare_patch_camelyon(runtime_dir):
     return f"custom:{yaml_path}"
 
 
-def prepare_segmentation_override(thunder_name, runtime_dir):
-    """Write a custom dataset yaml that points test=val so Thunder's eval reports val metrics."""
-    import yaml
+def load_pannuke_split(split):
+    import numpy as np
 
-    splits_src = runtime_dir / "datasets" / "data_splits" / f"{thunder_name}.json"
-    if not splits_src.exists():
-        raise FileNotFoundError(f"missing Thunder data splits for {thunder_name}: {splits_src}")
-    splits = json.loads(splits_src.read_text())
-    splits["test"] = splits["val"]
-    custom_dir = runtime_dir / "custom_datasets"
-    custom_dir.mkdir(parents=True, exist_ok=True)
-    json_path = custom_dir / f"{thunder_name}_valastest.json"
-    json_path.write_text(json.dumps(splits) + "\n")
-    dataset_cfg = {
-        "dataset_name": thunder_name,
-        "nb_classes": 6,
-        "base_data_folder": str(runtime_dir / "datasets"),
-        "compatible_tasks": ["segmentation"],
-        "nb_train_samples": len(splits["train"]["images"]) if isinstance(splits["train"]["images"], list) else 0,
-        "nb_val_samples": len(splits["val"]["images"]) if isinstance(splits["val"]["images"], list) else 0,
-        "nb_test_samples": len(splits["test"]["images"]) if isinstance(splits["test"]["images"], list) else 0,
-        "data_splits": str(json_path),
-        "classes": ["0", "1", "2", "3", "4", "5"],
-    }
-    yaml_path = custom_dir / f"{thunder_name}.yaml"
-    yaml_path.write_text(yaml.safe_dump(dataset_cfg, sort_keys=False))
-    return f"custom:{yaml_path}"
+    root = DATASET_ROOTS["pannuke"]
+    images = np.load(root / PANNUKE_FOLDS[split].format(kind="images"), mmap_mode="r")
+    masks = np.load(root / PANNUKE_FOLDS[split].format(kind="masks"), mmap_mode="r")
+    labels = np.zeros((masks.shape[0], 256, 256), dtype=np.int64)
+    for j in range(5):
+        layer = ((j + 1) * np.clip(masks[..., j], 0, 1)).astype(np.int64)
+        labels = np.where(layer != 0, layer, labels)
+    return images, labels
+
+
+def inline_pannuke_jaccard(cfg, model_state):
+    # Reuse the just-pretrained backbone (already-loaded EMA state). Precompute spatial
+    # token features once, then train Thunder's MaskTransformer with multiclass_dice_loss
+    # for SEGMENTATION_EPOCHS, select best epoch by val loss, and report per-image macro
+    # jaccard with Thunder's bg-only weighting (no_bg_only_weight_test=16).
+    import numpy as np
+    from sklearn.metrics import jaccard_score
+    from thunder.models.task_specific_models import MaskTransformer
+    from thunder.utils.dice_loss import multiclass_dice_loss
+    from model import NanoPathFM
+
+    started_at = time.monotonic()
+    device = torch.device("cuda")
+    model = NanoPathFM(cfg).to(device).eval()
+    model.load_state_dict(model_state)
+    for param in model.parameters():
+        param.requires_grad = False
+    mean = torch.tensor(cfg["data"]["mean"], device=device).view(1, 3, 1, 1)
+    std = torch.tensor(cfg["data"]["std"], device=device).view(1, 3, 1, 1)
+
+    @torch.no_grad()
+    def extract(images_np):
+        feats = []
+        autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+        for i in range(0, len(images_np), SEGMENTATION_BATCH_SIZE):
+            batch = torch.from_numpy(np.ascontiguousarray(images_np[i : i + SEGMENTATION_BATCH_SIZE, 16:240, 16:240, :])).permute(0, 3, 1, 2).float().to(device) / 255.0
+            with autocast:
+                feats.append(model.encode_image((batch - mean) / std)[:, model.registers :].float().cpu())
+        return torch.cat(feats, dim=0)
+
+    train_images, train_labels = load_pannuke_split("train")
+    val_images, val_labels = load_pannuke_split("val")
+    train_feats = extract(train_images)
+    val_feats = extract(val_images)
+    d_encoder = train_feats.shape[-1]
+    del model
+    torch.cuda.empty_cache()
+    train_labels_t = torch.from_numpy(train_labels)
+    val_labels_t = torch.from_numpy(val_labels)
+    head = MaskTransformer(n_cls=PANNUKE_NUM_CLASSES, d_encoder=d_encoder, n_layers=2, n_heads=8, d_model=768, d_ff=3072, drop_path_rate=0.0, dropout=0.0).to(device)
+    opt = torch.optim.Adam(head.parameters(), lr=SEGMENTATION_LR, weight_decay=SEGMENTATION_WEIGHT_DECAY)
+    n = len(train_feats)
+    best_val_loss = float("inf")
+    best_state = None
+    for _ in range(SEGMENTATION_EPOCHS):
+        head.train()
+        perm = torch.randperm(n)
+        for i in range(0, n, SEGMENTATION_BATCH_SIZE):
+            idx = perm[i : i + SEGMENTATION_BATCH_SIZE]
+            labels = train_labels_t[idx].to(device)
+            logits = torch.nn.functional.interpolate(head(train_feats[idx].to(device)), (256, 256), mode="bilinear")
+            loss = multiclass_dice_loss(logits, labels, torch.ones_like(labels, dtype=torch.bool))
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+        head.eval()
+        val_loss_sum, val_batches = 0.0, 0
+        with torch.no_grad():
+            for i in range(0, len(val_feats), SEGMENTATION_BATCH_SIZE):
+                labels = val_labels_t[i : i + SEGMENTATION_BATCH_SIZE].to(device)
+                logits = torch.nn.functional.interpolate(head(val_feats[i : i + SEGMENTATION_BATCH_SIZE].to(device)), (256, 256), mode="bilinear")
+                val_loss_sum += multiclass_dice_loss(logits, labels, torch.ones_like(labels, dtype=torch.bool)).item()
+                val_batches += 1
+        val_loss = val_loss_sum / max(1, val_batches)
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_state = {k: v.detach().cpu().clone() for k, v in head.state_dict().items()}
+    head.load_state_dict(best_state)
+    head.eval()
+    per_image_j, per_image_bg_only = [], []
+    with torch.no_grad():
+        for i in range(0, len(val_feats), SEGMENTATION_BATCH_SIZE):
+            preds = torch.nn.functional.interpolate(head(val_feats[i : i + SEGMENTATION_BATCH_SIZE].to(device)), (256, 256), mode="bilinear").argmax(dim=1).cpu().numpy()
+            true_chunk = val_labels[i : i + SEGMENTATION_BATCH_SIZE]
+            for k in range(preds.shape[0]):
+                t = true_chunk[k].reshape(-1)
+                p = preds[k].reshape(-1)
+                per_image_j.append(jaccard_score(t, p, average="macro", zero_division=0))
+                per_image_bg_only.append(bool(t.sum() == 0))
+    per_image_j = np.asarray(per_image_j, dtype=np.float64)
+    per_image_bg_only = np.asarray(per_image_bg_only)
+    freq_bg_only = per_image_bg_only.sum() / len(per_image_bg_only)
+    weights = np.ones(len(per_image_j))
+    weights[~per_image_bg_only] *= max(1.0, freq_bg_only * 16.0)
+    return float(np.average(per_image_j, weights=weights)), time.monotonic() - started_at
 
 
 def _normalize_rows(x):
@@ -413,6 +466,10 @@ def run_probe_job(request_path):
     runtime_dir = Path(os.environ["NANOPATH_THUNDER_RUNTIME_DIR"])
     datasets_dir = runtime_dir / "datasets"
     datasets_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint = torch.load(request["checkpoint_path"], map_location="cpu", weights_only=False)
+    checkpoint_cfg = checkpoint["config"]
+    seg_model_state = checkpoint["model_ema" if str(checkpoint_cfg["probe"]["model_weights"]) == "ema" else "model"]
+    del checkpoint
     env = os.environ.copy()
     env.update(
         {
@@ -439,65 +496,16 @@ def run_probe_job(request_path):
             classification_builtin.append(thunder_name)
             classification_targets[dataset] = thunder_name
 
-    # Set up segmentation datasets (symlink under datasets/{thunder_name})
-    segmentation_builtin = []
-    for dataset in segmentation:
-        thunder_name = THUNDER_DATASET_NAMES[dataset]
-        (datasets_dir / thunder_name).symlink_to(DATASET_ROOTS[dataset])
-        segmentation_builtin.append(thunder_name)
-
-    # Generate Thunder data splits for all builtin datasets in one call.
-    if len(classification_builtin) + len(segmentation_builtin) > 0:
-        names = classification_builtin + segmentation_builtin
+    # Generate Thunder data splits for the classification datasets (pannuke is loaded inline below).
+    if len(classification_builtin) > 0:
         print(
             f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
-            f"generate_splits: {','.join(names)}",
+            f"generate_splits: {','.join(classification_builtin)}",
             flush=True,
         )
-        subprocess.run([str(THUNDER_BIN), "generate-data-splits", *names], cwd=THUNDER_REPO, env=env, check=True)
+        subprocess.run([str(THUNDER_BIN), "generate-data-splits", *classification_builtin], cwd=THUNDER_REPO, env=env, check=True)
 
-    # Build segmentation targets (custom yaml with test=val splits override)
-    segmentation_targets = {}
-    for dataset in segmentation:
-        thunder_name = THUNDER_DATASET_NAMES[dataset]
-        segmentation_targets[dataset] = prepare_segmentation_override(thunder_name, runtime_dir)
-
-    # Launch segmentation subprocesses up front so they run in parallel with classification work on the GPU.
-    seg_procs = []
-    for dataset in segmentation:
-        seg_procs.append(
-            (
-                dataset,
-                subprocess.Popen(
-                    [
-                        str(THUNDER_BIN),
-                        "benchmark",
-                        f"custom:{THUNDER_MODEL}",
-                        segmentation_targets[dataset],
-                        "segmentation",
-                        "--adaptation.epochs",
-                        str(SEGMENTATION_EPOCHS),
-                        "--adaptation.lr",
-                        f"[{SEGMENTATION_LR}]",
-                        "--adaptation.weight_decay",
-                        f"[{SEGMENTATION_WEIGHT_DECAY}]",
-                        "--adaptation.batch_size",
-                        str(SEGMENTATION_BATCH_SIZE),
-                        "--adaptation.num_workers",
-                        str(SEGMENTATION_NUM_WORKERS),
-                    ],
-                    cwd=THUNDER_REPO,
-                    env=env,
-                ),
-            )
-        )
-    print(
-        f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
-        f"seg_start: {','.join(segmentation) or '-'}",
-        flush=True,
-    )
-
-    # Phase A: precompute classification embeddings as parallel subprocesses sharing the GPU with seg.
+    # Launch classification precompute subprocesses; while they run, do inline pannuke segmentation on the same GPU.
     precompute_procs = []
     for dataset in classification:
         args = [str(THUNDER_BIN), "benchmark", f"custom:{THUNDER_MODEL}", classification_targets[dataset], "pre_computing_embeddings"]
@@ -509,11 +517,27 @@ def run_probe_job(request_path):
         f"precompute_start: {','.join(classification) or '-'}",
         flush=True,
     )
+    seg_jaccards = {}
+    for dataset in segmentation:
+        if dataset != "pannuke":
+            raise NotImplementedError(f"inline segmentation not implemented for {dataset}")
+        print(
+            f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
+            f"inline_seg_start: {dataset}",
+            flush=True,
+        )
+        jaccard, seg_wall = inline_pannuke_jaccard(checkpoint_cfg, seg_model_state)
+        seg_jaccards[dataset] = jaccard
+        print(
+            f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
+            f"inline_seg_done: {dataset}  jaccard={jaccard:.4f}  wall={seg_wall:.2f}s",
+            flush=True,
+        )
     for dataset, proc in precompute_procs:
         if proc.wait() != 0:
             raise RuntimeError(f"Thunder embedding precompute failed for {dataset}")
 
-    # Phase B: inline KNN + SimpleShot (CPU) + linear probe (GPU, light) on precomputed embeddings.
+    # Once precompute subprocesses finish, run inline KNN + SimpleShot + linear probe on the embedding files.
     inline_metrics = {}
     for dataset in classification:
         thunder_name = THUNDER_DATASET_NAMES[dataset]
@@ -543,11 +567,7 @@ def run_probe_job(request_path):
             flush=True,
         )
 
-    for dataset, proc in seg_procs:
-        if proc.wait() != 0:
-            raise RuntimeError(f"Thunder segmentation failed for {dataset}")
-
-    # Phase D: collect metrics
+    # Aggregate per-dataset metrics into the result file.
     metrics = {}
     results = {}
     for dataset in classification:
@@ -556,12 +576,8 @@ def run_probe_job(request_path):
         metrics[f"probe_{dataset}_fewshot_val_f1"] = inline_metrics[dataset]["fewshot_val_f1"]
         results[dataset] = inline_metrics[dataset]
     for dataset in segmentation:
-        thunder_name = THUNDER_DATASET_NAMES[dataset]
-        res_path = runtime_dir / "outputs" / "res" / thunder_name / request["model_name"] / "segmentation" / "frozen" / "outputs.json"
-        seg_metrics = json.loads(res_path.read_text())
-        jaccard = float(seg_metrics["jaccard"]["metric_score"])
-        metrics[f"probe_{dataset}_seg_val_jaccard"] = jaccard
-        results[dataset] = {"seg_val_metrics": seg_metrics}
+        metrics[f"probe_{dataset}_seg_val_jaccard"] = seg_jaccards[dataset]
+        results[dataset] = {"seg_val_jaccard": seg_jaccards[dataset]}
 
     # Aggregates
     if len(classification) > 0:
@@ -620,9 +636,6 @@ def collect_probe_results(state, wandb_run, metrics_path, output_dir, best_val_m
     with state["paths"]["lock_path"].open("w") as lock_handle:
         fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
         state["data"] = json.loads(state["paths"]["state_path"].read_text())
-        active = state["data"]["active"]
-        if active is not None and Path(active["result_path"]).exists():
-            state["data"]["active"] = None
         logged = set(state["data"]["logged_results"])
         for result_path in sorted(state["paths"]["results_dir"].glob("step_*.json")):
             result_path_str = str(result_path)
@@ -677,32 +690,23 @@ def collect_probe_results(state, wandb_run, metrics_path, output_dir, best_val_m
 
 def completed_probe_summary(output_dir):
     summary = {}
-    latest_result = None
+    final_result = None
     for result_path in sorted(probe_paths(output_dir)["results_dir"].glob("step_*.json")):
         result = json.loads(result_path.read_text())
         if result["status"] != "ok" or "mean_probe_score" not in result["metrics"]:
             continue
-        if latest_result is None or int(result["train_step"]) > int(latest_result["train_step"]):
-            latest_result = result
-
-    def add_result(prefix, result):
-        summary[f"{prefix}_step"] = int(result["train_step"])
-        summary[f"{prefix}_target_flops"] = int(result["target_flops"])
-        summary[f"{prefix}_target_fraction"] = float(result["target_fraction"])
-        if "wall_seconds" in result:
-            summary[f"{prefix}_wall_seconds"] = float(result["wall_seconds"])
-        for key, value in result["metrics"].items():
-            if key == "mean_probe_score":
-                flat = "score"
-            elif key.startswith("probe_"):
-                flat = key.removeprefix("probe_")
-            else:
-                flat = key
-            summary[f"{prefix}_{flat}"] = float(value)
-
-    if latest_result is not None:
-        add_result("latest_probe", latest_result)
-        add_result("final_probe", latest_result)
+        if final_result is None or int(result["train_step"]) > int(final_result["train_step"]):
+            final_result = result
+    if final_result is None:
+        return summary
+    summary["final_probe_step"] = int(final_result["train_step"])
+    summary["final_probe_target_flops"] = int(final_result["target_flops"])
+    summary["final_probe_target_fraction"] = float(final_result["target_fraction"])
+    if "wall_seconds" in final_result:
+        summary["final_probe_wall_seconds"] = float(final_result["wall_seconds"])
+    for key, value in final_result["metrics"].items():
+        flat = "score" if key == "mean_probe_score" else key.removeprefix("probe_")
+        summary[f"final_probe_{flat}"] = float(value)
     return summary
 
 
