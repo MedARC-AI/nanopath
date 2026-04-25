@@ -7,7 +7,6 @@
 
 import hashlib
 import json
-import math
 import os
 import time
 from collections import OrderedDict
@@ -194,8 +193,7 @@ class RandomTCGADataset(Dataset):
             raise FileNotFoundError(f"sample list offset cache missing at {offsets_path}; call prepare_sample_list_offsets first")
         self.offsets = np.load(offsets_path, mmap_mode="r")
         self.sample_list_handle = None
-        worker_budget = max(1, int(train["num_workers"]))
-        self.max_open_wsi = max(1, int(math.ceil(float(data["max_open_wsi"]) / float(worker_budget))))
+        self.max_open_wsi = max(1, int(data["max_open_wsi"]))
         self.handles = OrderedDict()
         mean, std = data["mean"], data["std"]
         self.global_views = int(train["global_views"])

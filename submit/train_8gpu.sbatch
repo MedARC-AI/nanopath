@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=jepa-baseline
+#SBATCH --job-name=jepa-8gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-task=4
+#SBATCH --gpus-per-task=8
 #SBATCH --time=04:00:00
 #SBATCH --output=/data/nanopath/slurm/%j.out
 #SBATCH --error=/data/nanopath/slurm/%j.err
@@ -12,9 +12,9 @@
 
 set -euo pipefail
 
-# Default launcher for the checked-in small JEPA screen.
-CONFIG_FILE="${1:-/admin/home/paul/nanopath/configs/small.yaml}"
-NPROC_PER_NODE=4
+# Full-node launcher; with global_batch_size=128 each rank sees 16 samples.
+CONFIG_FILE="${1:-/admin/home/paul/nanopath/configs/small_8gpu.yaml}"
+NPROC_PER_NODE=8
 
 cd /admin/home/paul/nanopath
 mkdir -p /data/nanopath

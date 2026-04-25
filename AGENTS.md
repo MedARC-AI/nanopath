@@ -1,16 +1,38 @@
+Project goals:
+- Nanopath should be easy to share with collaborators so they can quickly try new training objectives, preprocessing choices, data curation ideas, and hyperparameters on a small model.
+- The normal loop is: iterate fast on a single H100, validate promising changes with downstream probes, then reserve larger/full-node training for the best candidates.
+- Keep the codebase hackable and nanochat-like: flat organization, few files, few lines, and minimal abstractions.
+
+Before changing code:
+- Source the venv via `source ~/nanopath/.venv/bin/activate`.
+- For broad or ambiguous tasks, read deeply enough into the current repo to understand the training/probing/data path before recommending changes. Look at every relevant source, config, script, and doc file rather than optimizing one file in isolation.
+- Make a concrete multi-step plan for nontrivial work, then keep going through implementation, validation, and any needed doc/comment updates.
+- Default to immediately implementing sensible recommendations and validating them rather than simply suggesting recommendations.
+
 Coding guidelines:
-- source our venv via `source /admin/home/paul/nanopath/.venv/bin/activate`
-- use flat organization (as few folders and files and lines of code as possible; functional elegance is the goal)
-- no try/except code nor fallbacks — if something is wrong, it should fail loudly
-- use less environmental variables, instead hardcode and don't support modular options nor fallbacks
-- prefer native PyTorch as opposed to Accelerate, Lightning, etc. Multi-GPU can be accomplished with PyTorch DDP.
-- do not use argparser, instead all meaningful variables can be defined from YAML config files (e.g., cfg.train.lr) and if the YAML doesn't define a variable used in the training script, it's ok for that to simply error; only store variables in YAML if they are actually things we are meant to frequently be tuning, otherwise hard-code it in
-- I hate simple helper functions / classes that are only a handful of lines of code; I strongly prefer you just put the code directly where it needs to go.
-- You are currently on a login node that has no GPU access but you can submit SLURM jobs into our H100 nodes (n-#) or CPU nodes (c-1).
-- Use wandb for logging / plotting / utilization monitoring throughout pretraining. Should include all important metrics useful to validating model training (e.g., gradient norm).
-- Follow /admin/home/paul/papers/repos/nanoGPT as a good example of a clean minimalist codebase, particularly with respect to how they handle train.py and model.py files.
-- Store large files / ckpts / embeddings / pretrained models in the /data/nanopath directory, not the main repo.
-- Checked-in training configs should stop after hitting a total training FLOP budget of 5.5e15 rather than a fixed step count or wall-clock budget, because equal-compute budgets keep recipe and model comparisons fair when throughput differs.
-- Do not define `#SBATCH --cpus-per-task` in our sbatch scripts.
-- Do not add `OMP_NUM_THREADS` or `MKL_NUM_THREADS` exports to our sbatch scripts.
-- If changes you make lead to comments or code in other files no longer being accurate, make sure to revise those other files and comments as well so everything is accurate and up-to-date.
+- Use flat organization: as few folders, files, and lines of code as possible; functional elegance is the goal. If you make revisions where there are over a dozen new lines of code I am going to be highly skeptical you really tried your best to adhere to this guideline. A great revision should LOWER the total lines of code, not increase it. Don't play smart by opening subprocesses or other hacks to get around this limitation.
+- Do not add defensive `try`/`except` blocks or fallbacks. If something is wrong, it should fail loudly. Don't bother with ValueError raises or other code guards.
+- Prefer hard-coded constants over extra environment variables, modular options, or fallback paths, unless the value is meant to be frequently tuned.
+- Prefer native PyTorch over Accelerate, Lightning, etc. Multi-GPU should use PyTorch DDP.
+- Do not use `argparse`. Meaningful tunables should live in YAML config files, e.g. `cfg.train.lr`; if YAML does not define a variable used by a training script, it is fine for that to error. Only put variables in YAML when they are actually meant to be tuned often; otherwise hard-code them.
+- Avoid tiny helper functions/classes that are only a handful of lines. Put the code directly where it is used.
+- Follow `/admin/home/paul/papers/repos/nanochat` as the model for a clean minimalist codebase, especially `train.py` and `model.py`.
+- Do not create new files unless explicitly asked or truly necessary; prefer improving existing files.
+- If code changes make comments, docs, configs, or scripts inaccurate, update those too.
+
+Experiment and benchmark discipline:
+- Validate opinions experimentally whenever feasible. Run code, tests, probes, or short jobs that directly support the conclusion.
+- Use downstream probing as the main comparison signal because objectives like JEPA, MAE, DINO, and iBOT may not have comparable validation losses.
+- Treat mean-F1 probe results as noisy. An improvement should only actually be considered an improvement mean-F1 improves over .02, anything less is within random variance.
+- Keep recipe/model comparisons on equal reported training FLOPs unless deliberately changing the benchmark protocol.
+- Use wandb for logging, plotting, and utilization monitoring throughout pretraining. Log all metrics needed to validate training behavior, including gradient norm.
+- Aim for >80% GPU utilization during GPU runs; investigate and remedy code when utilization is poor.
+
+Cluster and storage:
+- The login node has no GPU access. For full training runs (or anything that would take more than a few minutes) you should submit SLURM jobs to H100 nodes (`n-#`) or CPU nodes (`c-1`). If it's a quick single-GPU assessment you can use `ssh n-#` directly (but only when an idle GPU is available!).
+- Store large files, checkpoints, embeddings, and pretrained models in `/data/nanopath`, not the repo.
+- Do not define `#SBATCH --cpus-per-task` in sbatch scripts and do not add unnecessary lines like `OMP_NUM_THREADS` or `MKL_NUM_THREADS` exports.
+
+Workflow:
+- Do not stop after the first small fix on a difficult ask. Continue through the adjacent tasks needed to make the change credible, such as config updates, probes, throughput checks, README notes, or cleanup.
+- Use parallel agents, git worktrees, or independent jobs when they materially speed up broad exploration or experiments, but keep changes coordinated and easy to review.
