@@ -1,13 +1,13 @@
 project:
-  name: nanopath-small-screen
+  name: nanopath-small
   family: small
-  recipe_id: jepa-samplelist30-v2
-  output_dir: /data/nanopath/small/nanopath-small-screen
+  recipe_id: jepa-samplelist30
+  output_dir: /data/nanopath/small/small
 
 data:
   sample_list: /block/TCGA/sample_dataset_30.txt
   sample_list_cache_dir: /data/nanopath/cache
-  split_seed: 1337
+  split_seed: 42
   val_fraction: 0.05
   train_split: train
   val_split: val
@@ -42,7 +42,7 @@ train:
   num_workers: 8
   prefetch_factor: 4
   persistent_workers: true
-  max_train_flops: 1000000000000000000
+  max_train_flops: 1000000000000000000 # 1.0e18
   warmup_flop_fraction: 0.0035
   warmdown_flop_fraction: 0.65
   final_lr_frac: 0.05

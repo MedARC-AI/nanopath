@@ -10,7 +10,7 @@
 # collect_probe_results ingests it back into wandb + metrics.jsonl.
 #
 # Classification splits come from `thunder generate-data-splits` cached under
-# /data/nanopath/cache/data_splits; pcam is subsampled inline; pannuke images
+# probe_data_splits; pcam is subsampled inline; pannuke images
 # come straight from the npy folds under /block/thunder-data/pannuke.
 
 import json
@@ -25,7 +25,7 @@ from pathlib import Path
 import torch
 
 
-DATA_SPLITS_CACHE = Path(__file__).resolve().parent / "data_splits"
+PROBE_DATA_SPLITS = Path(__file__).resolve().parent / "probe_data_splits"
 EMBED_BATCH_SIZE = 128
 EMBED_NUM_WORKERS = 4
 SEGMENTATION_EPOCHS = 30
@@ -57,10 +57,12 @@ DATASET_ROOTS = {
 }
 
 
+# Prefix probe logs with the same timestamp/job id format as train.py.
 def console_prefix():
     return f"{time.strftime('%H:%M:%S')} {os.environ.get('SLURM_JOB_ID', str(os.getpid()))}"
 
 
+# Keep all probe sidecar files under output_dir/thunder for compatibility with old run layouts.
 def probe_paths(output_dir):
     probe_dir = Path(output_dir) / "thunder"
     return {
@@ -70,20 +72,23 @@ def probe_paths(output_dir):
     }
 
 
+# Probes are enabled only when the recipe asks for them and names at least one task.
 def probe_enabled(cfg):
-    return bool(cfg["probe"]["enabled"]) and (len(cfg["probe"]["datasets"]) + len(cfg["probe"].get("segmentation_datasets", []))) > 0
+    return bool(cfg["probe"]["enabled"]) and (len(cfg["probe"]["datasets"]) + len(cfg["probe"]["segmentation_datasets"])) > 0
 
 
+# Persist probe state so resumed train.py runs do not relog completed result files.
 def write_probe_state(state):
     state["paths"]["state_path"].write_text(json.dumps(state["data"], indent=2) + "\n")
 
 
+# Validate probe recipe compatibility and initialize the on-disk result tracker.
 def prepare_probe_state(cfg, output_dir):
     paths = probe_paths(output_dir)
     for path in [paths["probe_dir"], paths["results_dir"]]:
         path.mkdir(parents=True, exist_ok=True)
     classification = [str(x) for x in cfg["probe"]["datasets"]]
-    segmentation = [str(x) for x in cfg["probe"].get("segmentation_datasets", [])]
+    segmentation = [str(x) for x in cfg["probe"]["segmentation_datasets"]]
     data = {
         "version": 8,
         "family": str(cfg["project"]["family"]),
@@ -93,6 +98,7 @@ def prepare_probe_state(cfg, output_dir):
         "logged_results": [],
     }
     if paths["state_path"].exists():
+        # Resume can continue only if the probe family/datasets/count match the old state.
         previous = json.loads(paths["state_path"].read_text())
         if previous["version"] != 8:
             raise ValueError(f"unsupported probe state version: {previous['version']}")
@@ -116,6 +122,7 @@ def prepare_probe_state(cfg, output_dir):
     return state
 
 
+# Snapshot a checkpoint payload and run this file as a separate process for clean GPU memory.
 def queue_probe_job(state, checkpoint_payload, checkpoint_step, target_flops, target_fraction):
     step_tag = f"step_{checkpoint_step:07d}"
     slurm_id = os.environ.get("SLURM_JOB_ID", f"local-{os.getpid()}")
@@ -153,13 +160,14 @@ def queue_probe_job(state, checkpoint_payload, checkpoint_step, target_flops, ta
         f"finished: {request['job_id']}  result: {request['result_path']}",
         flush=True,
     )
-    return state
 
 
+# Image dataset adapter for classification probes; dataset-specific split logic lives here.
 class ClassificationDataset(torch.utils.data.Dataset):
     # Loads images for the classification probes. For pcam we subsample with a fixed seed
     # to match Thunder's PATCH_CAMELYON_SUBSET behaviour; the other four datasets use the
-    # cached data_splits JSON (one-time output of `thunder generate-data-splits`).
+    # cached probe_data_splits JSON (one-time output of `thunder generate-data-splits`).
+    # Load image paths/labels or PCam h5 arrays for one train/val split.
     def __init__(self, dataset, split, transform):
         import h5py
         import numpy as np
@@ -167,6 +175,7 @@ class ClassificationDataset(torch.utils.data.Dataset):
         self.transform = transform
         self.dataset = dataset
         if dataset == "pcam":
+            # PCam is large h5 data, so match Thunder by selecting a fixed subset.
             pcam_split = "train" if split == "train" else "valid"
             with h5py.File(DATASET_ROOTS["pcam"] / f"camelyonpatch_level_2_split_{pcam_split}_x.h5", "r") as fx:
                 key_x = next(iter(fx.keys()))
@@ -175,14 +184,17 @@ class ClassificationDataset(torch.utils.data.Dataset):
             with h5py.File(DATASET_ROOTS["pcam"] / f"camelyonpatch_level_2_split_{pcam_split}_y.h5", "r") as fy:
                 self.labels = [int(v) for v in np.array(fy[next(iter(fy.keys()))][idx]).reshape(-1)]
         else:
-            splits = json.loads((DATA_SPLITS_CACHE / f"{dataset}.json").read_text())[split]
+            # Other classification splits are checked into probe_data_splits.
+            splits = json.loads((PROBE_DATA_SPLITS / f"{dataset}.json").read_text())[split]
             self.images = splits["images"]
             self.labels = [int(v) for v in splits["labels"]]
             self.root = DATASET_ROOTS[dataset]
 
+    # Number of labeled examples in this probe split.
     def __len__(self):
         return len(self.labels)
 
+    # Return one transformed RGB image and integer label for embedding.
     def __getitem__(self, idx):
         from PIL import Image
         if self.dataset == "pcam":
@@ -192,6 +204,7 @@ class ClassificationDataset(torch.utils.data.Dataset):
         return self.transform(img), self.labels[idx]
 
 
+# Run the frozen backbone over one classification split and return numpy embeddings/labels.
 def embed_classification_dataset(model, mean, std, dataset, split, device, transform):
     import numpy as np
 
@@ -204,6 +217,7 @@ def embed_classification_dataset(model, mean, std, dataset, split, device, trans
     )
     embs, labels = [], []
     autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    # Probe embeddings use model.probe_features(), not the pretraining projector.
     with torch.no_grad():
         for x, y in loader:
             x = x.to(device, non_blocking=True)
@@ -214,6 +228,7 @@ def embed_classification_dataset(model, mean, std, dataset, split, device, trans
     return np.concatenate(embs, axis=0).astype(np.float32), np.concatenate(labels, axis=0).astype(np.int64)
 
 
+# Train a lightweight segmentation head on frozen PanNuke patch features and report Jaccard.
 def inline_pannuke_jaccard(model, mean, std, device):
     # Precompute spatial token features once with the supplied backbone, then train
     # MaskTransformer with multiclass_dice_loss for SEGMENTATION_EPOCHS, select best
@@ -225,6 +240,7 @@ def inline_pannuke_jaccard(model, mean, std, device):
 
     started_at = time.monotonic()
 
+    # Extract spatial patch tokens once so the segmentation head training loop is cheap.
     @torch.no_grad()
     def extract(images_np):
         feats = []
@@ -237,9 +253,10 @@ def inline_pannuke_jaccard(model, mean, std, device):
 
     pannuke_root = DATASET_ROOTS["pannuke"]
 
+    # Convert PanNuke's per-class binary mask stack into one integer label map.
     def derive_labels(masks):
         labels = np.zeros((masks.shape[0], 256, 256), dtype=np.int64)
-        for j in range(5):
+        for j in range(PANNUKE_NUM_CLASSES - 1):
             layer = ((j + 1) * np.clip(masks[..., j], 0, 1)).astype(np.int64)
             labels = np.where(layer != 0, layer, labels)
         return labels
@@ -258,6 +275,7 @@ def inline_pannuke_jaccard(model, mean, std, device):
     n = len(train_feats)
     best_val_loss = float("inf")
     best_state = None
+    # Select the segmentation head by validation dice loss, keeping the backbone frozen.
     for _ in range(SEGMENTATION_EPOCHS):
         head.train()
         perm = torch.randperm(n)
@@ -284,6 +302,7 @@ def inline_pannuke_jaccard(model, mean, std, device):
     head.load_state_dict(best_state)
     head.eval()
     per_image_j, per_image_bg_only = [], []
+    # Report the Thunder-compatible per-image macro Jaccard with bg-only reweighting.
     with torch.no_grad():
         for i in range(0, len(val_feats), SEGMENTATION_BATCH_SIZE):
             preds = torch.nn.functional.interpolate(head(val_feats[i : i + SEGMENTATION_BATCH_SIZE].to(device)), (256, 256), mode="bilinear").argmax(dim=1).cpu().numpy()
@@ -301,12 +320,14 @@ def inline_pannuke_jaccard(model, mean, std, device):
     return float(np.average(per_image_j, weights=weights)), time.monotonic() - started_at
 
 
+# KNN probe over frozen embeddings; best k is selected on the validation split.
 def inline_knn_val_f1(train_embs, train_labels, val_embs, val_labels, k_vals):
     import numpy as np
     from sklearn.metrics import f1_score
 
     train_f = train_embs.astype(np.float32, copy=False)
     val_f = val_embs.astype(np.float32, copy=False)
+    # Cosine KNN is implemented with normalized dot products in chunks to cap memory use.
     train_n = train_f / np.linalg.norm(train_f, axis=1, keepdims=True)
     val_n = val_f / np.linalg.norm(val_f, axis=1, keepdims=True)
     preds_per_k = {k: [] for k in k_vals}
@@ -323,6 +344,7 @@ def inline_knn_val_f1(train_embs, train_labels, val_embs, val_labels, k_vals):
     return best_k, f1_per_k[best_k], f1_per_k
 
 
+# SimpleShot-style few-shot probe: class prototypes from random support sets, voted over trials.
 def inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels, shots, trials, seed):
     import numpy as np
     from sklearn.metrics import f1_score
@@ -336,6 +358,7 @@ def inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels, shots,
     rng = np.random.default_rng(seed)
     f1_per_shot = {}
     for shot in shots:
+        # Many trials reduce support-set noise; final prediction is a per-example majority vote.
         trial_preds = np.zeros((trials, len(val_labels)), dtype=np.int64)
         for trial in range(trials):
             support_idx = []
@@ -359,6 +382,7 @@ def inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels, shots,
     return f1_per_shot
 
 
+# Linear probe: train a small classifier on frozen embeddings and keep the best validation F1.
 def inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels):
     import numpy as np
     from sklearn.metrics import f1_score
@@ -370,6 +394,7 @@ def inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels):
     n = len(train_embs_t)
     best_f1 = 0.0
     for lr in LINEAR_PROBE_LRS:
+        # LR sweep keeps probe ranking less sensitive to a single classifier hyperparameter.
         head = torch.nn.Linear(train_embs.shape[1], num_classes).to(device)
         opt = torch.optim.AdamW(head.parameters(), lr=lr, weight_decay=LINEAR_PROBE_WEIGHT_DECAY)
         for _ in range(LINEAR_PROBE_EPOCHS):
@@ -386,6 +411,7 @@ def inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels):
     return best_f1
 
 
+# Worker entry point launched by queue_probe_job(); owns model loading and probe aggregation.
 def run_probe_job(request_path):
     from torchvision import transforms
     from model import NanoPathFM
@@ -401,7 +427,8 @@ def run_probe_job(request_path):
     )
     checkpoint = torch.load(request["checkpoint_path"], map_location="cpu", weights_only=False)
     cfg = checkpoint["config"]
-    state_key = "model_ema" if str(cfg["probe"]["model_weights"]) == "ema" else "model"
+    # Recipes can compare raw weights or EMA weights without changing probe code.
+    state_key = {"ema": "model_ema", "raw": "model"}[str(cfg["probe"]["model_weights"])]
     model_state = checkpoint[state_key]
     del checkpoint
     device = torch.device("cuda")
@@ -415,6 +442,7 @@ def run_probe_job(request_path):
 
     inline_metrics = {}
     for dataset in classification:
+        # Classification probes share embeddings, then evaluate KNN, SimpleShot, and linear heads.
         embed_started = time.monotonic()
         train_embs, train_labels = embed_classification_dataset(model, mean, std, dataset, "train", device, transform)
         val_embs, val_labels = embed_classification_dataset(model, mean, std, dataset, "val", device, transform)
@@ -438,6 +466,7 @@ def run_probe_job(request_path):
 
     seg_jaccards = {}
     for dataset in segmentation:
+        # Segmentation probes train only the MaskTransformer head in seg_head.py.
         print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_seg_start: {dataset}", flush=True)
         jaccard, seg_wall = inline_pannuke_jaccard(model, mean, std, device)
         seg_jaccards[dataset] = jaccard
@@ -447,7 +476,7 @@ def run_probe_job(request_path):
             flush=True,
         )
 
-    # Aggregate per-dataset metrics into the result file.
+    # Aggregate per-dataset metrics into the result file consumed by train.py.
     metrics = {}
     results = {}
     for dataset in classification:
@@ -459,7 +488,7 @@ def run_probe_job(request_path):
         metrics[f"probe_{dataset}_seg_val_jaccard"] = seg_jaccards[dataset]
         results[dataset] = {"seg_val_jaccard": seg_jaccards[dataset]}
 
-    # Aggregates
+    # Mean probe score is the main model-selection signal across classification and segmentation tasks.
     if len(classification) > 0:
         metrics["linear_mean_f1"] = sum(metrics[f"probe_{d}_linear_val_f1"] for d in classification) / len(classification)
         metrics["knn_mean_f1"] = sum(metrics[f"probe_{d}_knn_val_f1"] for d in classification) / len(classification)
@@ -491,7 +520,6 @@ def run_probe_job(request_path):
                 "checkpoint_path": request["checkpoint_path"],
                 "classification_datasets": classification,
                 "segmentation_datasets": segmentation,
-                "status": "ok",
                 "metrics": metrics,
                 "results": results,
             },
@@ -501,7 +529,8 @@ def run_probe_job(request_path):
     )
 
 
-def collect_probe_results(state, wandb_run, metrics_path, output_dir, best_val_mean_probe_score, best_val_mean_probe_score_step, best_probe_scores):
+# Rank-0 train.py call: consume probe result JSONs, log metrics, and optionally keep the best probe checkpoint.
+def collect_probe_results(state, wandb_run, metrics_path, output_dir, best_val_mean_probe_score, best_val_mean_probe_score_step, best_probe_scores, keep_best_checkpoint=True):
     state["data"] = json.loads(state["paths"]["state_path"].read_text())
     logged = set(state["data"]["logged_results"])
     for result_path in sorted(state["paths"]["results_dir"].glob("step_*.json")):
@@ -509,19 +538,19 @@ def collect_probe_results(state, wandb_run, metrics_path, output_dir, best_val_m
         result = json.loads(result_path.read_text())
         metrics = {key: float(value) for key, value in result["metrics"].items()}
         checkpoint_path = Path(result["checkpoint_path"])
-        if result["status"] == "ok" and "mean_probe_score" in metrics:
+        if "mean_probe_score" in metrics:
+            # This best checkpoint is selected by downstream probe score, not validation loss.
             if metrics["mean_probe_score"] > best_val_mean_probe_score:
                 best_val_mean_probe_score = metrics["mean_probe_score"]
                 best_val_mean_probe_score_step = int(result["train_step"])
                 best_probe_scores = dict(metrics)
-                if checkpoint_path.exists():
+                if keep_best_checkpoint and checkpoint_path.exists():
                     shutil.copy2(checkpoint_path, output_dir / "best_mean_probe_score.pt")
         if result_path_str in logged:
             continue
         event_payload = {
             "event": "probe",
             "step": result["train_step"],
-            "status": result["status"],
             "target_flops": result["target_flops"],
             "target_fraction": result["target_fraction"],
             "probe_wall_seconds": float(result["wall_seconds"]),
@@ -531,7 +560,7 @@ def collect_probe_results(state, wandb_run, metrics_path, output_dir, best_val_m
             handle.write(json.dumps(event_payload) + "\n")
         print(
             f"{console_prefix()} Probe  [{result['train_step']}]  "
-            f"log_result: status={result['status']}  mean_probe_score={metrics.get('mean_probe_score')}  "
+            f"log_result: mean_probe_score={metrics.get('mean_probe_score')}  "
             f"wall={result['wall_seconds']:.2f}s",
             flush=True,
         )
@@ -547,12 +576,13 @@ def collect_probe_results(state, wandb_run, metrics_path, output_dir, best_val_m
     return best_val_mean_probe_score, best_val_mean_probe_score_step, best_probe_scores
 
 
+# Flatten the latest successful probe result into summary.json final_probe_* keys.
 def completed_probe_summary(output_dir):
     summary = {}
     final_result = None
     for result_path in sorted(probe_paths(output_dir)["results_dir"].glob("step_*.json")):
         result = json.loads(result_path.read_text())
-        if result["status"] != "ok" or "mean_probe_score" not in result["metrics"]:
+        if "mean_probe_score" not in result["metrics"]:
             continue
         if final_result is None or int(result["train_step"]) > int(final_result["train_step"]):
             final_result = result
@@ -568,6 +598,7 @@ def completed_probe_summary(output_dir):
     return summary
 
 
+# CLI entry point for probe subprocesses.
 def main():
     if len(sys.argv) != 2:
         raise ValueError("usage: python probe.py <request.json>")

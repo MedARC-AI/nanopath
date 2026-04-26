@@ -1,13 +1,13 @@
 project:
   name: nanopath-smoke
   family: small
-  recipe_id: jepa-samplelist30-v2
-  output_dir: /data/nanopath/small/nanopath-smoke
+  recipe_id: jepa-samplelist30
+  output_dir: /data/nanopath/small/smoke
 
 data:
   sample_list: /block/TCGA/sample_dataset_30.txt
   sample_list_cache_dir: /data/nanopath/cache
-  split_seed: 1337
+  split_seed: 42
   val_fraction: 0.05
   train_split: train
   val_split: val
@@ -41,14 +41,15 @@ train:
   num_workers: 4
   prefetch_factor: 2
   persistent_workers: true
-  max_train_flops: 200000000000000
+  max_train_flops: 200000000000000 # 2.0e14
   warmup_flop_fraction: 0.05
   warmdown_flop_fraction: 0.5
   final_lr_frac: 0.05
   eval_every: 10
   val_batches: 4
   log_every: 5
-  save_every: 20
+  # Smoke should leave no persistent checkpoints; final probes still use a temporary checkpoint.
+  save_every: null
   global_views: 2
   local_views: 4
   global_size: 224
