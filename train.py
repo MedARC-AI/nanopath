@@ -1,5 +1,5 @@
 # Pretraining entry point. Runs JEPA + SIGReg loop end-to-end: parse a YAML
-# config (e.g. configs/small.yaml), build the TCGA dataloader, construct the
+# config (e.g. configs/leader.yaml), build the TCGA dataloader, construct the
 # NanoPathFM model and EMA copy, optimize across DDP ranks under torchrun, log
 # to wandb + output_dir/metrics.jsonl, optionally write rolling latest.pt
 # checkpoints, and queue downstream probes (probe.py).
@@ -152,6 +152,8 @@ def main():
     model = NanoPathFM(cfg).to(device)
     sigreg = SIGReg().to(device)
     model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    # Leaderboard cap is on activated backbone params only (excludes the pretraining-only projector head, which probes don't read). MoE contributors must edit this to count per-token activated params.
+    backbone_activated_params = sum(p.numel() for n, p in model.named_parameters() if p.requires_grad and not n.startswith("projector."))
     # Optimizer groups live in model.py so weight-decay policy follows model changes.
     opt = torch.optim.AdamW(model.param_groups(train_cfg["weight_decay"]), lr=1.0, betas=(0.9, 0.95))
     step = 0
@@ -170,7 +172,7 @@ def main():
     slurm_stdout_path = os.environ.get("NANOPATH_SLURM_STDOUT")
     slurm_stderr_path = os.environ.get("NANOPATH_SLURM_STDERR")
     # Fresh launches fully replace the run directory so repeated use of a checked-in
-    # output_dir like /data/nanopath/small never trips over stale artifacts.
+    # output_dir like /data/nanopath/leader never trips over stale artifacts.
     if train_cfg["resume"] is None:
         if rank == 0 and output_dir.exists():
             shutil.rmtree(output_dir)
@@ -664,6 +666,7 @@ def main():
             "slurm_stdout_path": slurm_stdout_path,
             "slurm_stderr_path": slurm_stderr_path,
             "model_params": model_params,
+            "backbone_activated_params": backbone_activated_params,
             "world_size": world_size,
             "batch_size_per_rank": batch_size,
             "global_batch_size": batch_size * world_size,
