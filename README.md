@@ -1,45 +1,80 @@
-# NanoPath
+# nanopath
 
-Lean JEPA pathology pretraining harness. Designed for fast hacking on a
-single H100: tweak a recipe, run a smoke, run the full small recipe, and
-compare `final_probe_score` against the leaderboard.
+![nanopath logo](nanopath_logo.png)
 
-The downstream probes (`probe.py`) are the comparison signal — JEPA-style
-val losses across recipes aren't directly comparable, so we always rank by
-mean F1 across five classification probes (bach, bracs, break_his, mhist,
-pcam) plus pannuke segmentation Jaccard.
+`nanopath` is a simple experimental harness for training computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). It is designed to run on a single GPU (but can also be run with multi-gpu if you want faster, identical results), the code is minimal/hackable, and covers the full pretraining-from-scratch pipeline using the public TCGA dataset (12k WSIs) and built-in probe evals from the [Thunder benchmark](https://mics-lab.github.io/thunder/).
+
+The training objective is JEPA-style: the student predicts EMA-target patch embeddings under a different mask, regularized by SIGReg to prevent collapse. The reference recipe (`configs/small.yaml`) takes ~4 h on one H100 or ~1.25 h on 4×H100, then runs all six probes inline in the same job.
 
 ## Quickstart
 
+Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:
+
 ```bash
-git clone <repo> nanopath && cd nanopath
+git clone https://github.com/MedARC-AI/nanopath.git && cd nanopath
 uv sync && source .venv/bin/activate
-python download_probe_datasets.py            # ~XX GB, probe datasets only
-# If /block/TCGA is not available, follow the TCGA setup in Data before training.
-python train.py configs/smoke.yaml           # ~5 min end-to-end smoke on 1 GPU
+wandb login
+python train.py configs/smoke.yaml
 ```
 
-That's enough to verify your env and then `sbatch submit/train_1gpu.sbatch`
-a real run.
+If you are a MedARC volunteer using our shared cluster, the above steps should work as-is. If you are using your own compute, you'll also need to download the TCGA pretraining data and the downstream probe datasets. See Data section of this README for instructions.
 
-## Layout
+A successful smoke prints periodic train/val lines, logs to wandb, and ends with final summary in `metrics.jsonl`. Probe scores will be near-random since smoke is undertrained; the goal is just to confirm everything wires up. The full `configs/small.yaml` should land near the leaderboard's ~0.52 `mean_probe_score`; for context, a randomly initialized backbone scores roughly ~0.2. 
 
-- `train.py` — pretraining loop (DDP via torchrun, JEPA + SIGReg, EMA, inline probe dispatch).
-- `model.py` — `NanoPathFM` ViT backbone + `SIGReg`. Hack here for new objectives.
-- `dataloader.py` — TCGA sample-list streaming loader. Hack here for new pretraining data.
-- `probe.py` — inline downstream probes (KNN, SimpleShot, linear, pannuke MaskTransformer seg). Hack here for new probes.
-- `seg_head.py` — vendored `MaskTransformer` + `multiclass_dice_loss` (used only by `probe.py`'s pannuke segmentation).
+## Leaderboard
+
+Score is final `mean_probe_score`: unweighted mean of standard classification probe F1 aggregates (bach, bracs, break_his, mhist, pcam) and pannuke segmentation Jaccard. All metrics are computed on each dataset's validation split only; train splits solely fit the probe heads on top of the frozen backbone.
+
+| # | mean | linear | KNN | few-shot | seg Jaccard | Description | wandb | Date | Contributors |
+|---|------:|-------:|----:|---------:|------------:|-------------|-------|------|--------------|
+| 1 | **0.5228** | 0.6832 | 0.6093 | 0.4490 | 0.3496 | LeJEPA baseline | [t72j3r8k](https://wandb.ai/paulscotti/nanopath/runs/t72j3r8k) | Apr 26 2026 | @PaulScotti |
+
+### How to submit to leaderboard
+
+The checked-in `configs/small.yaml` is the reference leaderboard recipe. To get on the leaderboard you must run that config end-to-end and outperform the existing top leaderboard `mean_probe_score` by at least 0.01. If you do so, contact [@PaulScotti](https://github.com/PaulScotti) and share your code with him; he will train a new model using your code but with a different rng seed. If it still improves `mean_probe_score` by at least 0.01, you should open a PR to this repo (please keep only the minimal necessary code changes that improve performance) and a description of your changes. Paul will update the README & leaderboard accordingly.
+
+### What you must NOT change for a leaderboard submission
+
+To keep entries comparable, the following are fixed across all submissions. Anything else (model architecture, training objective, optimizer, schedule shape, augmentations, EMA decay, masking, predictor design, dataset curation, etc.) is fair game.
+
+**Compute budget**
+- `train.max_train_flops` (1e18). The FLOP budget *is* the spend; you can't buy a higher score with more compute.
+
+**TCGA pretraining**
+- TCGA (12K WSIs) is the only dataset allowed for pretraining, but you are free to revise how we select the tiles used for training however you wish.
+
+**Probe evaluation**
+- All of `probe.py` (KNN k values, SimpleShot shots/trials/seed, linear-probe LR grid and epochs, segmentation head config and dice-loss weighting).
+- `seg_head.py` — the pannuke `MaskTransformer` head and `multiclass_dice_loss`.
+- `probe_data_splits/` — the checked-in classification splits.
+- `probe.datasets` (all six), `probe.count`, `probe.model_weights: ema`. Probes must run on EMA weights at the end of training.
+
+## Repository layout
+
+### Primary files meant to be hacked
+- `train.py` — the main pretraining loop (DDP via torchrun, JEPA + SIGReg, EMA, probe dispatch, wandb logging).
+- `model.py` — `NanoPathFM` ViT backbone. Hack here for new model architectures / training objectives.
+- `dataloader.py` — TCGA sample-list streaming loader. Hack here for data preprocessing / curation changes.
+
+### Helper files
+- `probe.py` — downstream probes (KNN, few shot, linear, segmentation).
+- `configs/{smoke,small}.yaml` — smoke is the ~8 min sanity run; small is the leaderboard recipe.
+- `submit/train_{1,4}gpu.sbatch` — SLURM launchers.
+- `seg_head.py` — `MaskTransformer` + `multiclass_dice_loss` (used by `probe.py`'s pannuke segmentation), vendored by Thunder.
 - `download_probe_datasets.py` — auto-downloads the six probe datasets if missing.
-- `download_TCGA.sh` — downloads TCGA SVS pretraining slides plus `sample_dataset_30.txt`.
-- `probe_data_splits/` — checked-in classification splits so probes work out of the box.
-- `configs/{smoke,small}.yaml` — smoke is a few-minute sanity run; small is the leaderboard recipe.
-- `submit/train_{1,4}gpu.sbatch` — SLURM launchers. The 4-GPU one is the canonical full run.
+- `download_TCGA.sh` — downloads TCGA SVS pretraining slides plus `sample_dataset_30.txt` (specifies the specific tiles to load).
+- `probe_data_splits/` — checked-in classification splits for probes.
 
 ## Data
 
+**To download the datasets you'll need:**
+- A HuggingFace login (`huggingface-cli login` or `HF_TOKEN`) — the TCGA SVS mirror is gated.
+- Kaggle credentials in `~/.kaggle/kaggle.json` — required to download `break_his`.
+- mhist form access — the script prints the form URL the first time it runs and waits for the resulting download.
+- ~13 TB free disk for TCGA SVS files plus ~30 GB for the six probe datasets. *(TODO: provide alternative that requires less disk space.)*
+
 - **TCGA pretraining data**: checked-in configs default to
-  `/block/TCGA/sample_dataset_30.txt`, which is the shared cluster path used by
-  the maintainers. External users should download their own copy:
+  `/block/TCGA/sample_dataset_30.txt`, which is the shared cluster path used by [MedARC](https://www.medarc.ai/). External users should download their own copy:
 
   ```bash
   # Requires large storage: the open TCGA SVS slide set is multi-TB.
@@ -47,61 +82,35 @@ a real run.
   bash download_TCGA.sh /data/TCGA 8
   ```
 
-  This writes `/data/TCGA/sample_dataset_30.txt`, downloads open-access TCGA SVS
-  files from GDC, and creates flat `/data/TCGA/*.svs` symlinks for the sample
-  list. To use it, copy a config and set:
+  This writes `/data/TCGA/sample_dataset_30.txt`, downloads open-access TCGA SVS files from GDC, and creates flat `/data/TCGA/*.svs` symlinks for the sample list. To use it, copy a config and set:
 
   ```yaml
   data:
     sample_list: /data/TCGA/sample_dataset_30.txt
   ```
 
-  `train.py` errors before training if the configured sample list is missing,
-  and the dataloader errors with the same setup guidance if a listed SVS file is
-  missing.
+  `train.py` errors before training if the configured sample list is missing, and the dataloader errors with the same setup guidance if a listed SVS file is missing.
 - **Probe datasets** (bach / bracs / break_his / mhist / pcam / pannuke):
-  `python download_probe_datasets.py` pulls each one to its `DATASET_ROOTS[...]` path
-  if not already present. mhist requires a one-time form access; the script
-  prints instructions. break_his requires Kaggle credentials.
-- **Classification split JSONs**: shipped under `probe_data_splits/` in this repo;
-  no Thunder install needed.
+  `python download_probe_datasets.py` pulls each one to its `DATASET_ROOTS[...]` path if not already present. mhist requires a one-time form access; the script prints instructions. break_his requires Kaggle credentials.
 
 ## Running
 
-Smoke (single GPU, ~5 min, validates the full train+probe path):
+Smoke (single GPU, ~8 min, validates the full train+probe path):
 
 ```bash
-python train.py configs/smoke.yaml
+sbatch submit/train_1gpu.sbatch configs/smoke.yaml
+# or directly: `python train.py configs/smoke.yaml`
 ```
 
-Full small recipe (4 H100s, ~1h, hits the leaderboard):
+Full small recipe (1 H100 gpu = ~4h; 4 H100 gpus = ~1.25h)
 
 ```bash
-sbatch submit/train_4gpu.sbatch                       # default: configs/small.yaml
-sbatch submit/train_4gpu.sbatch configs/your_recipe.yaml
-sbatch submit/train_1gpu.sbatch configs/smoke.yaml    # single-GPU sweeps
+sbatch submit/train_1gpu.sbatch configs/small.yaml
+# or directly: `python train.py configs/small.yaml`
+# can alternatively do `submit/train_4gpu.sbatch` for faster training
 ```
 
-Edit the `#SBATCH` lines or pass `sbatch --gpus-per-task=N --time=...` to
-override resources. `submit/train_4gpu.sbatch` accepts an optional first
-argument to point at a different config.
-
-## Recipe summary
-
-The checked-in `configs/small.yaml` is the current leaderboard run:
-`small` model, `train.global_batch_size: 128`, `train.max_train_flops: 1e18`,
-validation every 500 steps, `train.warmdown_flop_fraction: 0.65`,
-`train.final_lr_frac: 0.05`, `train.ema_decay: 0.999`, `probe.model_weights: ema`,
-`probe.count: 1` (set to 4 to probe at 25/50/75/100% of the FLOP budget).
-
-The LR schedule follows nanochat: linear warmup → constant LR → linear
-warmdown to `final_lr_frac` over the last `warmdown_flop_fraction` of the
-FLOP budget.
-
-For paired comparisons, hold the seed fixed and compare `final_probe_score`
-plus the per-task `final_probe_linear_mean_f1` / `final_probe_knn_mean_f1` /
-`final_probe_fewshot_mean_f1` / `final_probe_seg_mean_jaccard` from
-`summary.json`. Treat anything below a 0.02 mean-F1 delta as noise.
+`configs/small.yaml` is sized for an 80 GB H100 at `train.global_batch_size: 128`. On smaller cards you can set `train.activation_checkpointing: true` if you OOM. Smoke fits comfortably on any 24 GB+ GPU.
 
 ## Outputs
 
@@ -110,34 +119,17 @@ plus the per-task `final_probe_linear_mean_f1` / `final_probe_knn_mean_f1` /
 - sample-list cache: `/data/nanopath/cache`.
 - SLURM logs: `/data/nanopath/slurm/<jobid>.{out,err}`.
 
-Recipes with `train.save_every` set write a rolling `latest.pt`; the best
-probe checkpoint is also kept as `best_mean_probe_score.pt`. Smoke sets
-`train.save_every: null`, so it leaves no persistent checkpoints. Probes run
-inline in the same job once training crosses evenly spaced FLOP milestones
-(using EMA weights from the next validation checkpoint), pause training while
-they run, log into wandb + `metrics.jsonl`, then resume.
+All paths above assume the MedARC cluster layout. Off-cluster, override `project.output_dir` and the `data.sample_list_cache_dir` keys in your config (and point your wandb dir / SLURM log dir wherever you have space).
+
+Recipes with `train.save_every` set write a rolling `latest.pt`; smoke sets `train.save_every: null`, so it leaves no persistent checkpoints. Probes run inline in the same job using EMA weights with training paused while they run, logged into wandb + `metrics.jsonl`.
 
 
 # Experiment log
 
-Running notes on what has been tried in nanopath, with links to wandb / summary.json where possible. Append new entries at the top. Negative results are valuable — record them so the next contributor doesn't redo a known dead end.
-
-## 2026-04 — small EMA recipe, JEPA + SIGReg
-
-- Recipe `jepa-samplelist30-v2` in `configs/small.yaml`, `mean_probe_score = 0.5263` at 1e18 FLOPs (4× H100, ~64 min train + ~17 min probe).
-- Switched to inline probes (single GPU job, no SLURM dispatch) and a rolling `latest.pt` checkpoint (commit `82197ce`).
-- Replaced the latent-MAE objective with JEPA-only (commit `f3b1a46`); marginal probe improvement, simpler recipe.
-- BRACS added to the classification probe set; full 5-dataset probing is ~16 min on one H100 (commit `a5043a9`).
-- Stop criterion is total FLOPs, not wallclock or epochs (commits `77ba4e1`, `e5b5a2d`).
-
-## Things tried that did not help (so far)
+Running notes on what has been tried in nanopath, with links to wandb where possible. Append new entries at the top. Negative results are valuable — record them so the next contributor doesn't redo a known dead end.
 
 - _add yours here_
 
-## Open questions / candidate experiments
+# Acknowledgements & License
 
-- Does swapping HED jitter for stain-normalization-aware augmentation help cross-dataset transfer?
-- Larger global crops (256 / 320) vs. the current 224?
-- DINO/iBOT-style EMA target encoder vs. the symmetric JEPA we have now.
-- Drop SIGReg in favor of variance/covariance (VICReg) or whitening (Barlow); equivalence at this scale is untested here.
-- Curriculum on `data.global_crop_scale` over training FLOPs.
+Inspired by [nanochat](https://github.com/karpathy/nanochat). Probe code, dataset splits, and the pannuke `MaskTransformer` head are adapted from the [Thunder benchmark](https://mics-lab.github.io/thunder/). 

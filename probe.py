@@ -15,7 +15,6 @@
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -529,8 +528,8 @@ def run_probe_job(request_path):
     )
 
 
-# Rank-0 train.py call: consume probe result JSONs, log metrics, and optionally keep the best probe checkpoint.
-def collect_probe_results(state, wandb_run, metrics_path, output_dir, best_val_mean_probe_score, best_val_mean_probe_score_step, best_probe_scores, keep_best_checkpoint=True):
+# Rank-0 train.py call: consume probe result JSONs, log metrics, then delete temporary probe checkpoints.
+def collect_probe_results(state, wandb_run, metrics_path):
     state["data"] = json.loads(state["paths"]["state_path"].read_text())
     logged = set(state["data"]["logged_results"])
     for result_path in sorted(state["paths"]["results_dir"].glob("step_*.json")):
@@ -538,14 +537,6 @@ def collect_probe_results(state, wandb_run, metrics_path, output_dir, best_val_m
         result = json.loads(result_path.read_text())
         metrics = {key: float(value) for key, value in result["metrics"].items()}
         checkpoint_path = Path(result["checkpoint_path"])
-        if "mean_probe_score" in metrics:
-            # This best checkpoint is selected by downstream probe score, not validation loss.
-            if metrics["mean_probe_score"] > best_val_mean_probe_score:
-                best_val_mean_probe_score = metrics["mean_probe_score"]
-                best_val_mean_probe_score_step = int(result["train_step"])
-                best_probe_scores = dict(metrics)
-                if keep_best_checkpoint and checkpoint_path.exists():
-                    shutil.copy2(checkpoint_path, output_dir / "best_mean_probe_score.pt")
         if result_path_str in logged:
             continue
         event_payload = {
@@ -573,7 +564,6 @@ def collect_probe_results(state, wandb_run, metrics_path, output_dir, best_val_m
         logged.add(result_path_str)
     state["data"]["logged_results"] = sorted(logged)
     write_probe_state(state)
-    return best_val_mean_probe_score, best_val_mean_probe_score_step, best_probe_scores
 
 
 # Flatten the latest successful probe result into summary.json final_probe_* keys.
