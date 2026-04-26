@@ -3,6 +3,7 @@ project:
   family: leader
   recipe_id: jepa-samplelist30
   output_dir: /data/nanopath/leader/smoke
+  wandb_dir: /data/nanopath/wandb
 
 data:
   sample_list: /block/TCGA/sample_dataset_30.txt
@@ -74,3 +75,12 @@ probe:
     - pcam
   segmentation_datasets:
     - pannuke
+  # Dataset roots are read by probe.py and download_probe_datasets.py. External users should
+  # point these at the directories produced by `python download_probe_datasets.py <this config>`.
+  dataset_roots:
+    bach: /block/eva-data/bach
+    bracs: /block/eva-data/bracs
+    break_his: /block/eva-data/breakhis
+    mhist: /block/eva-data/mhist
+    pcam: /block/eva-data/patch_camelyon
+    pannuke: /block/thunder-data/pannuke

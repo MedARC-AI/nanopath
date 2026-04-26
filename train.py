@@ -170,7 +170,7 @@ def main():
     train_flops = 0
     best_val_total = float("inf")
     output_dir = Path(cfg["project"]["output_dir"])
-    wandb_dir = Path("/data/nanopath/wandb")
+    wandb_dir = Path(cfg["project"]["wandb_dir"])
     slurm_job_id = os.environ.get("SLURM_JOB_ID")
     slurm_stdout_path = os.environ.get("NANOPATH_SLURM_STDOUT")
     slurm_stderr_path = os.environ.get("NANOPATH_SLURM_STDERR")
