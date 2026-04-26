@@ -1,8 +1,11 @@
-# Pretraining entry point. Runs the JEPA + SIGReg loop end-to-end: parse a YAML
+# Pretraining entry point. Runs JEPA + SIGReg loop end-to-end: parse a YAML
 # config (e.g. configs/small.yaml), build the TCGA dataloader, construct the
 # NanoPathFM model and EMA copy, optimize across DDP ranks under torchrun, log
-# to wandb + metrics.jsonl, write a single rolling latest.pt checkpoint, and
-# queue inline downstream probes (probe.py) at evenly spaced FLOP milestones.
+# to wandb + output_dir/metrics.jsonl, optionally write rolling latest.pt
+# checkpoints, and queue downstream probes (probe.py).
+# Researchers changing objectives should start at loss_terms() here and SIGReg
+# in model.py; changing data preprocessing starts in dataloader.py; changing
+# downstream comparisons starts in probe.py.
 # Launch: `torchrun --standalone --nproc_per_node N train.py <config.yaml>`.
 
 import contextlib
@@ -38,53 +41,15 @@ from probe import (
 )
 
 
-torch.multiprocessing.set_sharing_strategy("file_system")
-
 EVAL_KEYS = ("jepa_pred", "sig", "total")
 TRAIN_KEYS = ("jepa_pred", "sig", "total", "proj_std")
 
 
+# Prefix every console line with wall time and job/process id so SLURM logs are easy to scan.
 def console_prefix(): return f"{time.strftime('%H:%M:%S')} {os.environ.get('SLURM_JOB_ID', str(os.getpid()))}"
 
 
-def validate_ema_config(ema_decay, probe_model_weights):
-    if ema_decay < 0.0 or ema_decay >= 1.0:
-        raise ValueError(f"train.ema_decay must be in [0, 1), got {ema_decay}")
-    if probe_model_weights not in {"raw", "ema"}:
-        raise ValueError(f"probe.model_weights must be raw or ema, got {probe_model_weights}")
-    if probe_model_weights == "ema" and ema_decay == 0.0:
-        raise ValueError("probe.model_weights is ema but train.ema_decay is 0")
-
-
-def clone_state_to_device(state, device):
-    return {key: value.detach().to(device).clone() for key, value in state.items()}
-
-
-def clone_state_to_cpu(state):
-    return {key: value.detach().cpu().clone() for key, value in state.items()}
-
-
-def validate_state_keys(label, reference, candidate):
-    if set(reference) != set(candidate):
-        missing = sorted(set(reference) - set(candidate))
-        extra = sorted(set(candidate) - set(reference))
-        raise ValueError(f"{label} state keys do not match model state; missing={missing}, extra={extra}")
-
-
-def update_ema_state(ema_state, model_state, ema_decay):
-    ema_floating = []
-    model_floating = []
-    for key, value in model_state.items():
-        source = value.detach()
-        if torch.is_floating_point(ema_state[key]):
-            ema_floating.append(ema_state[key])
-            model_floating.append(source)
-        else:
-            ema_state[key].copy_(source)
-    torch._foreach_mul_(ema_floating, ema_decay)
-    torch._foreach_add_(ema_floating, model_floating, alpha=1.0 - ema_decay)
-
-
+# Read the YAML recipe and fail before any GPU work if the TCGA sample list is absent.
 def load_config():
     if len(sys.argv) != 2:
         raise ValueError("usage: python train.py <config.yaml>")
@@ -94,12 +59,15 @@ def load_config():
     if not sample_list.exists():
         raise FileNotFoundError(
             f"Pretraining sample list not found at {sample_list}. This is TCGA WSI metadata "
-            f"that we deliberately do NOT auto-download. Obtain it from your internal source "
-            f"and place it at data.sample_list (or change the path in {cfg['config_path']})."
+            f"and slide data that are not downloaded by train.py. Follow the TCGA data setup "
+            f"in README.md, for example `bash download_TCGA.sh /data/TCGA 8`, then set "
+            f"data.sample_list to /data/TCGA/sample_dataset_30.txt or place the file at "
+            f"the configured path in {cfg['config_path']}."
         )
     return cfg
 
 
+# Training objective: JEPA-style view consistency plus SIGReg anti-collapse regularization.
 def loss_terms(sigreg, proj, train_cfg, sigreg_generator, proj_sigreg=None):
     # jepa_pred_loss is the JEPA-style multi-view consistency term on the projector outputs:
     # if global/local views of the same tile disagree, this grows.
@@ -112,6 +80,7 @@ def loss_terms(sigreg, proj, train_cfg, sigreg_generator, proj_sigreg=None):
     return jepa_pred_loss, sig_loss, total_loss
 
 
+# Run a short validation pass with the same objective so optimization curves stay comparable.
 def evaluate(model, sigreg, loader, cfg, device, world_size):
     model.eval()
     train_cfg = cfg["train"]
@@ -120,6 +89,7 @@ def evaluate(model, sigreg, loader, cfg, device, world_size):
     autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if device.type == "cuda" and train_cfg["bf16"] else contextlib.nullcontext()
     eval_generator = torch.Generator(device=device.type)
     eval_generator.manual_seed(train_cfg["seed"])
+    # Validation uses deterministic SIGReg directions so validation loss noise is not seed drift.
     with torch.no_grad():
         for batch in loader:
             with autocast:
@@ -138,6 +108,7 @@ def evaluate(model, sigreg, loader, cfg, device, world_size):
             batches += 1
             if batches >= train_cfg["val_batches"]:
                 break
+    # Every rank validates its shard, then rank-reduced sums recover the global mean loss.
     if world_size > 1:
         tensor = torch.tensor([*losses, batches], device=device)
         dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
@@ -146,12 +117,15 @@ def evaluate(model, sigreg, loader, cfg, device, world_size):
     return {key: value / batches for key, value in zip(EVAL_KEYS, losses)}
 
 
+# Orchestrates one pretraining run: setup, train/eval/probe loop, checkpoint, summary.
 def main():
     cfg = load_config()
     train_cfg = cfg["train"]
     ema_decay = float(train_cfg["ema_decay"])
     probe_model_weights = str(cfg["probe"]["model_weights"])
-    validate_ema_config(ema_decay, probe_model_weights)
+    save_every = train_cfg["save_every"]
+    save_checkpoints = save_every is not None
+    # torchrun sets WORLD_SIZE/RANK/LOCAL_RANK; absence of those variables means local single-process.
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     rank = int(os.environ.get("RANK", "0"))
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
@@ -162,6 +136,7 @@ def main():
         device = torch.device("cuda", local_rank)
     else:
         device = torch.device(train_cfg["device"])
+    # Rank-offset seeds keep DDP workers from sampling identical augmentation streams.
     random.seed(train_cfg["seed"] + rank)
     np.random.seed(train_cfg["seed"] + rank)
     torch.manual_seed(train_cfg["seed"] + rank)
@@ -173,25 +148,12 @@ def main():
         nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(torch.cuda.current_device())
     else:
         nvml_handle = None
+    # NanoPathFM is the encoder/projector; SIGReg is kept separate so objective edits stay local.
     model = NanoPathFM(cfg).to(device)
-    model.sigreg = SIGReg().to(device)
+    sigreg = SIGReg().to(device)
     model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    decay, no_decay = [], []
-    for name, param in model.named_parameters():
-        if not param.requires_grad:
-            continue
-        if param.ndim < 2 or name.endswith("bias") or "norm" in name or "register_tokens" in name:
-            no_decay.append(param)
-        else:
-            decay.append(param)
-    opt = torch.optim.AdamW(
-        [
-            {"params": decay, "weight_decay": train_cfg["weight_decay"]},
-            {"params": no_decay, "weight_decay": 0.0},
-        ],
-        lr=1.0,
-        betas=(0.9, 0.95),
-    )
+    # Optimizer groups live in model.py so weight-decay policy follows model changes.
+    opt = torch.optim.AdamW(model.param_groups(train_cfg["weight_decay"]), lr=1.0, betas=(0.9, 0.95))
     step = 0
     global_batch_size = int(train_cfg["global_batch_size"])
     if global_batch_size % world_size != 0:
@@ -226,6 +188,7 @@ def main():
     resume_path = train_cfg["resume"]
     checkpoint = None
     if resume_path is not None:
+        # Resume restores training progress, optimizer state, best probe state, and wandb identity.
         checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
         model.load_state_dict(checkpoint["model"])
         opt.load_state_dict(checkpoint["opt"])
@@ -251,6 +214,7 @@ def main():
         best_probe_scores = dict(checkpoint["best_probe_scores"])
         wandb_meta = dict(checkpoint["wandb"])
     if rank == 0:
+        # Rank 0 owns external side effects; nonzero ranks only participate in training/eval collectives.
         wandb_init = {
             "project": "nanopath",
             "name": cfg["project"]["name"],
@@ -277,15 +241,17 @@ def main():
         )
         source_artifact = wandb.Artifact(f"nanopath-source-{wandb_run.id}", type="code")
         repo_dir = Path(__file__).resolve().parent
-        for path in sorted({*repo_dir.rglob("*"), *repo_dir.glob(".*")}):
-            if not path.is_file() or any(part in {".git", ".venv", "__pycache__", ".claude"} for part in path.parts):
-                continue
-            source_artifact.add_file(str(path), name=str(path.relative_to(repo_dir)))
+        for root, dirs, files in os.walk(repo_dir):
+            dirs[:] = sorted(d for d in dirs if d not in {".git", ".venv", "__pycache__", ".claude"})
+            for name in sorted(files):
+                path = Path(root) / name
+                source_artifact.add_file(str(path), name=str(path.relative_to(repo_dir)))
         wandb_run.log_artifact(source_artifact)
         wandb_meta = {"project": "nanopath", "id": wandb_run.id, "name": cfg["project"]["name"]}
     else:
         wandb_run = None
     if rank == 0:
+        # Build byte-offset caches once so workers can jump directly to sample-list lines.
         prepare_sample_list_offsets(cfg)
     if distributed:
         dist.barrier()
@@ -293,6 +259,7 @@ def main():
     val_ds = RandomTCGADataset(cfg, cfg["data"]["val_split"])
     probe_state = prepare_probe_state(cfg, output_dir) if rank == 0 and probe_enabled(cfg) else None
 
+    # Wrap datasets in DistributedSampler only when DDP is active; the recipe defines global batch size.
     def make_loader(dataset, shuffle, batch):
         sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=shuffle, drop_last=shuffle) if distributed else None
         return DataLoader(
@@ -310,30 +277,14 @@ def main():
     train_loader = make_loader(train_ds, True, batch_size)
     val_loader = make_loader(val_ds, False, batch_size)
 
-    def shutdown_loader_workers(loader):
-        if train_cfg["num_workers"] == 0:
-            return
-        iterator = loader._iterator
-        if iterator is not None:
-            iterator._shutdown_workers()
-            loader._iterator = None
-
-    def shutdown_data_loaders():
-        # Final probes have their own readers; close pretraining workers before they compete for CPU and IO.
-        shutdown_loader_workers(train_loader)
-        shutdown_loader_workers(val_loader)
-
     if distributed:
         model = DDP(model, device_ids=[local_rank], find_unused_parameters=False)
     root_model = model.module if distributed else model
     model = torch.compile(model, dynamic=False)
+    # EMA is a lightweight target snapshot for probes, not a separate forward path during training.
     model_state = root_model.state_dict()
-    ema_state = clone_state_to_device(model_state, device)
-    if resume_path is not None:
-        if "model_ema" not in checkpoint:
-            raise KeyError(f"resume checkpoint is missing model_ema: {resume_path}")
-        validate_state_keys("model_ema", model_state, checkpoint["model_ema"])
-        ema_state = clone_state_to_device(checkpoint["model_ema"], device)
+    ema_source = checkpoint["model_ema"] if resume_path is not None else model_state
+    ema_state = {k: ema_source[k].detach().to(device).clone() for k in model_state}
     global_patches = (train_cfg["global_size"] // cfg["model"]["patch_size"]) ** 2
     local_patches = (train_cfg["local_size"] // cfg["model"]["patch_size"]) ** 2
     last_time = time.time()
@@ -341,17 +292,14 @@ def main():
     last_visible_patch_presentations = visible_patch_presentations
     last_train_flops = train_flops
     unique_tile_patch_count = (SAMPLE_LIST_PATCH_SIZE // cfg["model"]["patch_size"]) ** 2
-    seen_sample_ids = set()
-    seen_slide_ids = set()
-    seen_patient_ids = set()
-    pending_sample_ids = set()
-    pending_slide_ids = set()
-    pending_patient_ids = set()
+    seen_ids = {"sample": set(), "slide": set(), "patient": set()}
+    pending_ids = {key: set() for key in seen_ids}
 
+    # Full checkpoint payload used for latest.pt resume.
     def checkpoint_payload(next_step):
         return {
-            "model": clone_state_to_cpu(root_model.state_dict()),
-            "model_ema": clone_state_to_cpu(ema_state),
+            "model": {k: v.detach().cpu().clone() for k, v in root_model.state_dict().items()},
+            "model_ema": {k: v.detach().cpu().clone() for k, v in ema_state.items()},
             "opt": opt.state_dict(),
             "step": next_step,
             "best_val_total": best_val_total,
@@ -368,19 +316,20 @@ def main():
             "config": cfg,
         }
 
+    # Smaller probe payload: probe workers only need weights and config, not optimizer state.
     def probe_checkpoint_payload(next_step):
         return {
-            "model": clone_state_to_cpu(root_model.state_dict()),
-            "model_ema": clone_state_to_cpu(ema_state),
+            "model": {k: v.detach().cpu().clone() for k, v in root_model.state_dict().items()},
+            "model_ema": {k: v.detach().cpu().clone() for k, v in ema_state.items()},
             "step": next_step,
             "ema_decay": ema_decay,
             "probe_model_weights": probe_model_weights,
             "config": cfg,
         }
 
+    # Count unique tiles/slides/patients across ranks for data-coverage diagnostics.
     def flush_unique_counts():
-        nonlocal pending_sample_ids, pending_slide_ids, pending_patient_ids
-        payload = {"samples": list(pending_sample_ids), "slides": list(pending_slide_ids), "patients": list(pending_patient_ids)}
+        payload = {key: list(values) for key, values in pending_ids.items()}
         if distributed:
             gathered = [None] * world_size
             dist.all_gather_object(gathered, payload)
@@ -388,30 +337,30 @@ def main():
             gathered = [payload]
         if rank == 0:
             for entry in gathered:
-                seen_sample_ids.update(entry["samples"])
-                seen_slide_ids.update(entry["slides"])
-                seen_patient_ids.update(entry["patients"])
-        pending_sample_ids.clear()
-        pending_slide_ids.clear()
-        pending_patient_ids.clear()
+                for key in seen_ids:
+                    seen_ids[key].update(entry[key])
+        for values in pending_ids.values():
+            values.clear()
         if rank == 0:
-            unique_tiles_seen = len(seen_sample_ids)
+            unique_tiles_seen = len(seen_ids["sample"])
             return {
-                "unique_slides_seen": len(seen_slide_ids),
-                "unique_patients_seen": len(seen_patient_ids),
+                "unique_slides_seen": len(seen_ids["slide"]),
+                "unique_patients_seen": len(seen_ids["patient"]),
                 "unique_tiles_seen": unique_tiles_seen,
                 "unique_patches_seen": unique_tiles_seen * unique_tile_patch_count,
             }
         return None
 
+    # Ingest any completed probe result JSONs and update best probe checkpoint bookkeeping.
     def log_probe_results():
         nonlocal best_val_mean_probe_score, best_val_mean_probe_score_step, best_probe_scores
         if probe_state is None:
             return
         best_val_mean_probe_score, best_val_mean_probe_score_step, best_probe_scores = collect_probe_results(
-            probe_state, wandb_run, metrics_path, output_dir, best_val_mean_probe_score, best_val_mean_probe_score_step, best_probe_scores
+            probe_state, wandb_run, metrics_path, output_dir, best_val_mean_probe_score, best_val_mean_probe_score_step, best_probe_scores, save_checkpoints
         )
 
+    # Record validation losses with an optional event tag such as final_eval.
     def log_val(step_value, val, event=None):
         payload = {"step": step_value, **{f"val_{key}": val[key] for key in EVAL_KEYS}}
         if event is not None:
@@ -427,6 +376,7 @@ def main():
             flush=True,
         )
 
+    # Queue the furthest crossed FLOP milestone so delayed validation does not run stale probes.
     def maybe_run_probe(checkpoint_step):
         nonlocal next_probe_idx
         if probe_state is None or next_probe_idx >= len(probe_targets) or train_flops < probe_targets[next_probe_idx]:
@@ -443,7 +393,7 @@ def main():
         )
         next_probe_idx = target_idx + 1
 
-    if rank == 0 and probe_state is not None:
+    if rank == 0:
         log_probe_results()
     if distributed:
         dist.barrier()
@@ -452,6 +402,7 @@ def main():
     warmup_train_flops = math.ceil(max_train_flops * warmup_flop_fraction)
     warmdown_train_flops = round(max_train_flops * float(train_cfg["warmdown_flop_fraction"]))
     final_lr_frac = float(train_cfg["final_lr_frac"])
+    # Probe targets are FLOP milestones, not step milestones, so comparisons survive batch-size changes.
     probe_targets = []
     next_probe_idx = 0
     if probe_enabled(cfg):
@@ -471,19 +422,12 @@ def main():
                 max_completed_probe_flops = max(completed_probe_flops)
                 next_probe_idx = min(len(probe_targets), sum(target <= max_completed_probe_flops for target in probe_targets))
     train_loop_started_at = time.monotonic()
-    train_loop_wall_seconds = 0.0
     stop_reason = "max_train_flops" if train_flops >= max_train_flops else None
     last_eval_step = step if math.isfinite(best_val_total) else -1
     last_saved_step = step if resume_path is not None else 0
     last_console_step = step
     last_console_monotonic = time.monotonic()
     data_wait_started_at = time.monotonic()
-    train_log_count = 0
-    train_lr_sum = 0.0
-    train_batch_sum = 0.0
-    train_step_time_sum = 0.0
-    train_data_time_sum = 0.0
-    train_loss_sums = {key: 0.0 for key in TRAIN_KEYS}
 
     while stop_reason is None:
         if distributed:
@@ -494,14 +438,16 @@ def main():
             model.train()
             completed_step = step + 1
             should_log = completed_step == 1 or completed_step % train_cfg["log_every"] == 0
-            pending_sample_ids.update(int(x) for x in batch["sample_idx"].tolist())
-            pending_slide_ids.update(int(x) for x in batch["slide_id"].tolist())
-            pending_patient_ids.update(int(x) for x in batch["patient_id"].tolist())
+            # Data identifiers stay on CPU and feed coverage metrics; image tensors move below.
+            for key, batch_key in (("sample", "sample_idx"), ("slide", "slide_id"), ("patient", "patient_id")):
+                pending_ids[key].update(int(x) for x in batch[batch_key].tolist())
             global_views, local_views = [batch[key].to(device, non_blocking=True) for key in ("global_views", "local_views")]
             current_batch = global_views.shape[0]
             global_batch = current_batch * world_size
+            # Training budget is estimated FLOPs from visible patch presentations and trainable params.
             visible_now = global_batch * (train_cfg["global_views"] * global_patches + train_cfg["local_views"] * local_patches)
             step_train_flops = int(6 * model_params * visible_now)
+            # Nanochat-style schedule: linear warmup, flat middle, linear warmdown by FLOPs.
             lr_flops = min(max_train_flops, train_flops + step_train_flops)
             lr_multiplier = min(1.0, lr_flops / warmup_train_flops)
             lr_multiplier = min(lr_multiplier, final_lr_frac + (1.0 - final_lr_frac) * (max_train_flops - lr_flops) / warmdown_train_flops)
@@ -511,9 +457,10 @@ def main():
             sigreg_generator = torch.Generator(device=device.type)
             sigreg_generator.manual_seed(train_cfg["seed"] + step)
             with autocast:
+                # Model returns per-view projector features; loss_terms() defines the pretraining objective.
                 proj = model(global_views, local_views, train_cfg)
                 jepa_pred_loss, sig_loss, total_loss = loss_terms(
-                    root_model.sigreg,
+                    sigreg,
                     proj,
                     train_cfg,
                     sigreg_generator,
@@ -522,6 +469,7 @@ def main():
                 proj_std = proj.float().reshape(-1, proj.shape[-1]).std(dim=0).mean() if should_log else None
             opt.zero_grad(set_to_none=True)
             total_loss.backward()
+            # Gradient norm is both a stability diagnostic and the value used for optional clipping.
             clip_grad_norm = nn.utils.clip_grad_norm_(root_model.parameters(), train_cfg["grad_clip"]) if train_cfg["grad_clip"] > 0 else None
             grad_norm = None
             param_norm = None
@@ -543,13 +491,24 @@ def main():
                 grad_param_ratio = grad_norm / max(param_norm, 1e-12)
                 grad_clip_scale = min(1.0, train_cfg["grad_clip"] / max(grad_norm, 1e-12)) if train_cfg["grad_clip"] > 0 else 1.0
             opt.step()
-            update_ema_state(ema_state, root_model.state_dict(), ema_decay)
+            # EMA mirrors floating-point model tensors and directly copies non-floating buffers.
+            ema_floating, model_floating = [], []
+            for key, value in root_model.state_dict().items():
+                source = value.detach()
+                if torch.is_floating_point(ema_state[key]):
+                    ema_floating.append(ema_state[key])
+                    model_floating.append(source)
+                else:
+                    ema_state[key].copy_(source)
+            torch._foreach_mul_(ema_floating, ema_decay)
+            torch._foreach_add_(ema_floating, model_floating, alpha=1.0 - ema_decay)
             step_seconds = time.monotonic() - batch_started_at
             examples_seen += global_batch
             visible_patch_presentations += visible_now
             train_flops += step_train_flops
             reduced = None
             if should_log:
+                # Average scalar training losses across ranks so rank 0 logs global batch behavior.
                 if distributed:
                     reduced = torch.tensor(
                         [
@@ -590,14 +549,7 @@ def main():
                 total_steps_estimate = completed_step + steps_remaining
                 eta_seconds = int(max(0.0, steps_remaining * console_gap_ms / 1000.0 / steps_since_console))
                 eta_string = f"{eta_seconds // 3600}:{(eta_seconds % 3600) // 60:02d}:{eta_seconds % 60:02d}"
-                train_log_count += 1
                 current_lr = opt.param_groups[0]["lr"]
-                train_lr_sum += current_lr
-                train_batch_sum += float(batch_size)
-                train_step_time_sum += step_seconds
-                train_data_time_sum += data_seconds
-                for key in TRAIN_KEYS:
-                    train_loss_sums[key] += float(reduced[key])
                 train_log = {
                     "step": completed_step,
                     **reduced,
@@ -621,28 +573,23 @@ def main():
                     "gpu_util_pct": gpu_util_pct,
                     "gpu_mem_gb": gpu_mem_gb,
                     "gpu_peak_mem_gb": gpu_peak_mem_gb,
+                    "grad_norm": grad_norm,
+                    "param_norm": param_norm,
+                    "grad_param_ratio": grad_param_ratio,
+                    "grad_clip_scale": grad_clip_scale,
                 }
-                train_log.update(
-                    {
-                        "grad_norm": grad_norm,
-                        "param_norm": param_norm,
-                        "grad_param_ratio": grad_param_ratio,
-                        "grad_clip_scale": grad_clip_scale,
-                    }
-                )
                 train_log.update(unique_counts)
                 print(
                     f"{console_prefix()} Training  "
                     f"[{completed_step}/{total_steps_estimate}]  eta: {eta_string}  gap: {console_gap_ms:.2f} ms  "
-                    f"lr: {current_lr:.6f} ({train_lr_sum / train_log_count:.6f})  lrm: {lr_multiplier:.4f}  "
-                    f"current_batch_size: {batch_size:.4f} ({train_batch_sum / train_log_count:.4f})  "
-                    f"total_loss: {reduced['total']:.4f} ({train_loss_sums['total'] / train_log_count:.4f})  "
-                    f"jepa_pred_loss: {reduced['jepa_pred']:.4f} ({train_loss_sums['jepa_pred'] / train_log_count:.4f})  "
-                    f"sig_loss: {reduced['sig']:.4f} ({train_loss_sums['sig'] / train_log_count:.4f})  "
-                    f"proj_std: {reduced['proj_std']:.4f} ({train_loss_sums['proj_std'] / train_log_count:.4f})  "
+                    f"lr: {current_lr:.6f}  lrm: {lr_multiplier:.4f}  "
+                    f"current_batch_size: {batch_size}  "
+                    f"total_loss: {reduced['total']:.4f}  "
+                    f"jepa_pred_loss: {reduced['jepa_pred']:.4f}  "
+                    f"sig_loss: {reduced['sig']:.4f}  "
+                    f"proj_std: {reduced['proj_std']:.4f}  "
                     f"grad_norm: {grad_norm:.4f}  flops/s: {flops_per_sec:.3e}  gpu: {gpu_util_pct:.0f}  "
-                    f"time: {step_seconds:.6f} ({train_step_time_sum / train_log_count:.6f})  "
-                    f"data: {data_seconds:.6f} ({train_data_time_sum / train_log_count:.6f})  "
+                    f"time: {step_seconds:.6f}  data: {data_seconds:.6f}  "
                     f"max mem: {int(gpu_peak_mem_gb * 1024)}",
                     flush=True,
                 )
@@ -658,25 +605,24 @@ def main():
                     },
                     step=completed_step,
                 )
-                if probe_state is not None:
-                    log_probe_results()
+                log_probe_results()
                 if device.type == "cuda":
                     torch.cuda.reset_peak_memory_stats(device)
             if completed_step % train_cfg["eval_every"] == 0:
+                # Validation is also the synchronization point for probe milestones.
                 if rank == 0:
                     print(f"{console_prefix()} Validation  [{completed_step}]  start", flush=True)
-                val = evaluate(model, root_model.sigreg, val_loader, cfg, device, world_size)
+                val = evaluate(model, sigreg, val_loader, cfg, device, world_size)
                 if val["total"] < best_val_total:
                     best_val_total = val["total"]
                 last_eval_step = completed_step
                 if rank == 0:
                     log_val(completed_step, val)
                     maybe_run_probe(completed_step)
-                    if probe_state is not None:
-                        log_probe_results()
+                    log_probe_results()
                 if distributed:
                     dist.barrier()
-            if rank == 0 and completed_step % train_cfg["save_every"] == 0:
+            if rank == 0 and save_checkpoints and completed_step % save_every == 0:
                 print(f"{console_prefix()} Checkpoint  [{completed_step}]  save: latest.pt", flush=True)
                 torch.save(checkpoint_payload(completed_step), latest_checkpoint_path)
                 for stale_checkpoint_path in output_dir.glob("step_*.pt"):
@@ -688,38 +634,41 @@ def main():
             if train_flops >= max_train_flops:
                 stop_reason = "max_train_flops"
                 break
-            if stop_reason is not None:
-                break
     train_loop_wall_seconds = time.monotonic() - train_loop_started_at
     final_unique_counts = flush_unique_counts()
     if distributed:
         dist.barrier()
     if step > 0 and last_eval_step != step:
+        # Always end on a validation/probe opportunity so summary.json reflects final weights.
         if rank == 0:
             print(f"{console_prefix()} Validation  [{step}]  start final_eval", flush=True)
-        val = evaluate(model, root_model.sigreg, val_loader, cfg, device, world_size)
+        val = evaluate(model, sigreg, val_loader, cfg, device, world_size)
         if val["total"] < best_val_total:
             best_val_total = val["total"]
         last_eval_step = step
-        shutdown_data_loaders()
+        # Final probes have their own readers; close pretraining workers before they compete for CPU and IO.
+        if train_cfg["num_workers"] > 0:
+            for loader in (train_loader, val_loader):
+                if loader._iterator is not None:
+                    loader._iterator._shutdown_workers()
+                    loader._iterator = None
         if rank == 0:
             log_val(step, val, "final_eval")
             maybe_run_probe(step)
-            if probe_state is not None:
-                log_probe_results()
+            log_probe_results()
         if distributed:
             dist.barrier()
     if not math.isfinite(best_val_total):
         raise ValueError("run finished without a finite best_val_total; check max_train_flops, eval_every, validation data, and loss stability")
     if rank == 0:
-        if probe_state is not None:
-            log_probe_results()
-        if step > 0 and step != last_saved_step:
+        log_probe_results()
+        if save_checkpoints and step > 0 and step != last_saved_step:
             print(f"{console_prefix()} Checkpoint  [{step}]  save: latest.pt", flush=True)
             torch.save(checkpoint_payload(step), latest_checkpoint_path)
             for stale_checkpoint_path in output_dir.glob("step_*.pt"):
                 stale_checkpoint_path.unlink()
             last_saved_step = step
+        # Summary is the small, stable artifact downstream scripts and humans compare across runs.
         summary = {
             "project": cfg["project"]["name"],
             "family": cfg["project"]["family"],
@@ -763,8 +712,8 @@ def main():
             f"final_probe_score: {summary.get('final_probe_score')}",
             flush=True,
         )
-        for key, value in summary.items():
-            wandb_run.summary[key] = value
+        for key in summary.keys() - {"best_val_total", *best_probe_scores}:
+            wandb_run.summary[key] = summary[key]
         wandb_run.finish()
     if distributed:
         dist.destroy_process_group()

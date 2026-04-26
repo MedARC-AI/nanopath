@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=jepa-baseline
+#SBATCH --job-name=baseline_4gpus
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-task=4
@@ -8,7 +8,7 @@
 #SBATCH --error=/data/nanopath/slurm/%j.err
 #SBATCH --partition=n
 #SBATCH --account=sophont
-#SBATCH --qos=top # low | normal | top
+#SBATCH --qos=normal # low | normal | top
 
 set -euo pipefail
 

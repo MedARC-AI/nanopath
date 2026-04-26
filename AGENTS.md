@@ -11,21 +11,22 @@ Before changing code:
 
 Coding guidelines:
 - Use flat organization: as few folders, files, and lines of code as possible; functional elegance is the goal. If you make revisions where there are over a dozen new lines of code I am going to be highly skeptical you really tried your best to adhere to this guideline. A great revision should LOWER the total lines of code, not increase it. Don't play smart by opening subprocesses or other hacks to get around this limitation.
+- Commenting is the exception to the line-count preference: add concise comments explaining "how and why" for functions and important (i.e., not plotting/logging) code blocks.
 - Do not add defensive `try`/`except` blocks or fallbacks. If something is wrong, it should fail loudly. Don't bother with ValueError raises or other code guards.
 - Prefer hard-coded constants over extra environment variables, modular options, or fallback paths, unless the value is meant to be frequently tuned.
 - Prefer native PyTorch over Accelerate, Lightning, etc. Multi-GPU should use PyTorch DDP.
 - Do not use `argparse`. Meaningful tunables should live in YAML config files, e.g. `cfg.train.lr`; if YAML does not define a variable used by a training script, it is fine for that to error. Only put variables in YAML when they are actually meant to be tuned often; otherwise hard-code them.
 - Avoid tiny helper functions/classes that are only a handful of lines. Put the code directly where it is used.
 - Follow `/admin/home/paul/papers/repos/nanochat` as the model for a clean minimalist codebase, especially `train.py` and `model.py`.
-- Do not create new files unless explicitly asked or truly necessary; prefer improving existing files.
+- Do not create new files unless explicitly asked or truly necessary; prefer improving existing files. If you do create a new file, add a few commented out lines of code to the top of it to explain its purpose.
 - If code changes make comments, docs, configs, or scripts inaccurate, update those too.
 
 Experiment and benchmark discipline:
 - Validate opinions experimentally whenever feasible. Run code, tests, probes, or short jobs that directly support the conclusion.
 - Use downstream probing as the main comparison signal because objectives like JEPA, MAE, DINO, and iBOT may not have comparable validation losses.
-- Treat mean-F1 probe results as noisy. An improvement should only actually be considered an improvement mean-F1 improves over .02, anything less is within random variance.
+- An improvement should only actually be considered an improvement mean_probe_score improves over .01, anything less is within random variance.
 - Keep recipe/model comparisons on equal reported training FLOPs unless deliberately changing the benchmark protocol.
-- Use wandb for logging, plotting, and utilization monitoring throughout pretraining. Log all metrics needed to validate training behavior, including gradient norm.
+- Use wandb for logging, plotting, and utilization monitoring throughout pretraining. Log all metrics needed to validate training behavior (i.e., gradient norm).
 - Aim for >80% GPU utilization during GPU runs; investigate and remedy code when utilization is poor.
 
 Cluster and storage:
