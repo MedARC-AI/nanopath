@@ -16,7 +16,8 @@ Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:
 git clone https://github.com/MedARC-AI/nanopath.git && cd nanopath
 uv sync && source .venv/bin/activate
 wandb login
-python train.py configs/smoke.yaml
+sbatch submit/train_1gpu.sbatch configs/smoke.yaml
+# or directly: python train.py configs/smoke.yaml
 ```
 
 If you are a MedARC volunteer using our shared cluster, the above steps should work as-is. If you are using your own compute, you'll also need to download the TCGA pretraining data and the downstream probe datasets. See Data section of this README for instructions.
