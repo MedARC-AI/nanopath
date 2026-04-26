@@ -2,7 +2,7 @@
 
 ![nanopath logo](nanopath_logo.png)
 
-`nanopath` is a simple experimental harness for training computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). It is designed to run on a single GPU (but can also be run with multi-gpu if you want faster, identical results), the code is minimal/hackable, and covers the full pretraining-from-scratch pipeline using the public TCGA dataset (12k WSIs) and built-in probe evals from the [Thunder benchmark](https://mics-lab.github.io/thunder/).
+`nanopath` is a simple experimental harness for training tile-level computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). It is designed to run on a single GPU (but can also be run with multi-gpu if you want faster, identical results), the code is minimal/hackable, and covers the full pretraining-from-scratch pipeline using the public TCGA dataset (12k WSIs) and built-in probe evals from the [Thunder benchmark](https://mics-lab.github.io/thunder/).
 
 The current leaderboard winner uses a LeJEPA-style training objective: pull the projector outputs of all global and local crops of an image toward their per-sample mean (multi-view consistency), regularized by SIGReg to prevent representational collapse. An EMA copy of the backbone is maintained alongside training and used only as the weights the downstream probes read from. The reference recipe (`configs/leader.yaml`) takes ~4 h on one H100 or ~1.25 h on 4×H100, then runs all six probes inline in the same job.
 
@@ -35,14 +35,14 @@ Score is final `mean_probe_score`: unweighted mean of standard classification pr
 
 ### How to submit to leaderboard
 
-The checked-in `configs/leader.yaml` is the reference leaderboard recipe. To get on the leaderboard you must run that config end-to-end and outperform the existing top leaderboard `mean_probe_score` by at least 0.01. If you do so, contact [@PaulScotti](https://github.com/PaulScotti) and share your code with him; he will train a new model using your code but with a different rng seed. If it still improves `mean_probe_score` by at least 0.01, you should open a PR to this repo (please keep only the minimal necessary code changes that improve performance) and a description of your changes. Paul will update the README & leaderboard accordingly.
+The checked-in `configs/leader.yaml` is the top performing leaderboard recipe. To get on the leaderboard you must run that config end-to-end and outperform the existing top leaderboard `mean_probe_score` by at least 0.01. If you do so, contact [@PaulScotti](https://github.com/PaulScotti) and share your code with him; he will train a new model using your code but with a different rng seed. If it still improves `mean_probe_score` by at least 0.01, you should open a PR to this repo (please keep only the minimal necessary code changes that improve performance) and a description of your changes. Paul will update the README & leaderboard accordingly.
 
 ### What you must NOT change for a leaderboard submission
 
 To keep entries comparable, the following are fixed across all submissions. Anything else (model architecture, training objective, optimizer, schedule shape, augmentation policy, EMA decay, masking, predictor design, dataset curation, etc.) is fair game.
 
 **Compute budget**
-- `train.max_train_flops` (1e18). The FLOP budget *is* the spend; you can't buy a higher score with more compute.
+- `train.max_train_flops` (1e18). Compute budget is fixed to facilitate direct comparisons across training approaches; you can't buy higher score with more compute.
 
 **Activated parameter count**
 - **≤150M activated backbone params**, where "backbone" is everything in `NanoPathFM` except `self.projector` (the projector is pretraining-only scaffolding and is discarded for downstream probes).
