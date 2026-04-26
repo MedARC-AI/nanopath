@@ -62,11 +62,12 @@ To keep entries comparable, the following are fixed across all submissions. Anyt
 - `train.py` — the main pretraining loop (DDP via torchrun, JEPA + SIGReg, EMA, probe dispatch, wandb logging).
 - `model.py` — `NanoPathFM` ViT backbone. Hack here for new model architectures / training objectives.
 - `dataloader.py` — TCGA sample-list streaming loader. Hack here for data preprocessing / curation changes.
+- `configs/leader.yaml` — the leaderboard recipe (model shape, optimizer, schedule, augmentations, probe config). Hack here for hyperparameter and recipe tweaks; this is the file your submission edits.
 
 ### Helper files
 - `AGENTS.md` — guidelines for AI assistants and human contributors: design philosophy (minimal/hackable, nanochat-flavored), coding rules, experiment discipline, and cluster/storage conventions. Note some language is specific to the MedARC cluster.
+- `configs/smoke.yaml` — ~8 min sanity-check recipe; validates the full train+probe path without committing to a full run.
 - `probe.py` — downstream probes (KNN, few shot, linear, segmentation).
-- `configs/{smoke,leader}.yaml` — smoke is the ~8 min sanity run; leader is the leaderboard recipe.
 - `submit/train_{1,4}gpu.sbatch` — SLURM launchers.
 - `seg_head.py` — `MaskTransformer` + `multiclass_dice_loss` (used by `probe.py`'s pannuke segmentation), vendored by Thunder.
 - `download_probe_datasets.py` — auto-downloads the six probe datasets if missing.
