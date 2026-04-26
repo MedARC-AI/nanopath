@@ -46,14 +46,10 @@ KNN_K_VALS = [1, 3, 5, 10, 20, 30, 40, 50]
 KNN_CHUNK_SIZE = 4096
 CLASSIFICATION_DATASETS = ["bach", "bracs", "break_his", "mhist", "pcam"]
 SEGMENTATION_DATASETS = ["pannuke"]
-DATASET_ROOTS = {
-    "bach": Path("/block/eva-data/bach"),
-    "bracs": Path("/block/eva-data/bracs"),
-    "break_his": Path("/block/eva-data/breakhis"),
-    "mhist": Path("/block/eva-data/mhist"),
-    "pcam": Path("/block/eva-data/patch_camelyon"),
-    "pannuke": Path("/block/thunder-data/pannuke"),
-}
+# Module-level so ClassificationDataset / inline_pannuke_jaccard can read it without threading
+# cfg through every call. Populated from cfg.probe.dataset_roots by prepare_probe_state() (main
+# process) and run_probe_job() (subprocess); also by download_probe_datasets.py at fetch time.
+DATASET_ROOTS = {}
 
 
 # Prefix probe logs with the same timestamp/job id format as train.py.
@@ -83,6 +79,8 @@ def write_probe_state(state):
 
 # Validate probe recipe compatibility and initialize the on-disk result tracker.
 def prepare_probe_state(cfg, output_dir):
+    DATASET_ROOTS.clear()
+    DATASET_ROOTS.update({k: Path(v) for k, v in cfg["probe"]["dataset_roots"].items()})
     paths = probe_paths(output_dir)
     for path in [paths["probe_dir"], paths["results_dir"]]:
         path.mkdir(parents=True, exist_ok=True)
@@ -426,6 +424,8 @@ def run_probe_job(request_path):
     )
     checkpoint = torch.load(request["checkpoint_path"], map_location="cpu", weights_only=False)
     cfg = checkpoint["config"]
+    DATASET_ROOTS.clear()
+    DATASET_ROOTS.update({k: Path(v) for k, v in cfg["probe"]["dataset_roots"].items()})
     # Recipes can compare raw weights or EMA weights without changing probe code.
     state_key = {"ema": "model_ema", "raw": "model"}[str(cfg["probe"]["model_weights"])]
     model_state = checkpoint[state_key]

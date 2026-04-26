@@ -1,12 +1,12 @@
-# Auto-download for the downstream probe datasets in DATASET_ROOTS. TCGA
-# pretraining data is handled separately by download_TCGA.sh because it is a
-# multi-TB WSI download. URLs and unpack steps are vendored from
-# https://github.com/MedARC-AI/thunder/tree/main/src/thunder/datasets/dataset/*.py
-# so we don't take Thunder on as a runtime dependency.
+# Auto-download for the downstream probe datasets. Reads target paths from
+# cfg.probe.dataset_roots in the config you pass. TCGA pretraining data is handled separately
+# by download_TCGA.sh because it is a multi-TB WSI download. URLs and unpack steps are vendored
+# from https://github.com/MedARC-AI/thunder/tree/main/src/thunder/datasets/dataset/*.py so we
+# don't take Thunder on as a runtime dependency.
 #
 # Usage:
-#   python download_probe_datasets.py            # download all missing probe datasets
-#   python download_probe_datasets.py pcam bach  # only the named ones
+#   python download_probe_datasets.py configs/leader.yaml            # all missing datasets
+#   python download_probe_datasets.py configs/leader.yaml pcam bach  # only the named ones
 
 import gzip
 import shutil
@@ -15,10 +15,9 @@ import sys
 from pathlib import Path
 
 import requests
+import yaml
 
 from probe import DATASET_ROOTS
-
-TCGA_SAMPLE_LIST = Path("/block/TCGA/sample_dataset_30.txt")
 
 
 # Stream a URL to disk in chunks so large probe archives do not sit in memory.
@@ -105,9 +104,14 @@ DOWNLOADERS = {
 }
 
 
-# CLI entry point: download all missing probe datasets or only names passed on the command line.
+# CLI entry point: read dataset_roots from the given config, then download all missing
+# probe datasets (or only the names passed after the config path).
 def main():
-    targets = sys.argv[1:] or DOWNLOADERS
+    if len(sys.argv) < 2 or not sys.argv[1].endswith((".yaml", ".yml")):
+        raise SystemExit("usage: python download_probe_datasets.py <config.yaml> [dataset ...]")
+    cfg = yaml.safe_load(Path(sys.argv[1]).read_text())
+    DATASET_ROOTS.update({k: Path(v) for k, v in cfg["probe"]["dataset_roots"].items()})
+    targets = sys.argv[2:] or DOWNLOADERS
     for dataset in targets:
         root = DATASET_ROOTS[dataset]
         if root.exists() and any(root.iterdir()):
@@ -117,15 +121,6 @@ def main():
         root.mkdir(parents=True, exist_ok=True)
         DOWNLOADERS[dataset](root)
         print(f"[done] {dataset}", flush=True)
-    if not TCGA_SAMPLE_LIST.exists():
-        print(
-            f"\n[warn] TCGA pretraining sample list missing at {TCGA_SAMPLE_LIST}.\n"
-            "       Probe datasets are handled here, but TCGA pretraining data is not.\n"
-            "       Follow README.md and run `bash download_TCGA.sh /data/TCGA 8`,\n"
-            "       then point data.sample_list at /data/TCGA/sample_dataset_30.txt\n"
-            "       or place the file at the configured path before pretraining.",
-            flush=True,
-        )
 
 
 if __name__ == "__main__":

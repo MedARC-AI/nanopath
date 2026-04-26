@@ -4,7 +4,7 @@
 
 `nanopath` is a simple experimental harness for training computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). It is designed to run on a single GPU (but can also be run with multi-gpu if you want faster, identical results), the code is minimal/hackable, and covers the full pretraining-from-scratch pipeline using the public TCGA dataset (12k WSIs) and built-in probe evals from the [Thunder benchmark](https://mics-lab.github.io/thunder/).
 
-The current leaderboard winner uses LeJEPA training objective: the student predicts EMA-target patch embeddings under a different mask, regularized by SIGReg to prevent collapse. The reference recipe (`configs/leader.yaml`) takes ~4 h on one H100 or ~1.25 h on 4×H100, then runs all six probes inline in the same job.
+The current leaderboard winner uses a LeJEPA-style training objective: pull the projector outputs of all global and local crops of an image toward their per-sample mean (multi-view consistency), regularized by SIGReg to prevent representational collapse. An EMA copy of the backbone is maintained alongside training and used only as the weights the downstream probes read from. The reference recipe (`configs/leader.yaml`) takes ~4 h on one H100 or ~1.25 h on 4×H100, then runs all six probes inline in the same job.
 
 **Want to get involved? Join us in the [MedARC Discord](https://discord.gg/tVR4TWnRM9) (find us in #path-fm)!**
 
@@ -20,6 +20,8 @@ python train.py configs/smoke.yaml
 ```
 
 If you are a MedARC volunteer using our shared cluster, the above steps should work as-is. If you are using your own compute, you'll also need to download the TCGA pretraining data and the downstream probe datasets. See Data section of this README for instructions.
+
+`pyproject.toml` pins `torch` / `torchvision` against the CUDA 12.9 wheel index. If your GPU/driver needs a different CUDA build (e.g. cu118 for older A100/V100 setups), edit the `torch` and `torchvision` lines in `pyproject.toml` before `uv sync`.
 
 A successful smoke prints periodic train/val lines, logs to wandb, and ends with final summary in `metrics.jsonl`. Probe scores will be near-random since smoke is undertrained; the goal is just to confirm everything wires up. The full `configs/leader.yaml` should land near the leaderboard's ~0.52 `mean_probe_score`; for context, a randomly initialized backbone scores roughly ~0.2.
 
@@ -37,7 +39,7 @@ The checked-in `configs/leader.yaml` is the reference leaderboard recipe. To get
 
 ### What you must NOT change for a leaderboard submission
 
-To keep entries comparable, the following are fixed across all submissions. Anything else (model architecture, training objective, optimizer, schedule shape, augmentations, EMA decay, masking, predictor design, dataset curation, etc.) is fair game.
+To keep entries comparable, the following are fixed across all submissions. Anything else (model architecture, training objective, optimizer, schedule shape, augmentation policy, EMA decay, masking, predictor design, dataset curation, etc.) is fair game.
 
 **Compute budget**
 - `train.max_train_flops` (1e18). The FLOP budget *is* the spend; you can't buy a higher score with more compute.
@@ -61,12 +63,11 @@ To keep entries comparable, the following are fixed across all submissions. Anyt
 ### Primary files meant to be hacked
 - `train.py` — the main pretraining loop (DDP via torchrun, JEPA + SIGReg, EMA, probe dispatch, wandb logging).
 - `model.py` — `NanoPathFM` ViT backbone. Hack here for new model architectures / training objectives.
-- `dataloader.py` — TCGA sample-list streaming loader. Hack here for data preprocessing / curation changes.
-- `configs/leader.yaml` — the leaderboard recipe (model shape, optimizer, schedule, augmentations, probe config). Hack here for hyperparameter and recipe tweaks; this is the file your submission edits.
+- `dataloader.py` — TCGA sample-list streaming loader and augmentation stack. Hack here for crop/color/HED augmentation, preprocessing, or data curation changes.
+- `configs/{smoke,leader}.yaml` — recipes (model shape, optimizer, schedule, augmentation knobs, probe config).
 
 ### Helper files
 - `AGENTS.md` — guidelines for AI assistants and human contributors: design philosophy (minimal/hackable, nanochat-flavored), coding rules, experiment discipline, and cluster/storage conventions. Note some language is specific to the MedARC cluster.
-- `configs/smoke.yaml` — ~8 min sanity-check recipe; validates the full train+probe path without committing to a full run.
 - `probe.py` — downstream probes (KNN, few shot, linear, segmentation).
 - `submit/train_{1,4}gpu.sbatch` — SLURM launchers.
 - `seg_head.py` — `MaskTransformer` + `multiclass_dice_loss` (used by `probe.py`'s pannuke segmentation), vendored by Thunder.
@@ -101,7 +102,7 @@ To keep entries comparable, the following are fixed across all submissions. Anyt
 
   `train.py` errors before training if the configured sample list is missing, and the dataloader errors with the same setup guidance if a listed SVS file is missing.
 - **Probe datasets** (bach / bracs / break_his / mhist / pcam / pannuke):
-  `python download_probe_datasets.py` pulls each one to its `DATASET_ROOTS[...]` path if not already present. mhist requires a one-time form access; the script prints instructions. break_his requires Kaggle credentials.
+  `python download_probe_datasets.py configs/leader.yaml` pulls each one to the path given in `probe.dataset_roots` if not already present. Off-cluster, edit `probe.dataset_roots` in the config to point at writable directories before running. mhist requires a one-time form access (the script prints instructions); break_his requires Kaggle credentials in `~/.kaggle/kaggle.json`.
 
 ## Running
 

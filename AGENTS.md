@@ -17,7 +17,7 @@ Coding guidelines:
 - Prefer native PyTorch over Accelerate, Lightning, etc. Multi-GPU should use PyTorch DDP.
 - Do not use `argparse`. Meaningful tunables should live in YAML config files, e.g. `cfg.train.lr`; if YAML does not define a variable used by a training script, it is fine for that to error. Only put variables in YAML when they are actually meant to be tuned often; otherwise hard-code them.
 - Avoid tiny helper functions/classes that are only a handful of lines. Put the code directly where it is used.
-- Follow `/admin/home/paul/papers/repos/nanochat` as the model for a clean minimalist codebase, especially `train.py` and `model.py`.
+- Follow [nanochat](https://github.com/karpathy/nanochat) as the model for a clean minimalist codebase, especially `train.py` and `model.py`.
 - Do not create new files unless explicitly asked or truly necessary; prefer improving existing files. If you do create a new file, add a few commented out lines of code to the top of it to explain its purpose.
 - If code changes make comments, docs, configs, or scripts inaccurate, update those too.
 
