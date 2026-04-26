@@ -1,6 +1,9 @@
-# Vendored Thunder pieces used by the inline pannuke segmentation probe.
-# Sourced verbatim (with drop_path/dropout/einops dependencies inlined) from
-# thunder/src/thunder/models/task_specific_models.py and thunder/src/thunder/utils/dice_loss.py.
+# Vendored pieces from the Thunder benchmarking repo, used only by probe.py's
+# pannuke segmentation probe: a MaskTransformer decoder head and a multiclass
+# dice loss. Copied verbatim (with drop_path / dropout / einops dependencies
+# inlined) from thunder/src/thunder/models/task_specific_models.py and
+# thunder/src/thunder/utils/dice_loss.py — see /admin/home/paul/thunder. Kept
+# vendored so we don't take Thunder on as a runtime dependency.
 
 import torch
 import torch.nn as nn

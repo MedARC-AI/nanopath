@@ -12,7 +12,10 @@
 
 set -euo pipefail
 
-# Full-node launcher; with global_batch_size=128 each rank sees 16 samples.
+# Full-node SLURM launcher: torchrun on all 8 GPUs, defaults to the 8-GPU
+# config (configs/small_8gpu.yaml) which scales global_batch_size so each rank
+# sees 16 samples. Pass a different YAML as the first arg to override.
+# Logs land in /data/nanopath/slurm/<jobid>.{out,err}.
 CONFIG_FILE="${1:-/admin/home/paul/nanopath/configs/small_8gpu.yaml}"
 NPROC_PER_NODE=8
 

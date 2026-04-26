@@ -12,7 +12,10 @@
 
 set -euo pipefail
 
-# Default launcher for the checked-in small JEPA screen.
+# Single-node SLURM launcher: torchrun on NPROC_PER_NODE GPUs, optional first
+# arg overrides the YAML config (defaults to configs/small.yaml). Adjust
+# NPROC_PER_NODE and the #SBATCH resource lines above to scale up or down.
+# Logs land in /data/nanopath/slurm/<jobid>.{out,err}.
 CONFIG_FILE="${1:-/admin/home/paul/nanopath/configs/small.yaml}"
 NPROC_PER_NODE=4
 

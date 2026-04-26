@@ -1,8 +1,9 @@
-# This file defines the model pieces used during pretraining.
-# The backbone is a compact ViT with register tokens and RoPE so one encoder can serve
-# JEPA view encoding and downstream probes without any auxiliary reconstruction objective.
-# The whole stack stays in native PyTorch so the code is easy to reason about, scale with
-# DDP, and change after small-run ablations.
+# NanoPathFM: the encoder used both for pretraining and for downstream probes.
+# Compact ViT with register tokens and 2D RoPE (no abs-pos, no CLS), a small
+# MLP projector head, and SIGReg — a sliced characteristic-function regularizer
+# applied to the projected register tokens to discourage representational
+# collapse. encode_views() drives the JEPA objective in train.py;
+# probe_features() returns the same register pooling for probe.py.
 
 import math
 

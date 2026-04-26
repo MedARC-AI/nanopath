@@ -1,9 +1,9 @@
-# This file is the TCGA input path for pretraining.
-# It reads the same OpenMidnight-style sample list used to choose TCGA patches,
-# builds cached train/val line-offset indices from that list by hashing TCGA patient IDs,
-# opens WSIs with lazyslide, and turns each listed patch into the JEPA global/local views.
-# The patch source is therefore fixed by `/block/TCGA/sample_dataset_30.txt`, while the
-# multi-view augmentation stack remains specific to this repo rather than copying OpenMidnight.
+# TCGA pretraining input pipeline. Reads the OpenMidnight-style sample list at
+# data.sample_list (one WSI patch per line: slide_path x y level), assigns each
+# patient deterministically to train or val by hashing the patient id, caches
+# byte offsets per split, opens slides lazily with lazyslide (LRU per worker),
+# and emits the JEPA global+local view stacks with ColorJitter + optional
+# HED jitter. The augmentation stack lives here, not in configs, on purpose.
 
 import hashlib
 import json
