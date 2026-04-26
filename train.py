@@ -152,7 +152,10 @@ def main():
     model = NanoPathFM(cfg).to(device)
     sigreg = SIGReg().to(device)
     model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    # Leaderboard cap is on activated backbone params only (excludes the pretraining-only projector head, which probes don't read). MoE contributors must edit this to count per-token activated params.
+    # Excludes the projector head because downstream probes read pre-projector pooled registers,
+    # so the projector is pretraining-only scaffolding and shouldn't count toward the leaderboard
+    # size cap. The sum below is exact for dense models; MoE / sparse-routing contributors must
+    # rewrite it to count per-token activated params.
     backbone_activated_params = sum(p.numel() for n, p in model.named_parameters() if p.requires_grad and not n.startswith("projector."))
     # Optimizer groups live in model.py so weight-decay policy follows model changes.
     opt = torch.optim.AdamW(model.param_groups(train_cfg["weight_decay"]), lr=1.0, betas=(0.9, 0.95))

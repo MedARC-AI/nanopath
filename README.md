@@ -41,9 +41,9 @@ To keep entries comparable, the following are fixed across all submissions. Anyt
 - `train.max_train_flops` (1e18). The FLOP budget *is* the spend; you can't buy a higher score with more compute.
 
 **Activated parameter count**
-- ≤ **150 M activated backbone params**, where "backbone" is everything in `NanoPathFM` except `self.projector` (the projector is pretraining-only scaffolding and is discarded for downstream probes). This keeps the leaderboard accessible to volunteers on a single consumer GPU; without it, scaling the model up under a fixed FLOP cap is the obvious cheat. The current leader is 142.28 M, so there is ~5% headroom for arch-shape experiments — `dim`, `depth`, `heads`, MLP variants, etc. are all open as long as the cap holds.
-- For MoE / sparse architectures, count parameters touched on a single token's forward pass (e.g. `non_routed + (k/N) * total_expert_params` for top-k-of-N routing). Edit the inline computation in `train.py` accordingly and document the calculation in your PR.
-- `train.py` writes `backbone_activated_params` to `summary.json` and `wandb.summary` so PR review can verify the cap without re-running.
+- **≤150M activated backbone params**, where "backbone" is everything in `NanoPathFM` except `self.projector` (the projector is pretraining-only scaffolding and is discarded for downstream probes).
+- For MoE / sparse architecture explorations, count parameters touched on a single token's forward pass.
+- `train.py` already computes `backbone_activated_params` for easy verification.
 
 **TCGA pretraining**
 - TCGA (12K WSIs) is the only dataset allowed for pretraining, but you are free to revise how we select the tiles used for training.

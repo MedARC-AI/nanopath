@@ -1,3 +1,51 @@
-.venv/
+# Python build / cache
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# uv / virtualenvs
+.venv/
+venv/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# AI agent scratch (Claude Code worktrees, Codex, Cursor, Aider, Copilot, Cline, Continue)
+.claude/
+.codex/
+.cursor/
+.aider*
+.copilot/
+.cline/
+.continue/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Local env / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Local run artifacts that should never end up in the repo
+# (outputs/checkpoints/wandb live under /data/nanopath, but guard against accidental local writes)
+wandb/
+outputs/
+checkpoints/
+*.pt
+*.ckpt
+*.log
+slurm-*.out
+slurm-*.err
+core.*
