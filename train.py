@@ -90,6 +90,13 @@ def load_config():
         raise ValueError("usage: python train.py <config.yaml>")
     cfg = yaml.safe_load(Path(sys.argv[1]).read_text())
     cfg["config_path"] = str(Path(sys.argv[1]).resolve())
+    sample_list = Path(cfg["data"]["sample_list"])
+    if not sample_list.exists():
+        raise FileNotFoundError(
+            f"Pretraining sample list not found at {sample_list}. This is TCGA WSI metadata "
+            f"that we deliberately do NOT auto-download. Obtain it from your internal source "
+            f"and place it at data.sample_list (or change the path in {cfg['config_path']})."
+        )
     return cfg
 
 

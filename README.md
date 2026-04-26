@@ -1,71 +1,96 @@
 # NanoPath
 
-Lean JEPA pathology pretraining code.
+Lean JEPA pathology pretraining harness. Designed for fast hacking on a
+single H100: tweak a recipe, run a smoke, run the full small recipe, and
+compare `final_probe_score` against the leaderboard.
 
-## Setup
+The downstream probes (`probe.py`) are the comparison signal — JEPA-style
+val losses across recipes aren't directly comparable, so we always rank by
+mean F1 across five classification probes (bach, bracs, break_his, mhist,
+pcam) plus pannuke segmentation Jaccard.
+
+## Quickstart
 
 ```bash
-cd /admin/home/paul/nanopath
-uv sync
-source /admin/home/paul/nanopath/.venv/bin/activate
-mkdir -p /data/nanopath
+git clone <repo> nanopath && cd nanopath
+uv sync && source .venv/bin/activate
+python download_data.py                      # ~XX GB, probe datasets only
+python train.py configs/smoke.yaml           # ~5 min end-to-end smoke on 1 GPU
 ```
 
-## Required data
+That's enough to verify your env and then `sbatch submit/train_4gpu.sbatch`
+a real run.
 
-- training sample list: `/block/TCGA/sample_dataset_30.txt`
-- Thunder probe datasets:
-  - `/block/eva-data/bach`
-  - `/block/eva-data/bracs`
-  - `/block/eva-data/breakhis`
-  - `/block/eva-data/mhist`
-  - `/block/eva-data/patch_camelyon`
-- Thunder repo: `/admin/home/paul/thunder`
+## Layout
 
-## Main files
+- `train.py` — pretraining loop (DDP via torchrun, JEPA + SIGReg, EMA, inline probe dispatch).
+- `model.py` — `NanoPathFM` ViT backbone + `SIGReg`. Hack here for new objectives.
+- `dataloader.py` — TCGA sample-list streaming loader. Hack here for new pretraining data.
+- `probe.py` — inline downstream probes (KNN, SimpleShot, linear, pannuke MaskTransformer seg). Hack here for new probes.
+- `seg_head.py` — vendored `MaskTransformer` + `multiclass_dice_loss` (used only by `probe.py`'s pannuke segmentation).
+- `download_data.py` — auto-downloads the six probe datasets if missing.
+- `data_splits/` — checked-in classification splits so probes work out of the box.
+- `configs/{smoke,small}.yaml` — smoke is a few-minute sanity run; small is the leaderboard recipe.
+- `submit/train_{1,4}gpu.sbatch` — SLURM launchers. The 4-GPU one is the canonical full run.
 
-- `train.py`: training loop
-- `model.py`: model and projector stack
-- `dataloader.py`: TCGA sample-list loader
-- `probe.py`: inline downstream probes (cls KNN/SimpleShot/linear, pannuke MaskTransformer seg) run on the training GPU
-- `thunder_adapter.py`: vendored MaskTransformer + multiclass dice loss
-- `configs/small.yaml`: training config
-- `submit/train.sbatch`: single SLURM launcher
+## Data
+
+- **TCGA pretraining list** (`/block/TCGA/sample_dataset_30.txt`): obtained
+  from the internal source — we **do not** auto-download. `train.py`
+  errors loudly at config-load if it's missing.
+- **Probe datasets** (bach / bracs / break_his / mhist / pcam / pannuke):
+  `python download_data.py` pulls each one to its `DATASET_ROOTS[...]` path
+  if not already present. mhist requires a one-time form access; the script
+  prints instructions. break_his requires Kaggle credentials.
+- **Classification split JSONs**: shipped under `data_splits/` in this repo;
+  no Thunder install needed.
 
 ## Running
 
-Single GPU from an allocated node:
+Smoke (single GPU, ~5 min, validates the full train+probe path):
 
 ```bash
-cd /admin/home/paul/nanopath
-source /admin/home/paul/nanopath/.venv/bin/activate
-python train.py configs/small.yaml
+python train.py configs/smoke.yaml
 ```
 
-SLURM submit:
+Full small recipe (4 H100s, ~1h, hits the leaderboard):
 
 ```bash
-sbatch /admin/home/paul/nanopath/submit/train.sbatch
-sbatch --job-name=nanopath-small /admin/home/paul/nanopath/submit/train.sbatch /admin/home/paul/nanopath/configs/small.yaml
+sbatch submit/train_4gpu.sbatch                       # default: configs/small.yaml
+sbatch submit/train_4gpu.sbatch configs/your_recipe.yaml
+sbatch submit/train_1gpu.sbatch configs/smoke.yaml    # single-GPU sweeps
 ```
 
-The checked-in config is the current small EMA-probe comparison run: `small` model, `train.global_batch_size: 128`, `train.max_train_flops: 1000000000000000000`, validation every 500 steps, `train.warmdown_flop_fraction: 0.65`, `train.final_lr_frac: 0.05`, `train.ema_decay: 0.999`, `probe.model_weights: ema`, and `probe.count: 1` (set to 4 to probe at 25/50/75/100% of the FLOP budget). The default launcher requests 4 H100s (`NPROC_PER_NODE=4`) with `--time=04:00:00`. For paired comparisons, hold the seed fixed and compare `final_probe_score` plus the per-task `final_probe_linear_mean_f1` / `final_probe_knn_mean_f1` / `final_probe_fewshot_mean_f1` / `final_probe_seg_mean_jaccard` fields in `summary.json`.
+Edit the `#SBATCH` lines or pass `sbatch --gpus-per-task=N --time=...` to
+override resources. `submit/train_4gpu.sbatch` accepts an optional first
+argument to point at a different config.
 
-Edit [train.sbatch](/admin/home/paul/nanopath/submit/train.sbatch) before submit only if you want to change the checked-in defaults:
+## Recipe summary
 
-- `NPROC_PER_NODE`
-- `#SBATCH` resources if needed
+The checked-in `configs/small.yaml` is the current leaderboard run:
+`small` model, `train.global_batch_size: 128`, `train.max_train_flops: 1e18`,
+validation every 500 steps, `train.warmdown_flop_fraction: 0.65`,
+`train.final_lr_frac: 0.05`, `train.ema_decay: 0.999`, `probe.model_weights: ema`,
+`probe.count: 1` (set to 4 to probe at 25/50/75/100% of the FLOP budget).
+
+The LR schedule follows nanochat: linear warmup → constant LR → linear
+warmdown to `final_lr_frac` over the last `warmdown_flop_fraction` of the
+FLOP budget.
+
+For paired comparisons, hold the seed fixed and compare `final_probe_score`
+plus the per-task `final_probe_linear_mean_f1` / `final_probe_knn_mean_f1` /
+`final_probe_fewshot_mean_f1` / `final_probe_seg_mean_jaccard` from
+`summary.json`. Treat anything below a 0.02 mean-F1 delta as noise.
 
 ## Outputs
 
-- run outputs: `/data/nanopath/<family>/<project.name>`
-- wandb: `/data/nanopath/wandb`
-- sample-list cache: `/data/nanopath/cache`
-- SLURM logs from `train.sbatch`: `/data/nanopath/slurm`
-- Thunder probe scratch: `/tmp/nanopath-thunder`
-- validated small screen baseline: `/data/nanopath/small/small-screen-bs24-seed-1337-20260424`
+- run outputs: `/data/nanopath/<family>/<project.name>` (wiped on fresh launch).
+- wandb: `/data/nanopath/wandb`.
+- sample-list cache: `/data/nanopath/cache`.
+- SLURM logs: `/data/nanopath/slurm/<jobid>.{out,err}`.
 
-Fresh non-resume launches delete and recreate `project.output_dir` before training starts.
-Training writes a single root checkpoint, `latest.pt`; later scheduled/final saves overwrite it and remove stale root `step_*.pt` checkpoints.
-The learning rate schedule follows nanochat: linear warmup, constant LR, then linear warmdown to `train.final_lr_frac` over the last `train.warmdown_flop_fraction` of the FLOP budget.
-Thunder probes run inside the same job and GPU allocation once training crosses evenly spaced FLOP milestones, using the EMA weights from the next validation checkpoint after each milestone and the final validation checkpoint at the end of the run. Training pauses while each probe runs, logs the probe metrics to wandb and `metrics.jsonl`, then resumes.
+Training writes a single rolling `latest.pt`; the best probe checkpoint is
+also kept as `best_mean_probe_score.pt`. Probes run inline in the same job
+once training crosses evenly spaced FLOP milestones (using EMA weights from
+the next validation checkpoint), pause training while they run, log into
+wandb + `metrics.jsonl`, then resume.

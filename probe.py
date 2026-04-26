@@ -1,7 +1,7 @@
 # Inline downstream evaluation. This is the main comparison signal between
 # pretraining recipes: mean F1 across five classification datasets
 # (bach, bracs, break_his, mhist, pcam — KNN + SimpleShot few-shot + linear)
-# plus pannuke segmentation (MaskTransformer head from thunder_adapter.py,
+# plus pannuke segmentation (MaskTransformer head from seg_head.py,
 # trained with multiclass dice loss, scored by per-image macro Jaccard).
 #
 # train.py rank-0 calls queue_probe_job at FLOP milestones; that snapshots the
@@ -25,7 +25,7 @@ from pathlib import Path
 import torch
 
 
-DATA_SPLITS_CACHE = Path("/data/nanopath/cache/data_splits")
+DATA_SPLITS_CACHE = Path(__file__).resolve().parent / "data_splits"
 EMBED_BATCH_SIZE = 128
 EMBED_NUM_WORKERS = 4
 SEGMENTATION_EPOCHS = 30
@@ -221,7 +221,7 @@ def inline_pannuke_jaccard(model, mean, std, device):
     # weighting (no_bg_only_weight_test=16).
     import numpy as np
     from sklearn.metrics import jaccard_score
-    from thunder_adapter import MaskTransformer, multiclass_dice_loss
+    from seg_head import MaskTransformer, multiclass_dice_loss
 
     started_at = time.monotonic()
 
