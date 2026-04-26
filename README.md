@@ -6,6 +6,8 @@
 
 The current leaderboard winner uses LeJEPA training objective: the student predicts EMA-target patch embeddings under a different mask, regularized by SIGReg to prevent collapse. The reference recipe (`configs/leader.yaml`) takes ~4 h on one H100 or ~1.25 h on 4×H100, then runs all six probes inline in the same job.
 
+**Want to get involved? Join us in the [MedARC Discord](https://discord.gg/tVR4TWnRM9) (find us in #path-fm)!**
+
 ## Quickstart
 
 Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:
@@ -49,10 +51,10 @@ To keep entries comparable, the following are fixed across all submissions. Anyt
 - TCGA (12K WSIs) is the only dataset allowed for pretraining, but you are free to revise how we select the tiles used for training.
 
 **Probe evaluation**
-- All of `probe.py` (KNN k values, SimpleShot shots/trials/seed, linear-probe LR grid and epochs, segmentation head config and dice-loss weighting).
+- All of `probe.py`.
 - `seg_head.py` — the pannuke `MaskTransformer` head and `multiclass_dice_loss`.
 - `probe_data_splits/` — the checked-in classification splits.
-- `probe.datasets` (all six), `probe.count`, `probe.model_weights: ema`. Probes must run on EMA weights at the end of training.
+- All probe config variables in `configs/leader.yaml`. Probes should run on EMA weights.
 
 ## Repository layout
 
@@ -62,6 +64,7 @@ To keep entries comparable, the following are fixed across all submissions. Anyt
 - `dataloader.py` — TCGA sample-list streaming loader. Hack here for data preprocessing / curation changes.
 
 ### Helper files
+- `AGENTS.md` — guidelines for AI assistants and human contributors: design philosophy (minimal/hackable, nanochat-flavored), coding rules, experiment discipline, and cluster/storage conventions. Read this before touching code.
 - `probe.py` — downstream probes (KNN, few shot, linear, segmentation).
 - `configs/{smoke,leader}.yaml` — smoke is the ~8 min sanity run; leader is the leaderboard recipe.
 - `submit/train_{1,4}gpu.sbatch` — SLURM launchers.
@@ -69,6 +72,7 @@ To keep entries comparable, the following are fixed across all submissions. Anyt
 - `download_probe_datasets.py` — auto-downloads the six probe datasets if missing.
 - `download_TCGA.sh` — downloads TCGA SVS pretraining slides plus `sample_dataset_30.txt` (specifies the specific tiles to load).
 - `probe_data_splits/` — checked-in classification splits for probes.
+- `pyproject.toml` + `uv.lock` — Python dependency spec consumed by `uv sync` in Quickstart.
 
 ## Data
 
@@ -135,6 +139,6 @@ Running notes on what has been tried in nanopath, with links to wandb where poss
 
 - _add yours here_
 
-# Acknowledgements & License
+# Acknowledgements
 
 Inspired by [nanochat](https://github.com/karpathy/nanochat). Probe code, dataset splits, and the pannuke `MaskTransformer` head are adapted from the [Thunder benchmark](https://mics-lab.github.io/thunder/). 
