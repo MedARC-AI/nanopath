@@ -16,7 +16,7 @@ set -euo pipefail
 # arg overrides the YAML config (defaults to configs/leader.yaml). Adjust
 # NPROC_PER_NODE and the #SBATCH resource lines above to scale up or down.
 # Logs land in /data/nanopath/slurm/<jobid>.{out,err}.
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 CONFIG_FILE="${1:-${REPO_DIR}/configs/leader.yaml}"
 NPROC_PER_NODE=4
 
