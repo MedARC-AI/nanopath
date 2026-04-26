@@ -13,9 +13,9 @@
 set -euo pipefail
 
 # Single-GPU SLURM launcher: torchrun with NPROC_PER_NODE=1, optional first
-# arg overrides the YAML config (defaults to configs/small.yaml).
+# arg overrides the YAML config (defaults to configs/leader.yaml).
 # Logs land in /data/nanopath/slurm/<jobid>.{out,err}.
-CONFIG_FILE="${1:-/admin/home/paul/nanopath/configs/small.yaml}"
+CONFIG_FILE="${1:-/admin/home/paul/nanopath/configs/leader.yaml}"
 NPROC_PER_NODE=1
 
 cd /admin/home/paul/nanopath

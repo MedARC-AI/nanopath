@@ -1,8 +1,8 @@
 project:
-  name: nanopath-small
-  family: small
+  name: nanopath-leader
+  family: leader
   recipe_id: jepa-samplelist30
-  output_dir: /data/nanopath/small/small
+  output_dir: /data/nanopath/leader/leader
 
 data:
   sample_list: /block/TCGA/sample_dataset_30.txt

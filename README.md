@@ -4,7 +4,7 @@
 
 `nanopath` is a simple experimental harness for training computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). It is designed to run on a single GPU (but can also be run with multi-gpu if you want faster, identical results), the code is minimal/hackable, and covers the full pretraining-from-scratch pipeline using the public TCGA dataset (12k WSIs) and built-in probe evals from the [Thunder benchmark](https://mics-lab.github.io/thunder/).
 
-The training objective is JEPA-style: the student predicts EMA-target patch embeddings under a different mask, regularized by SIGReg to prevent collapse. The reference recipe (`configs/small.yaml`) takes ~4 h on one H100 or ~1.25 h on 4×H100, then runs all six probes inline in the same job.
+The current leaderboard winner uses LeJEPA training objective: the student predicts EMA-target patch embeddings under a different mask, regularized by SIGReg to prevent collapse. The reference recipe (`configs/leader.yaml`) takes ~4 h on one H100 or ~1.25 h on 4×H100, then runs all six probes inline in the same job.
 
 ## Quickstart
 
@@ -19,7 +19,7 @@ python train.py configs/smoke.yaml
 
 If you are a MedARC volunteer using our shared cluster, the above steps should work as-is. If you are using your own compute, you'll also need to download the TCGA pretraining data and the downstream probe datasets. See Data section of this README for instructions.
 
-A successful smoke prints periodic train/val lines, logs to wandb, and ends with final summary in `metrics.jsonl`. Probe scores will be near-random since smoke is undertrained; the goal is just to confirm everything wires up. The full `configs/small.yaml` should land near the leaderboard's ~0.52 `mean_probe_score`; for context, a randomly initialized backbone scores roughly ~0.2. 
+A successful smoke prints periodic train/val lines, logs to wandb, and ends with final summary in `metrics.jsonl`. Probe scores will be near-random since smoke is undertrained; the goal is just to confirm everything wires up. The full `configs/leader.yaml` should land near the leaderboard's ~0.52 `mean_probe_score`; for context, a randomly initialized backbone scores roughly ~0.2.
 
 ## Leaderboard
 
@@ -31,7 +31,7 @@ Score is final `mean_probe_score`: unweighted mean of standard classification pr
 
 ### How to submit to leaderboard
 
-The checked-in `configs/small.yaml` is the reference leaderboard recipe. To get on the leaderboard you must run that config end-to-end and outperform the existing top leaderboard `mean_probe_score` by at least 0.01. If you do so, contact [@PaulScotti](https://github.com/PaulScotti) and share your code with him; he will train a new model using your code but with a different rng seed. If it still improves `mean_probe_score` by at least 0.01, you should open a PR to this repo (please keep only the minimal necessary code changes that improve performance) and a description of your changes. Paul will update the README & leaderboard accordingly.
+The checked-in `configs/leader.yaml` is the reference leaderboard recipe. To get on the leaderboard you must run that config end-to-end and outperform the existing top leaderboard `mean_probe_score` by at least 0.01. If you do so, contact [@PaulScotti](https://github.com/PaulScotti) and share your code with him; he will train a new model using your code but with a different rng seed. If it still improves `mean_probe_score` by at least 0.01, you should open a PR to this repo (please keep only the minimal necessary code changes that improve performance) and a description of your changes. Paul will update the README & leaderboard accordingly.
 
 ### What you must NOT change for a leaderboard submission
 
@@ -40,8 +40,13 @@ To keep entries comparable, the following are fixed across all submissions. Anyt
 **Compute budget**
 - `train.max_train_flops` (1e18). The FLOP budget *is* the spend; you can't buy a higher score with more compute.
 
+**Activated parameter count**
+- ≤ **150 M activated backbone params**, where "backbone" is everything in `NanoPathFM` except `self.projector` (the projector is pretraining-only scaffolding and is discarded for downstream probes). This keeps the leaderboard accessible to volunteers on a single consumer GPU; without it, scaling the model up under a fixed FLOP cap is the obvious cheat. The current leader is 142.28 M, so there is ~5% headroom for arch-shape experiments — `dim`, `depth`, `heads`, MLP variants, etc. are all open as long as the cap holds.
+- For MoE / sparse architectures, count parameters touched on a single token's forward pass (e.g. `non_routed + (k/N) * total_expert_params` for top-k-of-N routing). Edit the inline computation in `train.py` accordingly and document the calculation in your PR.
+- `train.py` writes `backbone_activated_params` to `summary.json` and `wandb.summary` so PR review can verify the cap without re-running.
+
 **TCGA pretraining**
-- TCGA (12K WSIs) is the only dataset allowed for pretraining, but you are free to revise how we select the tiles used for training however you wish.
+- TCGA (12K WSIs) is the only dataset allowed for pretraining, but you are free to revise how we select the tiles used for training.
 
 **Probe evaluation**
 - All of `probe.py` (KNN k values, SimpleShot shots/trials/seed, linear-probe LR grid and epochs, segmentation head config and dice-loss weighting).
@@ -58,7 +63,7 @@ To keep entries comparable, the following are fixed across all submissions. Anyt
 
 ### Helper files
 - `probe.py` — downstream probes (KNN, few shot, linear, segmentation).
-- `configs/{smoke,small}.yaml` — smoke is the ~8 min sanity run; small is the leaderboard recipe.
+- `configs/{smoke,leader}.yaml` — smoke is the ~8 min sanity run; leader is the leaderboard recipe.
 - `submit/train_{1,4}gpu.sbatch` — SLURM launchers.
 - `seg_head.py` — `MaskTransformer` + `multiclass_dice_loss` (used by `probe.py`'s pannuke segmentation), vendored by Thunder.
 - `download_probe_datasets.py` — auto-downloads the six probe datasets if missing.
@@ -102,15 +107,15 @@ sbatch submit/train_1gpu.sbatch configs/smoke.yaml
 # or directly: `python train.py configs/smoke.yaml`
 ```
 
-Full small recipe (1 H100 gpu = ~4h; 4 H100 gpus = ~1.25h)
+Leader recipe (1 H100 gpu = ~4h; 4 H100 gpus = ~1.25h)
 
 ```bash
-sbatch submit/train_1gpu.sbatch configs/small.yaml
-# or directly: `python train.py configs/small.yaml`
+sbatch submit/train_1gpu.sbatch configs/leader.yaml
+# or directly: `python train.py configs/leader.yaml`
 # can alternatively do `submit/train_4gpu.sbatch` for faster training
 ```
 
-`configs/small.yaml` is sized for an 80 GB H100 at `train.global_batch_size: 128`. On smaller cards you can set `train.activation_checkpointing: true` if you OOM. Smoke fits comfortably on any 24 GB+ GPU.
+`configs/leader.yaml` is sized for an 80 GB H100 at `train.global_batch_size: 128`. On smaller cards you can set `train.activation_checkpointing: true` if you OOM. Smoke fits comfortably on any 24 GB+ GPU.
 
 ## Outputs
 
