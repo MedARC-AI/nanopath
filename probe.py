@@ -1,17 +1,28 @@
+# Inline downstream evaluation. This is the main comparison signal between
+# pretraining recipes: mean F1 across five classification datasets
+# (bach, bracs, break_his, mhist, pcam — KNN + SimpleShot few-shot + linear)
+# plus pannuke segmentation (MaskTransformer head from thunder_adapter.py,
+# trained with multiclass dice loss, scored by per-image macro Jaccard).
+#
+# train.py rank-0 calls queue_probe_job at FLOP milestones; that snapshots the
+# checkpoint and re-execs this file as a subprocess (`python probe.py req.json`)
+# so the probe gets a clean GPU. The subprocess writes a result JSON, then
+# collect_probe_results ingests it back into wandb + metrics.jsonl.
+#
+# Classification splits come from `thunder generate-data-splits` cached under
+# /data/nanopath/cache/data_splits; pcam is subsampled inline; pannuke images
+# come straight from the npy folds under /block/thunder-data/pannuke.
+
 import json
-import math
 import os
 import shutil
 import subprocess
 import sys
-import fcntl
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
-import wandb
 
 
 DATA_SPLITS_CACHE = Path("/data/nanopath/cache/data_splits")
@@ -46,22 +57,15 @@ DATASET_ROOTS = {
 }
 
 
-def configure_probe_wandb_metrics(wandb_run):
-    for key in ("probe/target_flops", "probe/wall_seconds"):
-        wandb_run.define_metric(key, hidden=True, overwrite=True)
-
-
 def console_prefix():
     return f"{time.strftime('%H:%M:%S')} {os.environ.get('SLURM_JOB_ID', str(os.getpid()))}"
 
 
 def probe_paths(output_dir):
-    output_dir = Path(output_dir)
-    probe_dir = output_dir / "thunder"
+    probe_dir = Path(output_dir) / "thunder"
     return {
         "probe_dir": probe_dir,
         "state_path": probe_dir / "state.json",
-        "lock_path": probe_dir / "state.lock",
         "results_dir": probe_dir / "results",
     }
 
@@ -81,17 +85,16 @@ def prepare_probe_state(cfg, output_dir):
     classification = [str(x) for x in cfg["probe"]["datasets"]]
     segmentation = [str(x) for x in cfg["probe"].get("segmentation_datasets", [])]
     data = {
-        "version": 7,
+        "version": 8,
         "family": str(cfg["project"]["family"]),
         "classification_datasets": classification,
         "segmentation_datasets": segmentation,
         "count": int(cfg["probe"]["count"]),
-        "active": None,
         "logged_results": [],
     }
     if paths["state_path"].exists():
         previous = json.loads(paths["state_path"].read_text())
-        if previous["version"] != 7:
+        if previous["version"] != 8:
             raise ValueError(f"unsupported probe state version: {previous['version']}")
         if previous["family"] != data["family"]:
             raise ValueError(f"probe family changed from {previous['family']} to {data['family']}")
@@ -113,9 +116,10 @@ def prepare_probe_state(cfg, output_dir):
     return state
 
 
-def checkpoint_request(state, checkpoint_step, target_flops, target_fraction):
+def queue_probe_job(state, checkpoint_payload, checkpoint_step, target_flops, target_fraction):
     step_tag = f"step_{checkpoint_step:07d}"
-    return {
+    slurm_id = os.environ.get("SLURM_JOB_ID", f"local-{os.getpid()}")
+    request = {
         "checkpoint_step": int(checkpoint_step),
         "train_step": int(checkpoint_step),
         "target_flops": int(target_flops),
@@ -123,36 +127,18 @@ def checkpoint_request(state, checkpoint_step, target_flops, target_fraction):
         "checkpoint_path": str(state["paths"]["probe_dir"] / f"{step_tag}.pt"),
         "request_path": str(state["paths"]["probe_dir"] / f"{step_tag}.request.json"),
         "result_path": str(state["paths"]["results_dir"] / f"{step_tag}.json"),
-        "model_name": f"{state['data']['family']}_{step_tag}",
         "classification_datasets": list(state["data"]["classification_datasets"]),
         "segmentation_datasets": list(state["data"]["segmentation_datasets"]),
-        "job_id": None,
-        "submitted_at_utc": None,
+        "job_id": f"{slurm_id}-{checkpoint_step:07d}",
     }
-
-
-def queue_probe_job(cfg, state, checkpoint_payload, checkpoint_step, target_flops, target_fraction):
-    with state["paths"]["lock_path"].open("w") as lock_handle:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-        state["data"] = json.loads(state["paths"]["state_path"].read_text())
-        request = checkpoint_request(state, checkpoint_step, target_flops, target_fraction)
-        torch.save(checkpoint_payload, request["checkpoint_path"])
-        if state["data"]["active"] is not None:
-            raise RuntimeError(f"probe already active for step {state['data']['active']['train_step']}")
-        for dataset in request["classification_datasets"] + request["segmentation_datasets"]:
-            if not DATASET_ROOTS[dataset].exists():
-                raise FileNotFoundError(f"missing dataset root for {dataset}: {DATASET_ROOTS[dataset]}")
-        slurm_id = os.environ.get("SLURM_JOB_ID", f"local-{os.getpid()}")
-        request["job_id"] = f"{slurm_id}-{request['checkpoint_step']:07d}"
-        request["submitted_at_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        Path(request["request_path"]).write_text(json.dumps(request, indent=2) + "\n")
-        state["data"]["active"] = request
-        write_probe_state(state)
+    for dataset in request["classification_datasets"] + request["segmentation_datasets"]:
+        if not DATASET_ROOTS[dataset].exists():
+            raise FileNotFoundError(f"missing dataset root for {dataset}: {DATASET_ROOTS[dataset]}")
+    torch.save(checkpoint_payload, request["checkpoint_path"])
+    Path(request["request_path"]).write_text(json.dumps(request, indent=2) + "\n")
     torch.cuda.empty_cache()
     env = os.environ.copy()
     env.pop("WANDB_SERVICE", None)
-    env["WANDB_MODE"] = "disabled"
-    env["WANDB_SILENT"] = "true"
     env["PYTHONPATH"] = str(Path(__file__).resolve().parent)
     print(
         f"{console_prefix()} Probe  [{checkpoint_step}]  "
@@ -496,7 +482,6 @@ def run_probe_job(request_path):
     Path(request["result_path"]).write_text(
         json.dumps(
             {
-                "created_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "wall_seconds": time.monotonic() - probe_started_at,
                 "job_id": request["job_id"],
                 "checkpoint_step": request["checkpoint_step"],
@@ -504,7 +489,6 @@ def run_probe_job(request_path):
                 "target_flops": request["target_flops"],
                 "target_fraction": request["target_fraction"],
                 "checkpoint_path": request["checkpoint_path"],
-                "model_name": request["model_name"],
                 "classification_datasets": classification,
                 "segmentation_datasets": segmentation,
                 "status": "ok",
@@ -515,70 +499,51 @@ def run_probe_job(request_path):
         )
         + "\n"
     )
-    paths = probe_paths(Path(request["checkpoint_path"]).parents[1])
-    with paths["lock_path"].open("w") as lock_handle:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-        state = {"paths": paths, "data": json.loads(paths["state_path"].read_text())}
-        if state["data"]["active"] is not None and str(state["data"]["active"]["job_id"]) == str(request["job_id"]):
-            state["data"]["active"] = None
-        write_probe_state(state)
 
 
 def collect_probe_results(state, wandb_run, metrics_path, output_dir, best_val_mean_probe_score, best_val_mean_probe_score_step, best_probe_scores):
-    if wandb_run is None:
-        return best_val_mean_probe_score, best_val_mean_probe_score_step, best_probe_scores
-    with state["paths"]["lock_path"].open("w") as lock_handle:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-        state["data"] = json.loads(state["paths"]["state_path"].read_text())
-        logged = set(state["data"]["logged_results"])
-        for result_path in sorted(state["paths"]["results_dir"].glob("step_*.json")):
-            result_path_str = str(result_path)
-            result = json.loads(result_path.read_text())
-            metrics = {key: float(value) for key, value in result["metrics"].items()}
-            checkpoint_path = Path(result["checkpoint_path"])
-            if result["status"] == "ok" and "mean_probe_score" in metrics:
-                if metrics["mean_probe_score"] > best_val_mean_probe_score:
-                    best_val_mean_probe_score = metrics["mean_probe_score"]
-                    best_val_mean_probe_score_step = int(result["train_step"])
-                    best_probe_scores = dict(metrics)
-                    if checkpoint_path.exists():
-                        shutil.copy2(checkpoint_path, output_dir / "best_mean_probe_score.pt")
-            if result_path_str in logged:
-                continue
-            event_payload = {
-                "event": "probe",
-                "step": result["train_step"],
-                "status": result["status"],
-                "target_flops": result["target_flops"],
-                "target_fraction": result["target_fraction"],
-                **metrics,
-            }
-            if "wall_seconds" in result:
-                event_payload["probe_wall_seconds"] = float(result["wall_seconds"])
-            with metrics_path.open("a") as handle:
-                handle.write(json.dumps(event_payload) + "\n")
-            print(
-                f"{console_prefix()} Probe  [{result['train_step']}]  "
-                f"log_result: status={result['status']}  mean_probe_score={metrics.get('mean_probe_score')}  "
-                f"wall={result.get('wall_seconds')}",
-                flush=True,
-            )
-            if len(metrics) > 0:
-                wandb_payload = {"probe/target_flops": int(result["target_flops"])}
-                for key, value in metrics.items():
-                    metric_name = key.removeprefix("probe_") if key.startswith("probe_") else key
-                    wandb_payload[f"probe/{metric_name}"] = value
-                if "wall_seconds" in result:
-                    wandb_payload["probe/wall_seconds"] = float(result["wall_seconds"])
-                wandb_run.log(wandb_payload, step=int(result["train_step"]))
-            if checkpoint_path.exists():
-                checkpoint_path.unlink()
-            logged.add(result_path_str)
-        state["data"]["logged_results"] = sorted(logged)
-        active = state["data"]["active"]
-        if active is not None and Path(active["result_path"]).exists():
-            state["data"]["active"] = None
-        write_probe_state(state)
+    state["data"] = json.loads(state["paths"]["state_path"].read_text())
+    logged = set(state["data"]["logged_results"])
+    for result_path in sorted(state["paths"]["results_dir"].glob("step_*.json")):
+        result_path_str = str(result_path)
+        result = json.loads(result_path.read_text())
+        metrics = {key: float(value) for key, value in result["metrics"].items()}
+        checkpoint_path = Path(result["checkpoint_path"])
+        if result["status"] == "ok" and "mean_probe_score" in metrics:
+            if metrics["mean_probe_score"] > best_val_mean_probe_score:
+                best_val_mean_probe_score = metrics["mean_probe_score"]
+                best_val_mean_probe_score_step = int(result["train_step"])
+                best_probe_scores = dict(metrics)
+                if checkpoint_path.exists():
+                    shutil.copy2(checkpoint_path, output_dir / "best_mean_probe_score.pt")
+        if result_path_str in logged:
+            continue
+        event_payload = {
+            "event": "probe",
+            "step": result["train_step"],
+            "status": result["status"],
+            "target_flops": result["target_flops"],
+            "target_fraction": result["target_fraction"],
+            "probe_wall_seconds": float(result["wall_seconds"]),
+            **metrics,
+        }
+        with metrics_path.open("a") as handle:
+            handle.write(json.dumps(event_payload) + "\n")
+        print(
+            f"{console_prefix()} Probe  [{result['train_step']}]  "
+            f"log_result: status={result['status']}  mean_probe_score={metrics.get('mean_probe_score')}  "
+            f"wall={result['wall_seconds']:.2f}s",
+            flush=True,
+        )
+        wandb_payload = {"probe/target_flops": int(result["target_flops"]), "probe/wall_seconds": float(result["wall_seconds"])}
+        for key, value in metrics.items():
+            wandb_payload[f"probe/{key.removeprefix('probe_')}"] = value
+        wandb_run.log(wandb_payload, step=int(result["train_step"]))
+        if checkpoint_path.exists():
+            checkpoint_path.unlink()
+        logged.add(result_path_str)
+    state["data"]["logged_results"] = sorted(logged)
+    write_probe_state(state)
     return best_val_mean_probe_score, best_val_mean_probe_score_step, best_probe_scores
 
 
@@ -596,76 +561,16 @@ def completed_probe_summary(output_dir):
     summary["final_probe_step"] = int(final_result["train_step"])
     summary["final_probe_target_flops"] = int(final_result["target_flops"])
     summary["final_probe_target_fraction"] = float(final_result["target_fraction"])
-    if "wall_seconds" in final_result:
-        summary["final_probe_wall_seconds"] = float(final_result["wall_seconds"])
+    summary["final_probe_wall_seconds"] = float(final_result["wall_seconds"])
     for key, value in final_result["metrics"].items():
         flat = "score" if key == "mean_probe_score" else key.removeprefix("probe_")
         summary[f"final_probe_{flat}"] = float(value)
     return summary
 
 
-def collect_finished_probe_results(output_dir):
-    output_dir = Path(output_dir)
-    summary_path = output_dir / "summary.json"
-    if not summary_path.exists():
-        return
-    state = {"paths": probe_paths(output_dir), "data": json.loads((output_dir / "thunder" / "state.json").read_text())}
-    latest_checkpoint_path = output_dir / "latest.pt"
-    if not latest_checkpoint_path.exists():
-        raise FileNotFoundError(f"missing latest training checkpoint in {output_dir}")
-    checkpoint = torch.load(latest_checkpoint_path, map_location="cpu", weights_only=False)
-    wandb_meta = checkpoint["wandb"]
-    if wandb_meta is None:
-        raise ValueError(f"missing wandb metadata in {latest_checkpoint_path}")
-    os.environ.pop("WANDB_SERVICE", None)
-    wandb_run = wandb.init(
-        project=wandb_meta["project"],
-        name=wandb_meta["name"],
-        id=wandb_meta["id"],
-        resume="must",
-        dir="/data/nanopath/wandb",
-        config=checkpoint["config"],
-        settings=wandb.Settings(
-            console="wrap",
-            x_file_stream_transmit_interval=5,
-        ),
-    )
-    configure_probe_wandb_metrics(wandb_run)
-    summary = json.loads(summary_path.read_text())
-    best_val_mean_probe_score = float("-inf") if summary["best_val_mean_probe_score"] is None else float(summary["best_val_mean_probe_score"])
-    best_val_mean_probe_score_step = int(summary["best_val_mean_probe_score_step"])
-    best_probe_scores = {}
-    for key, value in summary.items():
-        if key == "mean_probe_score" or key.endswith("_mean_f1") or key.endswith("_mean_jaccard") or (key.startswith("probe_") and (key.endswith("_val_f1") or key.endswith("_val_jaccard"))):
-            best_probe_scores[key] = float(value)
-    best_val_mean_probe_score, best_val_mean_probe_score_step, best_probe_scores = collect_probe_results(
-        state,
-        wandb_run,
-        output_dir / "metrics.jsonl",
-        output_dir,
-        best_val_mean_probe_score,
-        best_val_mean_probe_score_step,
-        best_probe_scores,
-    )
-    state["data"] = json.loads(state["paths"]["state_path"].read_text())
-    summary["best_val_mean_probe_score"] = None if not math.isfinite(best_val_mean_probe_score) else best_val_mean_probe_score
-    summary["best_val_mean_probe_score_step"] = best_val_mean_probe_score_step
-    summary["probe_active_job_id"] = None if state["data"]["active"] is None else state["data"]["active"]["job_id"]
-    summary["probe_active_step"] = None if state["data"]["active"] is None else state["data"]["active"]["train_step"]
-    summary.update(best_probe_scores)
-    summary.update(completed_probe_summary(output_dir))
-    summary_path.write_text(json.dumps(summary, indent=2) + "\n")
-    for key, value in summary.items():
-        wandb_run.summary[key] = value
-    wandb_run.finish()
-
-
 def main():
-    if len(sys.argv) == 3 and sys.argv[1] == "collect":
-        collect_finished_probe_results(sys.argv[2])
-        return
     if len(sys.argv) != 2:
-        raise ValueError("usage: python probe.py <request.json> | python probe.py collect <output_dir>")
+        raise ValueError("usage: python probe.py <request.json>")
     run_probe_job(sys.argv[1])
 
 

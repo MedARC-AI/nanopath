@@ -1,4 +1,9 @@
-# NanoPath pretraining loop: YAML config, DDP, logging, checkpointing, and inline probes.
+# Pretraining entry point. Runs the JEPA + SIGReg loop end-to-end: parse a YAML
+# config (e.g. configs/small.yaml), build the TCGA dataloader, construct the
+# NanoPathFM model and EMA copy, optimize across DDP ranks under torchrun, log
+# to wandb + metrics.jsonl, write a single rolling latest.pt checkpoint, and
+# queue inline downstream probes (probe.py) at evenly spaced FLOP milestones.
+# Launch: `torchrun --standalone --nproc_per_node N train.py <config.yaml>`.
 
 import contextlib
 import json
@@ -27,7 +32,6 @@ from model import SIGReg, NanoPathFM
 from probe import (
     completed_probe_summary,
     collect_probe_results,
-    configure_probe_wandb_metrics,
     prepare_probe_state,
     probe_enabled,
     queue_probe_job,
@@ -254,7 +258,8 @@ def main():
             wandb_init["id"] = wandb_meta["id"]
             wandb_init["resume"] = "must"
         wandb_run = wandb.init(**wandb_init)
-        configure_probe_wandb_metrics(wandb_run)
+        for key in ("probe/target_flops", "probe/wall_seconds"):
+            wandb_run.define_metric(key, hidden=True, overwrite=True)
         print(
             f"{console_prefix()} Run  start: {cfg['project']['name']}  "
             f"config: {cfg['config_path']}  batch_size: {batch_size}  max_train_flops: {train_cfg['max_train_flops']}  "
@@ -266,7 +271,7 @@ def main():
         source_artifact = wandb.Artifact(f"nanopath-source-{wandb_run.id}", type="code")
         repo_dir = Path(__file__).resolve().parent
         for path in sorted({*repo_dir.rglob("*"), *repo_dir.glob(".*")}):
-            if not path.is_file() or any(part in {".git", ".venv", "__pycache__"} for part in path.parts):
+            if not path.is_file() or any(part in {".git", ".venv", "__pycache__", ".claude"} for part in path.parts):
                 continue
             source_artifact.add_file(str(path), name=str(path.relative_to(repo_dir)))
         wandb_run.log_artifact(source_artifact)
@@ -423,7 +428,6 @@ def main():
         while target_idx + 1 < len(probe_targets) and train_flops >= probe_targets[target_idx + 1]:
             target_idx += 1
         queue_probe_job(
-            cfg,
             probe_state,
             probe_checkpoint_payload(checkpoint_step),
             checkpoint_step,
@@ -709,7 +713,6 @@ def main():
             for stale_checkpoint_path in output_dir.glob("step_*.pt"):
                 stale_checkpoint_path.unlink()
             last_saved_step = step
-        active_probe = None if probe_state is None else probe_state["data"]["active"]
         summary = {
             "project": cfg["project"]["name"],
             "family": cfg["project"]["family"],
@@ -740,8 +743,6 @@ def main():
             "probe_model_weights": probe_model_weights,
             "probe_target_flops": probe_targets,
             "probe_target_fractions": [None if max_train_flops == 0 else target / max_train_flops for target in probe_targets],
-            "probe_active_job_id": None if active_probe is None else active_probe["job_id"],
-            "probe_active_step": None if active_probe is None else active_probe["train_step"],
             **best_probe_scores,
             **({} if probe_state is None else completed_probe_summary(output_dir)),
         }

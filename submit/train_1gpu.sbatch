@@ -12,7 +12,10 @@
 
 set -euo pipefail
 
-# Single-GPU launcher for seed-variability runs.
+# Single-GPU SLURM launcher: torchrun with NPROC_PER_NODE=1, optional first
+# arg overrides the YAML config (defaults to configs/small.yaml). Used for
+# seed-variability sweeps where many independent 1-GPU jobs run in parallel.
+# Logs land in /data/nanopath/slurm/<jobid>.{out,err}.
 CONFIG_FILE="${1:-/admin/home/paul/nanopath/configs/small.yaml}"
 NPROC_PER_NODE=1
 

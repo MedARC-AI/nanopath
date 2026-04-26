@@ -27,8 +27,8 @@ mkdir -p /data/nanopath
 - `train.py`: training loop
 - `model.py`: model and projector stack
 - `dataloader.py`: TCGA sample-list loader
-- `probe.py`: inline Thunder linear probes on the training GPU
-- `thunder_adapter.py`: Thunder checkpoint adapter
+- `probe.py`: inline downstream probes (cls KNN/SimpleShot/linear, pannuke MaskTransformer seg) run on the training GPU
+- `thunder_adapter.py`: vendored MaskTransformer + multiclass dice loss
 - `configs/small.yaml`: training config
 - `submit/train.sbatch`: single SLURM launcher
 
@@ -49,7 +49,7 @@ sbatch /admin/home/paul/nanopath/submit/train.sbatch
 sbatch --job-name=nanopath-small /admin/home/paul/nanopath/submit/train.sbatch /admin/home/paul/nanopath/configs/small.yaml
 ```
 
-The checked-in config is the current small EMA-probe comparison run: `small` model, `train.batch_size: 48`, `train.max_train_flops: 1000000000000000000`, validation every 500 steps, `train.warmdown_flop_fraction: 0.65`, `train.final_lr_frac: 0.05`, `train.ema_decay: 0.999`, `probe.model_weights: ema`, and `probe.count: 4`. The default launcher requests 4 H100s (`NPROC_PER_NODE=4`) with `--time=04:00:00`. For paired comparisons, hold the seed fixed and compare `final_probe_mean_f1` plus the per-dataset `final_probe_*_val_f1` fields in `summary.json`.
+The checked-in config is the current small EMA-probe comparison run: `small` model, `train.global_batch_size: 128`, `train.max_train_flops: 1000000000000000000`, validation every 500 steps, `train.warmdown_flop_fraction: 0.65`, `train.final_lr_frac: 0.05`, `train.ema_decay: 0.999`, `probe.model_weights: ema`, and `probe.count: 1` (set to 4 to probe at 25/50/75/100% of the FLOP budget). The default launcher requests 4 H100s (`NPROC_PER_NODE=4`) with `--time=04:00:00`. For paired comparisons, hold the seed fixed and compare `final_probe_score` plus the per-task `final_probe_linear_mean_f1` / `final_probe_knn_mean_f1` / `final_probe_fewshot_mean_f1` / `final_probe_seg_mean_jaccard` fields in `summary.json`.
 
 Edit [train.sbatch](/admin/home/paul/nanopath/submit/train.sbatch) before submit only if you want to change the checked-in defaults:
 
