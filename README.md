@@ -64,7 +64,7 @@ To keep entries comparable, the following are fixed across all submissions. Anyt
 - `dataloader.py` — TCGA sample-list streaming loader. Hack here for data preprocessing / curation changes.
 
 ### Helper files
-- `AGENTS.md` — guidelines for AI assistants and human contributors: design philosophy (minimal/hackable, nanochat-flavored), coding rules, experiment discipline, and cluster/storage conventions. Read this before touching code.
+- `AGENTS.md` — guidelines for AI assistants and human contributors: design philosophy (minimal/hackable, nanochat-flavored), coding rules, experiment discipline, and cluster/storage conventions. Note some language is specific to the MedARC cluster.
 - `probe.py` — downstream probes (KNN, few shot, linear, segmentation).
 - `configs/{smoke,leader}.yaml` — smoke is the ~8 min sanity run; leader is the leaderboard recipe.
 - `submit/train_{1,4}gpu.sbatch` — SLURM launchers.
