@@ -164,9 +164,6 @@ def main():
     visible_patch_presentations = 0
     train_flops = 0
     best_val_total = float("inf")
-    best_val_mean_probe_score = float("-inf")
-    best_val_mean_probe_score_step = -1
-    best_probe_scores = {}
     output_dir = Path(cfg["project"]["output_dir"])
     wandb_dir = Path("/data/nanopath/wandb")
     slurm_job_id = os.environ.get("SLURM_JOB_ID")
@@ -188,7 +185,7 @@ def main():
     resume_path = train_cfg["resume"]
     checkpoint = None
     if resume_path is not None:
-        # Resume restores training progress, optimizer state, best probe state, and wandb identity.
+        # Resume restores training progress, optimizer state, and wandb identity.
         checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
         model.load_state_dict(checkpoint["model"])
         opt.load_state_dict(checkpoint["opt"])
@@ -199,8 +196,6 @@ def main():
             examples_seen,
             visible_patch_presentations,
             train_flops,
-            best_val_mean_probe_score,
-            best_val_mean_probe_score_step,
         ) = (
             int(checkpoint["step"]),
             float(checkpoint["lr"]),
@@ -208,10 +203,7 @@ def main():
             int(checkpoint["examples_seen"]),
             int(checkpoint["visible_patch_presentations"]),
             int(checkpoint["train_flops"]),
-            float(checkpoint["best_val_mean_probe_score"]),
-            int(checkpoint["best_val_mean_probe_score_step"]),
         )
-        best_probe_scores = dict(checkpoint["best_probe_scores"])
         wandb_meta = dict(checkpoint["wandb"])
     if rank == 0:
         # Rank 0 owns external side effects; nonzero ranks only participate in training/eval collectives.
@@ -303,12 +295,9 @@ def main():
             "opt": opt.state_dict(),
             "step": next_step,
             "best_val_total": best_val_total,
-            "best_val_mean_probe_score": best_val_mean_probe_score,
-            "best_val_mean_probe_score_step": best_val_mean_probe_score_step,
             "examples_seen": examples_seen,
             "visible_patch_presentations": visible_patch_presentations,
             "train_flops": train_flops,
-            "best_probe_scores": best_probe_scores,
             "lr": lr,
             "ema_decay": ema_decay,
             "probe_model_weights": probe_model_weights,
@@ -351,14 +340,11 @@ def main():
             }
         return None
 
-    # Ingest any completed probe result JSONs and update best probe checkpoint bookkeeping.
+    # Ingest completed probe result JSONs into metrics.jsonl and wandb.
     def log_probe_results():
-        nonlocal best_val_mean_probe_score, best_val_mean_probe_score_step, best_probe_scores
         if probe_state is None:
             return
-        best_val_mean_probe_score, best_val_mean_probe_score_step, best_probe_scores = collect_probe_results(
-            probe_state, wandb_run, metrics_path, output_dir, best_val_mean_probe_score, best_val_mean_probe_score_step, best_probe_scores, save_checkpoints
-        )
+        collect_probe_results(probe_state, wandb_run, metrics_path)
 
     # Record validation losses with an optional event tag such as final_eval.
     def log_val(step_value, val, event=None):
@@ -686,8 +672,6 @@ def main():
             "stop_reason": stop_reason,
             "steps_completed": step,
             "best_val_total": best_val_total,
-            "best_val_mean_probe_score": None if not math.isfinite(best_val_mean_probe_score) else best_val_mean_probe_score,
-            "best_val_mean_probe_score_step": best_val_mean_probe_score_step,
             "tile_presentations": examples_seen,
             "visible_patch_presentations": visible_patch_presentations,
             **final_unique_counts,
@@ -699,7 +683,6 @@ def main():
             "probe_model_weights": probe_model_weights,
             "probe_target_flops": probe_targets,
             "probe_target_fractions": [None if max_train_flops == 0 else target / max_train_flops for target in probe_targets],
-            **best_probe_scores,
             **({} if probe_state is None else completed_probe_summary(output_dir)),
         }
         if probe_state is not None and "final_probe_score" not in summary:
@@ -712,7 +695,7 @@ def main():
             f"final_probe_score: {summary.get('final_probe_score')}",
             flush=True,
         )
-        for key in summary.keys() - {"best_val_total", *best_probe_scores}:
+        for key in summary.keys() - {"best_val_total"}:
             wandb_run.summary[key] = summary[key]
         wandb_run.finish()
     if distributed:

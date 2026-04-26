@@ -1,9 +1,8 @@
 # NanoPathFM: the encoder used both for pretraining and for downstream probes.
-# Compact ViT with register tokens and 2D RoPE (no abs-pos, no CLS), a small
-# MLP projector head, and SIGReg — a sliced characteristic-function regularizer
-# applied to the projected register tokens to discourage representational
-# collapse. encode_views() drives the JEPA objective in train.py;
-# probe_features() returns the same register pooling for probe.py.
+# Compact ViT with register tokens and 2D RoPE (no abs-pos, no CLS), a small MLP 
+# projector head, and SIGReg — LeJEPA's regularizer applied to the projected register 
+# tokens to discourage representational collapse. encode_views() drives the JEPA 
+# objective in train.py; probe_features() returns the same register pooling for probe.py.
 
 import math
 
