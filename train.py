@@ -157,6 +157,9 @@ def main():
     # size cap. The sum below is exact for dense models; MoE / sparse-routing contributors must
     # rewrite it to count per-token activated params.
     backbone_activated_params = sum(p.numel() for n, p in model.named_parameters() if p.requires_grad and not n.startswith("projector."))
+    print(f"{console_prefix()} backbone_activated_params: {backbone_activated_params:,} / 150,000,000", flush=True)
+    if backbone_activated_params > 150_000_000:
+        raise ValueError(f"backbone_activated_params={backbone_activated_params:,} exceeds the 150M activated-parameter leaderboard cap; failing fast to avoid spending training compute on an ineligible backbone.")
     # Optimizer groups live in model.py so weight-decay policy follows model changes.
     opt = torch.optim.AdamW(model.param_groups(train_cfg["weight_decay"]), lr=1.0, betas=(0.9, 0.95))
     step = 0
