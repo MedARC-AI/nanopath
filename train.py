@@ -191,8 +191,6 @@ def main():
     output_dir = Path(cfg["project"]["output_dir"])
     wandb_dir = Path(cfg["project"]["wandb_dir"])
     slurm_job_id = os.environ.get("SLURM_JOB_ID")
-    slurm_stdout_path = os.environ.get("NANOPATH_SLURM_STDOUT")
-    slurm_stderr_path = os.environ.get("NANOPATH_SLURM_STDERR")
     # Fresh launches fully replace the run directory so repeated use of a checked-in
     # output_dir under NANOPATH_DATA_DIR never trips over stale artifacts.
     if train_cfg["resume"] is None:
@@ -685,8 +683,6 @@ def main():
             "recipe_id": cfg["project"]["recipe_id"],
             "config_path": cfg["config_path"],
             "slurm_job_id": slurm_job_id,
-            "slurm_stdout_path": slurm_stdout_path,
-            "slurm_stderr_path": slurm_stderr_path,
             "model_params": model_params,
             "backbone_activated_params": backbone_activated_params,
             "world_size": world_size,
