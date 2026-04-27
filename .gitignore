@@ -46,6 +46,5 @@ checkpoints/
 *.pt
 *.ckpt
 *.log
-slurm-*.out
-slurm-*.err
+slurm/
 core.*

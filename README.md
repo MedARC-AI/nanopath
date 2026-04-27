@@ -129,9 +129,9 @@ sbatch submit/train_1gpu.sbatch configs/leader.yaml
 - run outputs: `project.output_dir` (checked-in configs default under `${NANOPATH_DATA_DIR}/leader/...`; wiped on fresh launch).
 - wandb: `${NANOPATH_DATA_DIR}/wandb`.
 - sample-list cache: `${NANOPATH_DATA_DIR}/cache`.
-- SLURM logs: `${NANOPATH_DATA_DIR}/slurm/<jobid>.{out,err}`.
+- SLURM logs: `slurm/<jobid>.{out,err}` in the repo checkout.
 
-The sbatch launchers create `NANOPATH_DATA_DIR`, which defaults to `/data/$USER/nanopath`.
+The sbatch launchers export `NANOPATH_DATA_DIR`, which defaults to `/data/$USER/nanopath`.
 
 Recipes with `train.save_every` set write a rolling `latest.pt`; smoke sets `train.save_every: null`, so it leaves no persistent checkpoints. Probes run inline in the same job using EMA weights with training paused while they run, logged into wandb + `metrics.jsonl`.
 
