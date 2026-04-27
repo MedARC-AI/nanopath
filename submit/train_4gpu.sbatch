@@ -4,8 +4,8 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-task=4
 #SBATCH --time=04:00:00
-#SBATCH --output=%x-%j.out
-#SBATCH --error=%x-%j.err
+#SBATCH --output=/tmp/%x-%j.out
+#SBATCH --error=/tmp/%x-%j.err
 #SBATCH --partition=n
 #SBATCH --account=sophont
 #SBATCH --qos=normal # low | normal | top
@@ -15,7 +15,7 @@ set -euo pipefail
 # Single-node SLURM launcher: torchrun on NPROC_PER_NODE GPUs, optional first
 # arg overrides the YAML config (defaults to configs/leader.yaml). Adjust
 # NPROC_PER_NODE and the #SBATCH resource lines above to scale up or down.
-# Runtime logs are tee'd to ${NANOPATH_DATA_DIR}/slurm/<jobid>.{out,err}.
+# Runtime logs are redirected to ${NANOPATH_DATA_DIR}/slurm/<jobid>.{out,err}.
 REPO_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 CONFIG_FILE="${1:-${REPO_DIR}/configs/leader.yaml}"
 NPROC_PER_NODE=4
@@ -26,7 +26,7 @@ export NANOPATH_DATA_DIR="${NANOPATH_DATA_DIR:-/data/${USER:-$(id -un)}/nanopath
 mkdir -p "${NANOPATH_DATA_DIR}/slurm"
 export NANOPATH_SLURM_STDOUT="${NANOPATH_DATA_DIR}/slurm/${JOB_ID}.out"
 export NANOPATH_SLURM_STDERR="${NANOPATH_DATA_DIR}/slurm/${JOB_ID}.err"
-exec > >(tee -a "${NANOPATH_SLURM_STDOUT}") 2> >(tee -a "${NANOPATH_SLURM_STDERR}" >&2)
+exec >> "${NANOPATH_SLURM_STDOUT}" 2>> "${NANOPATH_SLURM_STDERR}"
 source "${REPO_DIR}/.venv/bin/activate"
 
 echo "CONFIG_FILE=${CONFIG_FILE}"
