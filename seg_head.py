@@ -2,8 +2,8 @@
 # pannuke segmentation probe: a MaskTransformer decoder head and a multiclass
 # dice loss. Copied verbatim (with drop_path / dropout / einops dependencies
 # inlined) from thunder/src/thunder/models/task_specific_models.py and
-# thunder/src/thunder/utils/dice_loss.py — see /admin/home/paul/thunder. Kept
-# vendored so we don't take Thunder on as a runtime dependency.
+# thunder/src/thunder/utils/dice_loss.py. We do this so we don't have to take
+# Thunder on as a runtime dependency.
 
 import torch
 import torch.nn as nn

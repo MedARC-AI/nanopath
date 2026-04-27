@@ -39,7 +39,7 @@ Thumbs.db
 *.key
 
 # Local run artifacts that should never end up in the repo
-# (outputs/checkpoints/wandb live under /data/nanopath, but guard against accidental local writes)
+# (outputs/checkpoints/wandb/caches live under ${NANOPATH_DATA_DIR}, but guard against accidental local writes)
 wandb/
 outputs/
 checkpoints/

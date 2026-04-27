@@ -31,7 +31,7 @@ Experiment and benchmark discipline:
 
 Cluster and storage:
 - The login node has no GPU access. For full training runs (or anything that would take more than a few minutes) you should submit SLURM jobs to H100 nodes (`n-#`) or CPU nodes (`c-1`). If it's a quick single-GPU assessment you can use `ssh n-#` directly (but only when an idle GPU is available!).
-- Store large files, checkpoints, embeddings, and pretrained models in `/data/nanopath`, not the repo.
+- Store large files, checkpoints, embeddings, caches, and pretrained models under `${NANOPATH_DATA_DIR}` (defaults to `/data/$USER/nanopath`), not the repo.
 - Do not define `#SBATCH --cpus-per-task` in sbatch scripts and do not add unnecessary lines like `OMP_NUM_THREADS` or `MKL_NUM_THREADS` exports.
 
 Workflow:

@@ -49,11 +49,27 @@ TRAIN_KEYS = ("jepa_pred", "sig", "total", "proj_std")
 def console_prefix(): return f"{time.strftime('%H:%M:%S')} {os.environ.get('SLURM_JOB_ID', str(os.getpid()))}"
 
 
+def default_nanopath_data_dir():
+    user = os.environ.get("USER") or os.environ.get("LOGNAME") or "user"
+    return f"/data/{user}/nanopath"
+
+
+def expand_config_env(value):
+    if isinstance(value, dict):
+        return {key: expand_config_env(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [expand_config_env(item) for item in value]
+    if isinstance(value, str):
+        return os.path.expanduser(os.path.expandvars(value))
+    return value
+
+
 # Read the YAML recipe and fail before any GPU work if the TCGA sample list is absent.
 def load_config():
     if len(sys.argv) != 2:
         raise ValueError("usage: python train.py <config.yaml>")
-    cfg = yaml.safe_load(Path(sys.argv[1]).read_text())
+    os.environ.setdefault("NANOPATH_DATA_DIR", default_nanopath_data_dir())
+    cfg = expand_config_env(yaml.safe_load(Path(sys.argv[1]).read_text()))
     cfg["config_path"] = str(Path(sys.argv[1]).resolve())
     sample_list = Path(cfg["data"]["sample_list"])
     if not sample_list.exists():
@@ -178,7 +194,7 @@ def main():
     slurm_stdout_path = os.environ.get("NANOPATH_SLURM_STDOUT")
     slurm_stderr_path = os.environ.get("NANOPATH_SLURM_STDERR")
     # Fresh launches fully replace the run directory so repeated use of a checked-in
-    # output_dir like /data/nanopath/leader never trips over stale artifacts.
+    # output_dir under NANOPATH_DATA_DIR never trips over stale artifacts.
     if train_cfg["resume"] is None:
         if rank == 0 and output_dir.exists():
             shutil.rmtree(output_dir)

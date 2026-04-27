@@ -126,12 +126,12 @@ sbatch submit/train_1gpu.sbatch configs/leader.yaml
 
 ## Outputs
 
-- run outputs: `/data/nanopath/<family>/<project.name>` (wiped on fresh launch).
-- wandb: `/data/nanopath/wandb`.
-- sample-list cache: `/data/nanopath/cache`.
-- SLURM logs: `/data/nanopath/slurm/<jobid>.{out,err}`.
+- run outputs: `project.output_dir` (checked-in configs default under `${NANOPATH_DATA_DIR}/leader/...`; wiped on fresh launch).
+- wandb: `${NANOPATH_DATA_DIR}/wandb`.
+- sample-list cache: `${NANOPATH_DATA_DIR}/cache`.
+- SLURM logs: `${NANOPATH_DATA_DIR}/slurm/<jobid>.{out,err}`.
 
-All paths above assume the MedARC cluster layout. Off-cluster, override `project.output_dir` and the `data.sample_list_cache_dir` keys in your config (and point your wandb dir / SLURM log dir wherever you have space).
+On the MedARC cluster, `NANOPATH_DATA_DIR` defaults to `/data/$USER/nanopath`, avoiding shared write permissions between volunteers. Override `NANOPATH_DATA_DIR` or the individual config paths if you want outputs somewhere else. The sbatch launchers also write a small bootstrap log in the submit directory before teeing runtime logs into `${NANOPATH_DATA_DIR}/slurm`.
 
 Recipes with `train.save_every` set write a rolling `latest.pt`; smoke sets `train.save_every: null`, so it leaves no persistent checkpoints. Probes run inline in the same job using EMA weights with training paused while they run, logged into wandb + `metrics.jsonl`.
 
