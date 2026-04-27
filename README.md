@@ -126,22 +126,18 @@ sbatch submit/train_1gpu.sbatch configs/leader.yaml
 
 ## Outputs
 
-- run outputs: `project.output_dir` (checked-in configs default under `${NANOPATH_DATA_DIR}/leader/...`; wiped on fresh launch).
-- wandb: `${NANOPATH_DATA_DIR}/wandb`.
-- sample-list cache: `${NANOPATH_DATA_DIR}/cache`.
+- run outputs: `project.output_dir` (checked-in configs default under `/data/$USER/nanopath/leader/...`; wiped on fresh launch).
+- wandb: `/data/$USER/nanopath/wandb`.
+- sample-list cache: `/data/$USER/nanopath/cache`.
 - SLURM logs: `slurm/<jobid>.{out,err}` in the repo checkout.
 
-The sbatch launchers export `NANOPATH_DATA_DIR`, which defaults to `/data/$USER/nanopath`.
+`train.py` runs `os.path.expandvars` on the YAML text, so `$USER` in checked-in configs resolves to the cluster user at load time.
 
 Recipes with `train.save_every` set write a rolling `latest.pt`; smoke sets `train.save_every: null`, so it leaves no persistent checkpoints. Probes run inline in the same job using EMA weights with training paused while they run, logged into wandb + `metrics.jsonl`.
 
+## Experiment log
 
-# Experiment log
-
-Running notes on what has been tried in nanopath, with links to wandb where possible. Append new entries at the top. Negative results are valuable — record them so the next contributor doesn't redo a known dead end.
-
-- 2026-04-26 — **EMA vs. Non-EMA**: probing the raw model weights instead of EMA shows no difference in performance. I prefer we default to EMA since we know with OpenMidnight that averaging across checkpoints improves results, and EMA is kind of like averaging across checkpoints. Also EMA is known to generally enhance robustness. (@PaulScotti)
-- _add yours here_
+See [LOG.md](LOG.md) for running notes on what has been tried in nanopath. Negative results included! Such logs help contributors avoid retrying dead ends.
 
 # Acknowledgements
 
