@@ -20,11 +20,9 @@ CONFIG_FILE="${1:-${REPO_DIR}/configs/leader.yaml}"
 NPROC_PER_NODE=1
 
 cd "${REPO_DIR}"
-export NANOPATH_DATA_DIR="${NANOPATH_DATA_DIR:-/data/${USER:-$(id -un)}/nanopath}"
 source "${REPO_DIR}/.venv/bin/activate"
 
 echo "CONFIG_FILE=${CONFIG_FILE}"
-echo "NANOPATH_DATA_DIR=${NANOPATH_DATA_DIR}"
 echo "NPROC_PER_NODE=${NPROC_PER_NODE}"
 echo "SLURM_JOB_ID=${SLURM_JOB_ID:-local}"
 echo "SLURMD_NODENAME=${SLURMD_NODENAME:-local}"
