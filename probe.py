@@ -1,17 +1,32 @@
-# Inline downstream evaluation. This is the main comparison signal between
-# pretraining recipes: mean F1 across five classification datasets
-# (bach, bracs, break_his, mhist, pcam — KNN + SimpleShot few-shot + linear)
-# plus pannuke segmentation (MaskTransformer head from seg_head.py,
-# trained with multiclass dice loss, scored by per-image macro Jaccard).
+# Inline downstream probes. mean_probe_score = unweighted mean of four
+# aggregates: linear, KNN, and SimpleShot few-shot F1 over bach/bracs/
+# break_his/mhist/pcam, plus PanNuke macro Jaccard from a MaskTransformer head
+# (seg_head.py) trained with multiclass dice loss.
 #
-# train.py rank-0 calls queue_probe_job at FLOP milestones; that snapshots the
-# checkpoint and re-execs this file as a subprocess (`python probe.py req.json`)
-# so the probe gets a clean GPU. The subprocess writes a result JSON, then
-# collect_probe_results ingests it back into wandb + metrics.jsonl.
+# train.py rank 0 snapshots a probe checkpoint at each FLOP milestone and runs
+# this file as a subprocess (`python probe.py req.json`); training pauses, the
+# subprocess writes a result JSON, collect_probe_results ingests it back into
+# wandb + metrics.jsonl. Inside the subprocess, two threads share one GPU and
+# one loaded NanoPathFM: the main thread loops classification datasets (for
+# each, embed train+val with the frozen backbone once, then run all three
+# heads — KNN, SimpleShot few-shot, and linear — on those cached embeddings)
+# while a background thread runs PanNuke. Putting both on one GPU helps
+# because classification spends a lot of time in plain Python/CPU code which
+# leaves the GPU free to crunch PanNuke.
 #
-# Classification splits come from `thunder generate-data-splits` cached under
-# probe_data_splits; pcam is subsampled inline; pannuke images
-# come straight from the npy folds under /block/thunder-data/pannuke.
+# Rough per-task wall on a 1xH100 leader-recipe checkpoint (the full ViT, not
+# smoke). bracs and PanNuke dominate; the others are short tail.
+#   bach        ~15s         
+#   bracs       ~180s        
+#   break_his   ~14s
+#   mhist       ~16s
+#   pcam        ~35s         subsampled to 3072 train / 768 val 
+#   PanNuke     ~200-750s    the train/val npy folds are mmap'd from disk, so
+#                            wall depends a lot on whether the OS page cache is warm
+# PanNuke runs in parallel with the classification loop, so probe wall is roughly
+# max(PanNuke, sum of cls) plus a small tail. In practice that's ~12-13 min when
+# PanNuke loads the npy folds from cold disk, but as fast as ~5 min on warm cache
+# (e.g. re-running soon after a previous probe on the same node).
 
 import json
 import os
@@ -19,6 +34,7 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import torch
@@ -426,8 +442,8 @@ def run_probe_job(request_path):
     cfg = checkpoint["config"]
     DATASET_ROOTS.clear()
     DATASET_ROOTS.update({k: Path(v) for k, v in cfg["probe"]["dataset_roots"].items()})
-    # Recipes can compare raw weights or EMA weights without changing probe code.
-    state_key = {"ema": "model_ema", "raw": "model"}[str(cfg["probe"]["model_weights"])]
+    # Recipes can compare live model weights or EMA weights without changing probe code.
+    state_key = {"ema": "model_ema", "model": "model"}[str(cfg["probe"]["model_weights"])]
     model_state = checkpoint[state_key]
     del checkpoint
     device = torch.device("cuda")
@@ -438,6 +454,27 @@ def run_probe_job(request_path):
     mean = torch.tensor(cfg["data"]["mean"], device=device).view(1, 3, 1, 1)
     std = torch.tensor(cfg["data"]["std"], device=device).view(1, 3, 1, 1)
     transform = transforms.Compose([transforms.Resize(256, antialias=True), transforms.CenterCrop(224), transforms.ToTensor()])
+
+    # Segmentation overlaps with the classification loop on the same GPU and the
+    # same loaded NanoPathFM. Both paths only read the backbone (no .train()/.eval()
+    # flips, all backbone forwards are no_grad), and PanNuke trains its own
+    # MaskTransformer head with its own optimizer, so sharing the module is safe.
+    # CUDA kernels still serialize on the default stream; the win comes from
+    # overlapping CPU-side work (PIL decode, NumPy SimpleShot, sklearn F1) with
+    # PanNuke's GPU work, plus segmentation's mmap'd PanNuke loads.
+    seg_jaccards = {}
+    def run_segmentation():
+        for dataset in segmentation:
+            print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_seg_start: {dataset}", flush=True)
+            jaccard, seg_wall = inline_pannuke_jaccard(model, mean, std, device)
+            seg_jaccards[dataset] = jaccard
+            print(
+                f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
+                f"inline_seg_done: {dataset}  jaccard={jaccard:.4f}  wall={seg_wall:.2f}s",
+                flush=True,
+            )
+    seg_executor = ThreadPoolExecutor(max_workers=1) if segmentation else None
+    seg_future = seg_executor.submit(run_segmentation) if seg_executor is not None else None
 
     inline_metrics = {}
     for dataset in classification:
@@ -463,17 +500,10 @@ def run_probe_job(request_path):
             flush=True,
         )
 
-    seg_jaccards = {}
-    for dataset in segmentation:
-        # Segmentation probes train only the MaskTransformer head in seg_head.py.
-        print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_seg_start: {dataset}", flush=True)
-        jaccard, seg_wall = inline_pannuke_jaccard(model, mean, std, device)
-        seg_jaccards[dataset] = jaccard
-        print(
-            f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
-            f"inline_seg_done: {dataset}  jaccard={jaccard:.4f}  wall={seg_wall:.2f}s",
-            flush=True,
-        )
+    if seg_future is not None:
+        # .result() re-raises any exception from the segmentation thread so the probe job fails loudly.
+        seg_future.result()
+        seg_executor.shutdown()
 
     # Aggregate per-dataset metrics into the result file consumed by train.py.
     metrics = {}

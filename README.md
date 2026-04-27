@@ -4,7 +4,7 @@
 
 `nanopath` is a simple experimental harness for training tile-level computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). It is designed to run on a single GPU (but can also be run with multi-gpu if you want faster, identical results), the code is minimal/hackable, and covers the full pretraining-from-scratch pipeline using the public TCGA dataset (12k WSIs) and built-in probe evals from the [Thunder benchmark](https://mics-lab.github.io/thunder/).
 
-The current leaderboard winner uses a LeJEPA-style training objective: pull the projector outputs of all global and local crops of an image toward their per-sample mean (multi-view consistency), regularized by SIGReg to prevent representational collapse. An EMA copy of the backbone is maintained alongside training and used only as the weights the downstream probes read from. The reference recipe (`configs/leader.yaml`) takes ~4 h on one H100 or ~1.25 h on 4×H100, then runs all six probes inline in the same job.
+The current leaderboard winner uses a LeJEPA-style training objective: pull the projector outputs of all global and local crops of an image toward their per-sample mean (multi-view consistency), regularized by SIGReg to prevent representational collapse. An EMA copy of the backbone is maintained alongside training and used only as the weights the downstream probes read from. The reference recipe (`configs/leader.yaml`) takes ~4 h on one H100 or ~1.25 h on 4×H100 (this includes the six probes evaluated in the same job).
 
 **Want to get involved? Join us in the [MedARC Discord](https://discord.gg/tVR4TWnRM9) (find us in #path-fm)!**
 
@@ -140,6 +140,7 @@ Recipes with `train.save_every` set write a rolling `latest.pt`; smoke sets `tra
 
 Running notes on what has been tried in nanopath, with links to wandb where possible. Append new entries at the top. Negative results are valuable — record them so the next contributor doesn't redo a known dead end.
 
+- 2026-04-26 — **EMA vs. Non-EMA**: probing the raw model weights instead of EMA shows no difference in performance. I prefer we default to EMA since we know with OpenMidnight that averaging across checkpoints improves results, and EMA is kind of like averaging across checkpoints. Also EMA is known to generally enhance robustness. (@PaulScotti)
 - _add yours here_
 
 # Acknowledgements
