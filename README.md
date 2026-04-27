@@ -16,8 +16,6 @@ Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:
 git clone https://github.com/MedARC-AI/nanopath.git && cd nanopath
 uv sync && source .venv/bin/activate
 wandb login
-export NANOPATH_DATA_DIR="${NANOPATH_DATA_DIR:-/data/$USER/nanopath}"
-mkdir -p "$NANOPATH_DATA_DIR/slurm"
 sbatch submit/train_1gpu.sbatch configs/smoke.yaml
 # or directly: python train.py configs/smoke.yaml
 ```
@@ -133,7 +131,7 @@ sbatch submit/train_1gpu.sbatch configs/leader.yaml
 - sample-list cache: `${NANOPATH_DATA_DIR}/cache`.
 - SLURM logs: `${NANOPATH_DATA_DIR}/slurm/<jobid>.{out,err}`.
 
-On the MedARC cluster, `NANOPATH_DATA_DIR` defaults to `/data/$USER/nanopath`, avoiding shared write permissions between volunteers. The sbatch launchers write SLURM stdout/stderr to `/data/$USER/nanopath/slurm`, so create that directory once before the first `sbatch`. Override `NANOPATH_DATA_DIR` or the individual config paths if you want outputs somewhere else.
+On the MedARC cluster, `NANOPATH_DATA_DIR` defaults to `/data/$USER/nanopath`, avoiding shared write permissions between volunteers. The sbatch launchers create `${NANOPATH_DATA_DIR}/slurm` before redirecting runtime stdout/stderr there. Override `NANOPATH_DATA_DIR` or the individual config paths if you want outputs somewhere else.
 
 Recipes with `train.save_every` set write a rolling `latest.pt`; smoke sets `train.save_every: null`, so it leaves no persistent checkpoints. Probes run inline in the same job using EMA weights with training paused while they run, logged into wandb + `metrics.jsonl`.
 
