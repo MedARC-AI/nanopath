@@ -2,12 +2,12 @@ project:
   name: nanopath-smoke
   family: leader
   recipe_id: jepa-samplelist30
-  output_dir: /data/nanopath/leader/smoke
-  wandb_dir: /data/nanopath/wandb
+  output_dir: ${NANOPATH_DATA_DIR}/leader/smoke
+  wandb_dir: ${NANOPATH_DATA_DIR}/wandb
 
 data:
   sample_list: /block/TCGA/sample_dataset_30.txt
-  sample_list_cache_dir: /data/nanopath/cache
+  sample_list_cache_dir: ${NANOPATH_DATA_DIR}/cache
   split_seed: 42
   val_fraction: 0.05
   train_split: train
