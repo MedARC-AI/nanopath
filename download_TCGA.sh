@@ -246,6 +246,11 @@ cat <<EOF
 Sample list:
   $SAMPLE_LIST
 
+Next step: materialize 4M JPEG tiles into data.dataset_dir (default
+/data/nanopath_dataset) before launching train.py:
+
+  python preprocessing.py configs/leader.yaml
+
 For NanoPath configs that do not use the shared /block/TCGA path, set:
   data.sample_list: $SAMPLE_LIST
 EOF

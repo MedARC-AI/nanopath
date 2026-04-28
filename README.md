@@ -64,7 +64,8 @@ To keep entries comparable, the following are fixed across all submissions. Anyt
 ### Primary files meant to be hacked
 - `train.py` — the main pretraining loop (DDP via torchrun, JEPA + SIGReg, EMA, probe dispatch, wandb logging).
 - `model.py` — `NanoPathFM` ViT backbone. Hack here for new model architectures / training objectives.
-- `dataloader.py` — TCGA sample-list streaming loader and augmentation stack. Hack here for crop/color/HED augmentation, preprocessing, or data curation changes.
+- `dataloader.py` — TCGA JPEG-tile loader and augmentation stack. Hack here for crop/color/HED augmentation or data curation changes.
+- `preprocessing.py` — one-time job that decodes 4M 224×224 tiles from the TCGA SVS sample list into JPEGs under `data.dataset_dir`. Hack here to change tile sampling, count, or compression.
 - `configs/{smoke,leader}.yaml` — recipes (model shape, optimizer, schedule, augmentation knobs, probe config).
 
 ### Helper files
@@ -83,25 +84,28 @@ To keep entries comparable, the following are fixed across all submissions. Anyt
 - A HuggingFace login (`huggingface-cli login` or `HF_TOKEN`) — the TCGA SVS mirror is gated.
 - Kaggle credentials in `~/.kaggle/kaggle.json` — required to download `break_his`.
 - mhist form access — the script prints the form URL the first time it runs and waits for the resulting download.
-- ~13 TB free disk for TCGA SVS files plus ~30 GB for the six probe datasets. *(TODO: provide alternative that requires less disk space.)*
+- ~13 TB free disk for TCGA SVS files, ~200 GB for the precomputed JPEG tile dataset, plus ~30 GB for the six probe datasets. *(TODO: provide alternative that requires less disk space.)*
 
-- **TCGA pretraining data**: checked-in configs default to
-  `/block/TCGA/sample_dataset_30.txt`, which is the shared cluster path used by [MedARC](https://www.medarc.ai/). External users should download their own copy:
+- **TCGA pretraining data**: a two-step setup. First download the SVS slides + sample list, then run `preprocessing.py` to materialize 4M 224×224 JPEG tiles that `train.py` actually reads. Checked-in configs default to `/block/TCGA/sample_dataset_30.txt` (shared [MedARC](https://www.medarc.ai/) cluster path) and `/data/nanopath_dataset/` (the JPEG tiles + manifest); external users should download their own copy:
 
   ```bash
-  # Requires large storage: the open TCGA SVS slide set is multi-TB.
+  # 1) Download the TCGA SVS files and sample list (multi-TB).
   # If the Hugging Face repo is gated, set HF_TOKEN or run huggingface-cli login first.
   bash download_TCGA.sh /data/TCGA 8
+
+  # 2) Decode 4M tiles to JPEG once. ~200 GB output, parallelized over CPU cores.
+  python preprocessing.py configs/leader.yaml
   ```
 
-  This writes `/data/TCGA/sample_dataset_30.txt`, downloads open-access TCGA SVS files from GDC, and creates flat `/data/TCGA/*.svs` symlinks for the sample list. To use it, copy a config and set:
+  `download_TCGA.sh` writes `/data/TCGA/sample_dataset_30.txt`, downloads open-access TCGA SVS files from GDC, and creates flat `/data/TCGA/*.svs` symlinks for the sample list. `preprocessing.py` reads `data.sample_list`, deterministically subsamples to 4M tiles, and writes JPEGs + `manifest.txt` under `data.dataset_dir`. Reruns skip already-decoded tiles. To point a config at custom paths, copy a config and set:
 
   ```yaml
   data:
     sample_list: /data/TCGA/sample_dataset_30.txt
+    dataset_dir: /data/nanopath_dataset
   ```
 
-  `train.py` errors before training if the configured sample list is missing, and the dataloader errors with the same setup guidance if a listed SVS file is missing.
+  `train.py` errors before training if the JPEG manifest is missing, with a one-line hint to run `preprocessing.py`.
 - **Probe datasets** (bach / bracs / break_his / mhist / pcam / pannuke):
   `python download_probe_datasets.py configs/leader.yaml` pulls each one to the path given in `probe.dataset_roots` if not already present. Off-cluster, edit `probe.dataset_roots` in the config to point at writable directories before running. mhist requires a one-time form access (the script prints instructions); break_his requires Kaggle credentials in `~/.kaggle/kaggle.json`.
 
@@ -128,7 +132,7 @@ sbatch submit/train_1gpu.sbatch configs/leader.yaml
 
 - run outputs: `project.output_dir` (checked-in configs default under `/data/$USER/nanopath/leader/...`; wiped on fresh launch).
 - wandb: `/data/$USER/nanopath/wandb`.
-- sample-list cache: `/data/$USER/nanopath/cache`.
+- precomputed JPEG tiles: `data.dataset_dir` (checked-in configs default to `/data/nanopath_dataset`); produced once by `preprocessing.py` and shared across runs.
 - SLURM logs: `slurm/<jobid>.{out,err}` in the repo checkout.
 
 `train.py` runs `os.path.expandvars` on the YAML text, so `$USER` in checked-in configs resolves to the cluster user at load time.

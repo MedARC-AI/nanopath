@@ -1,24 +1,23 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=baseline_4gpus
+#SBATCH --job-name=preprocess
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-task=4
+#SBATCH --exclusive
 #SBATCH --time=04:00:00
 #SBATCH --output=slurm/%j.out
 #SBATCH --error=slurm/%j.err
-#SBATCH --partition=n
+#SBATCH --partition=c
 #SBATCH --account=sophont
-#SBATCH --qos=normal # low | normal | top
+#SBATCH --qos=normal
 
 set -euo pipefail
 
-# Single-node SLURM launcher: torchrun on NPROC_PER_NODE GPUs, optional first
-# arg overrides the YAML config (defaults to configs/leader.yaml). Adjust
-# NPROC_PER_NODE and the #SBATCH resource lines above to scale up or down.
-# Logs land in repo-local slurm/<jobid>.{out,err}.
+# CPU-node launcher for preprocessing.py. Decodes 4M 224x224 JPEG tiles from
+# the TCGA SVS sample list into data.dataset_dir; manifest.txt at the end.
+# Reruns are resumable: existing JPEGs are skipped. Optional first arg is the
+# YAML config (defaults to configs/leader.yaml).
 REPO_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 CONFIG_FILE="${1:-${REPO_DIR}/configs/leader.yaml}"
-NPROC_PER_NODE=4
 
 cd "${REPO_DIR}"
 # Worktrees share the venv from the main checkout at /admin/home/$USER/nanopath.
@@ -28,13 +27,13 @@ if [[ ! -f "${VENV_DIR}/bin/activate" ]]; then
 fi
 source "${VENV_DIR}/bin/activate"
 
+# OpenSlide reads from /block (NFS) and JPEG writes go to /data; tiles are
+# IO-bound, so oversubscribe workers past nproc to overlap waits.
+export PREPROCESS_WORKERS="${PREPROCESS_WORKERS:-16}"
+
 echo "CONFIG_FILE=${CONFIG_FILE}"
-echo "NPROC_PER_NODE=${NPROC_PER_NODE}"
 echo "SLURM_JOB_ID=${SLURM_JOB_ID:-local}"
 echo "SLURMD_NODENAME=${SLURMD_NODENAME:-local}"
+echo "nproc=$(nproc)  PREPROCESS_WORKERS=${PREPROCESS_WORKERS}"
 
-torchrun \
-  --standalone \
-  --nproc_per_node "${NPROC_PER_NODE}" \
-  train.py \
-  "${CONFIG_FILE}"
+python preprocessing.py "${CONFIG_FILE}"

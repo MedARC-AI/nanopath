@@ -30,7 +30,7 @@ import yaml
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
 
-from dataloader import RandomTCGADataset, SAMPLE_LIST_PATCH_SIZE, prepare_sample_list_offsets
+from dataloader import TCGATileDataset, TILE_SIZE
 from model import SIGReg, NanoPathFM
 from probe import (
     completed_probe_summary,
@@ -49,21 +49,20 @@ TRAIN_KEYS = ("jepa_pred", "sig", "total", "proj_std")
 def console_prefix(): return f"{time.strftime('%H:%M:%S')} {os.environ.get('SLURM_JOB_ID', str(os.getpid()))}"
 
 
-# Read the YAML recipe and fail before any GPU work if the TCGA sample list is absent.
+# Read the YAML recipe and fail before any GPU work if the JPEG tile dataset is absent.
 # expandvars resolves `$USER` so checked-in configs work for any cluster user under /data/$USER.
 def load_config():
     if len(sys.argv) != 2:
         raise ValueError("usage: python train.py <config.yaml>")
     cfg = yaml.safe_load(os.path.expandvars(Path(sys.argv[1]).read_text()))
     cfg["config_path"] = str(Path(sys.argv[1]).resolve())
-    sample_list = Path(cfg["data"]["sample_list"])
-    if not sample_list.exists():
+    manifest_path = Path(cfg["data"]["dataset_dir"]) / "manifest.txt"
+    if not manifest_path.exists():
         raise FileNotFoundError(
-            f"Pretraining sample list not found at {sample_list}. This is TCGA WSI metadata "
-            f"and slide data that are not downloaded by train.py. Follow the TCGA data setup "
-            f"in README.md, for example `bash download_TCGA.sh /data/TCGA 8`, then set "
-            f"data.sample_list to /data/TCGA/sample_dataset_30.txt or place the file at "
-            f"the configured path in {cfg['config_path']}."
+            f"Pretraining tile manifest not found at {manifest_path}. The JPEG tile dataset is "
+            f"materialized once by `python preprocessing.py {cfg['config_path']}`, which reads "
+            f"data.sample_list and writes 4M JPEG tiles plus manifest.txt under data.dataset_dir. "
+            f"Follow the data setup in README.md before launching train.py."
         )
     return cfg
 
@@ -249,13 +248,8 @@ def main():
         wandb_meta = {"project": "nanopath", "id": wandb_run.id, "name": cfg["project"]["name"]}
     else:
         wandb_run = None
-    if rank == 0:
-        # Build byte-offset caches once so workers can jump directly to sample-list lines.
-        prepare_sample_list_offsets(cfg)
-    if distributed:
-        dist.barrier()
-    train_ds = RandomTCGADataset(cfg, cfg["data"]["train_split"])
-    val_ds = RandomTCGADataset(cfg, cfg["data"]["val_split"])
+    train_ds = TCGATileDataset(cfg, cfg["data"]["train_split"])
+    val_ds = TCGATileDataset(cfg, cfg["data"]["val_split"])
     probe_state = prepare_probe_state(cfg, output_dir) if rank == 0 and probe_enabled(cfg) else None
 
     # Wrap datasets in DistributedSampler only when DDP is active; the recipe defines global batch size.
@@ -290,7 +284,7 @@ def main():
     last_examples = examples_seen
     last_visible_patch_presentations = visible_patch_presentations
     last_train_flops = train_flops
-    unique_tile_patch_count = (SAMPLE_LIST_PATCH_SIZE // cfg["model"]["patch_size"]) ** 2
+    unique_tile_patch_count = (TILE_SIZE // cfg["model"]["patch_size"]) ** 2
     seen_ids = {"sample": set(), "slide": set(), "patient": set()}
     pending_ids = {key: set() for key in seen_ids}
 
@@ -519,9 +513,6 @@ def main():
                 reduced = dict(zip(TRAIN_KEYS, reduced))
             unique_counts = flush_unique_counts() if should_log else None
             if rank == 0 and should_log:
-                finite_mpp = batch["sampled_mpp"].float()
-                finite_mpp = finite_mpp[torch.isfinite(finite_mpp)]
-                sampled_mpp_mean = float(finite_mpp.mean().item()) if finite_mpp.numel() > 0 else float("nan")
                 now = time.time()
                 elapsed = max(1e-6, now - last_time)
                 items_per_sec = (examples_seen - last_examples) / elapsed
@@ -546,7 +537,6 @@ def main():
                 train_log = {
                     "step": completed_step,
                     **reduced,
-                    "sampled_mpp_mean": sampled_mpp_mean,
                     "items_per_sec": items_per_sec,
                     "visible_patches_per_sec": visible_patches_per_sec,
                     "flops_per_sec": flops_per_sec,
