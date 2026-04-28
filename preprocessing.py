@@ -51,13 +51,23 @@ def _get_slide(slide_path):
 
 # Decode one tile and write it as JPEG; returns the manifest-relative path on
 # success, None if the slide is unreadable. A poison slide should not kill the
-# whole job: log the first failure per slide to stderr and continue.
+# whole job: log the first failure per slide to stderr and continue. Existing
+# files are validated (>0 bytes + JPEG EOF marker) so a partial write left by
+# a previous SIGTERM is detected and rewritten. New writes go to a sibling
+# ".tmp" file and rename atomically so future runs cannot see partial bytes.
 def process_row(args):
     dataset_dir, slide_path, x, y, level = args
     rel = f"{Path(slide_path).stem}/{x}_{y}_{level}.jpg"
     out = Path(dataset_dir) / rel
     if out.exists():
-        return rel
+        try:
+            with out.open("rb") as f:
+                f.seek(-2, os.SEEK_END)
+                if f.read(2) == b"\xff\xd9":
+                    return rel
+        except OSError:
+            pass
+        out.unlink()
     if slide_path in _DEAD_SLIDES:
         return None
     try:
@@ -77,7 +87,9 @@ def process_row(args):
             _DEAD_SLIDES.add(slide_path)
         return None
     out.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(tile).save(out, "JPEG", quality=JPEG_QUALITY)
+    tmp = out.with_suffix(f".{os.getpid()}.tmp")
+    Image.fromarray(tile).save(tmp, "JPEG", quality=JPEG_QUALITY)
+    os.replace(tmp, out)
     return rel
 
 
