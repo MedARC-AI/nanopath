@@ -20,7 +20,12 @@ CONFIG_FILE="${1:-${REPO_DIR}/configs/leader.yaml}"
 NPROC_PER_NODE=1
 
 cd "${REPO_DIR}"
-source "${REPO_DIR}/.venv/bin/activate"
+# Worktrees share the venv from the main checkout at /admin/home/$USER/nanopath.
+VENV_DIR="${REPO_DIR}/.venv"
+if [[ ! -f "${VENV_DIR}/bin/activate" ]]; then
+  VENV_DIR="${HOME}/nanopath/.venv"
+fi
+source "${VENV_DIR}/bin/activate"
 
 echo "CONFIG_FILE=${CONFIG_FILE}"
 echo "NPROC_PER_NODE=${NPROC_PER_NODE}"
