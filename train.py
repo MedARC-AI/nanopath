@@ -271,9 +271,13 @@ def main():
     val_loader = make_loader(val_ds, False, batch_size)
 
     if distributed:
-        model = DDP(model, device_ids=[local_rank], find_unused_parameters=False)
+        # static_graph fuses DDP all-reduce into fewer/larger buckets (recipe has no
+        # find_unused_parameters churn); gradient_as_bucket_view skips the gradient copy.
+        model = DDP(model, device_ids=[local_rank], find_unused_parameters=False, static_graph=True, gradient_as_bucket_view=True)
     root_model = model.module if distributed else model
-    model = torch.compile(model, dynamic=False)
+    # max-autotune-no-cudagraphs does a per-shape kernel sweep at warmup for the
+    # model forward/backward; cudagraphs disabled because DDP/EMA mutate buffers.
+    model = torch.compile(model, dynamic=False, mode="max-autotune-no-cudagraphs")
     # EMA is a lightweight target snapshot for probes, not a separate forward path during training.
     model_state = root_model.state_dict()
     ema_source = checkpoint["model_ema"] if resume_path is not None else model_state
