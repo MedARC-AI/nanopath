@@ -132,7 +132,7 @@ class TCGATileDataset(Dataset):
                 v2.RandomResizedCrop(train["global_size"], scale=tuple(data["global_crop_scale"]), antialias=True),
                 v2.RandomHorizontalFlip(),
                 v2.RandomVerticalFlip(),
-                v2.ColorJitter(data["color_jitter"], data["color_jitter"], data["color_jitter"], 0.0),
+                v2.ColorJitter(data["color_jitter"], data["color_jitter"], data["color_jitter_saturation"], 0.0),
                 v2.Normalize(mean=mean, std=std),
             ]
         )
@@ -142,7 +142,7 @@ class TCGATileDataset(Dataset):
                 v2.RandomResizedCrop(train["local_size"], scale=tuple(data["local_crop_scale"]), antialias=True),
                 v2.RandomHorizontalFlip(),
                 v2.RandomVerticalFlip(),
-                v2.ColorJitter(data["color_jitter"], data["color_jitter"], data["color_jitter"], 0.0),
+                v2.ColorJitter(data["color_jitter"], data["color_jitter"], data["color_jitter_saturation"], 0.0),
                 v2.Normalize(mean=mean, std=std),
             ]
         )
