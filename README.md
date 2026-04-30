@@ -47,7 +47,7 @@ Score is final `mean_probe_score`: unweighted mean of standard classification pr
 
 ### How to submit to leaderboard
 
-The current `configs/leader.yaml` is the top performing leaderboard recipe. To get on the leaderboard you must outperform the existing top leaderboard `mean_probe_score` by at least 0.01. If you do so, open a PR to this repo with a description of your changes (please keep only the minimal necessary code changes that improve performance) and share your wandb run/report. [@PaulScotti](https://github.com/PaulScotti) will train a new model using your code on his H100 but with a different rng seed. If it still improves `mean_probe_score` by at least 0.01, we will update the README & leaderboard accordingly. **You don't need an H100 yourself to submit** — train on whatever hardware you have access to, share the run if you think it's a winner, and Paul handles H100 verification.
+The current `configs/leader.yaml` is the top performing leaderboard recipe. To get on the leaderboard you must outperform the existing top leaderboard `mean_probe_score` by at least 0.01. If you do so, open a PR to this repo with a description of your changes (please keep only the minimal necessary code changes that improve performance) and share your wandb run/report. [@PaulScotti](https://github.com/PaulScotti) will train a new model using your code on his H100 but with a different rng seed, while striving to reduce the submission to the smallest practical diff against the current codebase. If it still improves `mean_probe_score` by at least 0.01, we will update the README & leaderboard accordingly. **You don't need an H100 yourself to submit** — train on whatever hardware you have access to, share the run if you think it's a winner, and Paul handles H100 verification.
 
 ### What you must NOT change for a leaderboard submission
 
@@ -83,7 +83,7 @@ To keep entries comparable, the following are fixed across all submissions. Anyt
 
 ### Helper files
 - `AGENTS.md` — guidelines for AI assistants and human contributors: design philosophy (minimal/hackable, nanochat-flavored), coding rules, experiment discipline, and cluster/storage conventions. Note some language is specific to the MedARC cluster.
-- `prepare.py` — data prep (verify or download HF mirror + probe datasets); also hosts the SVS-decode + parquet-pack helpers used by the regen workflow.
+- `prepare.py` — data prep (verify or download HF mirror + probe datasets); also hosts the SVS-decode + parquet-pack helpers for [regenerating the tile dataset from raw SVS](#regenerating-the-tile-dataset-from-raw-svs).
 - `probe.py` — downstream probes (KNN, few shot, linear, segmentation).
 - `submit/{prepare,train_1gpu,train_4gpu}.sbatch` — SLURM launchers (CPU node for prepare, GPU node for training).
 - `seg_head.py` — `MaskTransformer` + `multiclass_dice_loss` (used by `probe.py`'s pannuke segmentation), vendored by Thunder.
@@ -184,4 +184,4 @@ See [LOG.md](LOG.md) for running notes on what has been tried in nanopath. Negat
 
 ## Acknowledgements
 
-Inspired by [nanochat](https://github.com/karpathy/nanochat). Probe code, dataset splits, and the pannuke `MaskTransformer` head are adapted from the [Thunder benchmark](https://mics-lab.github.io/thunder/). 
+Inspired by [nanochat](https://github.com/karpathy/nanochat). Probe code, dataset splits, and the pannuke `MaskTransformer` head are adapted from the [Thunder benchmark](https://mics-lab.github.io/thunder/).
