@@ -6,7 +6,6 @@
 # Researchers changing objectives should start at loss_terms() here and SIGReg
 # in model.py; changing data preprocessing starts in dataloader.py; changing
 # downstream comparisons starts in probe.py.
-# Launch: `torchrun --standalone --nproc_per_node N train.py <config.yaml>`.
 
 import contextlib
 import json
@@ -49,20 +48,20 @@ TRAIN_KEYS = ("jepa_pred", "sig", "total", "proj_std")
 def console_prefix(): return f"{time.strftime('%H:%M:%S')} {os.environ.get('SLURM_JOB_ID', str(os.getpid()))}"
 
 
-# Read the YAML recipe and fail before any GPU work if the JPEG tile dataset is absent.
-# expandvars resolves `$USER` so checked-in configs work for any cluster user under /data/$USER.
+# Read the YAML recipe and fail before any GPU work if the parquet tile dataset is absent.
+# expandvars is necessary to resolve `$USER` for checked-in configs.
 def load_config():
     if len(sys.argv) != 2:
         raise ValueError("usage: python train.py <config.yaml>")
     cfg = yaml.safe_load(os.path.expandvars(Path(sys.argv[1]).read_text()))
     cfg["config_path"] = str(Path(sys.argv[1]).resolve())
-    manifest_path = Path(cfg["data"]["dataset_dir"]) / "manifest.txt"
-    if not manifest_path.exists():
+    dataset_dir = Path(cfg["data"]["dataset_dir"])
+    if not any(dataset_dir.glob("shard-*.parquet")):
         raise FileNotFoundError(
-            f"Pretraining tile manifest not found at {manifest_path}. The JPEG tile dataset is "
-            f"materialized once by `python preprocessing.py {cfg['config_path']}`, which reads "
-            f"data.sample_list and writes 4M JPEG tiles plus manifest.txt under data.dataset_dir. "
-            f"Follow the data setup in README.md before launching train.py."
+            f"No parquet shards (shard-*.parquet) under {dataset_dir}. Pull the 4M-tile "
+            f"parquet dataset from medarc/nanopath on HF by running "
+            f"`python prepare.py {cfg['config_path']} download=True`. Follow the data setup in "
+            f"README.md before launching train.py."
         )
     return cfg
 
@@ -86,8 +85,8 @@ def evaluate(model, sigreg, loader, cfg, device, world_size):
     train_cfg = cfg["train"]
     losses = [0.0] * len(EVAL_KEYS)
     batches = 0
-    autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if device.type == "cuda" and train_cfg["bf16"] else contextlib.nullcontext()
-    eval_generator = torch.Generator(device=device.type)
+    autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if train_cfg["bf16"] else contextlib.nullcontext()
+    eval_generator = torch.Generator(device="cuda")
     eval_generator.manual_seed(train_cfg["seed"])
     # Validation uses deterministic SIGReg directions so validation loss noise is not seed drift.
     with torch.no_grad():
@@ -132,22 +131,17 @@ def main():
     distributed = world_size > 1
     if distributed:
         dist.init_process_group(backend="nccl", timeout=timedelta(minutes=45))
-        torch.cuda.set_device(local_rank)
-        device = torch.device("cuda", local_rank)
-    else:
-        device = torch.device(train_cfg["device"])
+    torch.cuda.set_device(local_rank)
+    device = torch.device("cuda", local_rank)
     # Rank-offset seeds keep DDP workers from sampling identical augmentation streams.
     random.seed(train_cfg["seed"] + rank)
     np.random.seed(train_cfg["seed"] + rank)
     torch.manual_seed(train_cfg["seed"] + rank)
     torch.set_float32_matmul_precision("high")
-    if device.type == "cuda":
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
-        pynvml.nvmlInit()
-        nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(torch.cuda.current_device())
-    else:
-        nvml_handle = None
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    pynvml.nvmlInit()
+    nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(torch.cuda.current_device())
     # NanoPathFM is the encoder/projector; SIGReg is kept separate so objective edits stay local.
     model = NanoPathFM(cfg).to(device)
     sigreg = SIGReg().to(device)
@@ -175,9 +169,18 @@ def main():
     output_dir = Path(cfg["project"]["output_dir"])
     wandb_dir = Path(cfg["project"]["wandb_dir"])
     slurm_job_id = os.environ.get("SLURM_JOB_ID")
-    # Fresh launches fully replace the run directory so repeated use of a checked-in
-    # output_dir under /data/$USER/nanopath never trips over stale artifacts.
-    if train_cfg["resume"] is None:
+    latest_checkpoint_path = output_dir / "latest.pt"
+    # Pick a resume source. Priority: explicit train.resume override, then any
+    # latest.pt already in output_dir (so a SLURM auto-requeue picks up where
+    # the previous job was killed). With no resume source we treat this as a
+    # fresh launch and wipe output_dir to avoid mixing stale artifacts.
+    if train_cfg["resume"]:
+        resume_path = Path(train_cfg["resume"])
+    elif latest_checkpoint_path.exists():
+        resume_path = latest_checkpoint_path
+    else:
+        resume_path = None
+    if resume_path is None:
         if rank == 0 and output_dir.exists():
             shutil.rmtree(output_dir)
         if distributed:
@@ -186,11 +189,11 @@ def main():
     wandb_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = output_dir / "metrics.jsonl"
     summary_path = output_dir / "summary.json"
-    latest_checkpoint_path = output_dir / "latest.pt"
     wandb_meta = None
-    resume_path = train_cfg["resume"]
     checkpoint = None
     if resume_path is not None:
+        if rank == 0:
+            print(f"{console_prefix()} Resume  loading checkpoint: {resume_path}", flush=True)
         # Resume restores training progress, optimizer state, and wandb identity.
         checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
         model.load_state_dict(checkpoint["model"])
@@ -212,7 +215,6 @@ def main():
         )
         wandb_meta = dict(checkpoint["wandb"])
     if rank == 0:
-        # Rank 0 owns external side effects; nonzero ranks only participate in training/eval collectives.
         wandb_init = {
             "project": "nanopath",
             "name": cfg["project"]["name"],
@@ -262,7 +264,7 @@ def main():
             sampler=sampler,
             drop_last=shuffle,
             num_workers=train_cfg["num_workers"],
-            pin_memory=device.type == "cuda",
+            pin_memory=True,
             prefetch_factor=train_cfg["prefetch_factor"] if train_cfg["num_workers"] > 0 else None,
             persistent_workers=train_cfg["persistent_workers"] and train_cfg["num_workers"] > 0,
         )
@@ -440,8 +442,8 @@ def main():
             lr_multiplier = min(lr_multiplier, final_lr_frac + (1.0 - final_lr_frac) * (max_train_flops - lr_flops) / warmdown_train_flops)
             for group in opt.param_groups:
                 group["lr"] = lr * lr_multiplier
-            autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if device.type == "cuda" and train_cfg["bf16"] else contextlib.nullcontext()
-            sigreg_generator = torch.Generator(device=device.type)
+            autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if train_cfg["bf16"] else contextlib.nullcontext()
+            sigreg_generator = torch.Generator(device="cuda")
             sigreg_generator.manual_seed(train_cfg["seed"] + step)
             with autocast:
                 # Model returns per-view projector features; loss_terms() defines the pretraining objective.
@@ -523,9 +525,9 @@ def main():
                 last_examples = examples_seen
                 last_visible_patch_presentations = visible_patch_presentations
                 last_train_flops = train_flops
-                gpu_util_pct = float(pynvml.nvmlDeviceGetUtilizationRates(nvml_handle).gpu) if nvml_handle is not None else 0.0
-                gpu_mem_gb = torch.cuda.memory_allocated(device) / (1024**3) if device.type == "cuda" else 0.0
-                gpu_peak_mem_gb = torch.cuda.max_memory_allocated(device) / (1024**3) if device.type == "cuda" else 0.0
+                gpu_util_pct = float(pynvml.nvmlDeviceGetUtilizationRates(nvml_handle).gpu)
+                gpu_mem_gb = torch.cuda.memory_allocated(device) / (1024**3)
+                gpu_peak_mem_gb = torch.cuda.max_memory_allocated(device) / (1024**3)
                 console_now = time.monotonic()
                 console_gap_ms = 1000.0 * (console_now - last_console_monotonic)
                 steps_since_console = max(1, completed_step - last_console_step)
@@ -589,8 +591,7 @@ def main():
                     step=completed_step,
                 )
                 log_probe_results()
-                if device.type == "cuda":
-                    torch.cuda.reset_peak_memory_stats(device)
+                torch.cuda.reset_peak_memory_stats(device)
             if completed_step % train_cfg["eval_every"] == 0:
                 # Validation is also the synchronization point for probe milestones.
                 if rank == 0:
@@ -607,7 +608,12 @@ def main():
                     dist.barrier()
             if rank == 0 and save_checkpoints and completed_step % save_every == 0:
                 print(f"{console_prefix()} Checkpoint  [{completed_step}]  save: latest.pt", flush=True)
-                torch.save(checkpoint_payload(completed_step), latest_checkpoint_path)
+                # Atomic rename: a SLURM kill or scontrol requeue mid-save
+                # leaves the previous good latest.pt intact rather than a
+                # half-written file the requeued job would refuse to load.
+                tmp_path = latest_checkpoint_path.with_suffix(".pt.tmp")
+                torch.save(checkpoint_payload(completed_step), tmp_path)
+                os.replace(tmp_path, latest_checkpoint_path)
                 for stale_checkpoint_path in output_dir.glob("step_*.pt"):
                     stale_checkpoint_path.unlink()
                 last_saved_step = completed_step
@@ -647,7 +653,9 @@ def main():
         log_probe_results()
         if save_checkpoints and step > 0 and step != last_saved_step:
             print(f"{console_prefix()} Checkpoint  [{step}]  save: latest.pt", flush=True)
-            torch.save(checkpoint_payload(step), latest_checkpoint_path)
+            tmp_path = latest_checkpoint_path.with_suffix(".pt.tmp")
+            torch.save(checkpoint_payload(step), tmp_path)
+            os.replace(tmp_path, latest_checkpoint_path)
             for stale_checkpoint_path in output_dir.glob("step_*.pt"):
                 stale_checkpoint_path.unlink()
             last_saved_step = step

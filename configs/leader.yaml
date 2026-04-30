@@ -6,10 +6,9 @@ project:
   wandb_dir: /data/$USER/nanopath/wandb
 
 data:
-  # sample_list is the source SVS-tile manifest read once by preprocessing.py.
-  # dataset_dir holds the precomputed JPEG tiles + manifest.txt that train.py reads.
-  sample_list: /block/TCGA/sample_dataset_30.txt
-  dataset_dir: /data/nanopath_dataset
+  # dataset_dir holds the parquet shards (shard-NNNNN.parquet) that train.py reads.
+  # `prepare.py … download=True` populates it from the medarc/nanopath HF mirror.
+  dataset_dir: /data/nanopath_parquet
   split_seed: 42
   val_fraction: 0.05
   train_split: train
@@ -35,7 +34,6 @@ model:
 
 train:
   seed: 1337
-  device: cuda
   bf16: true
   activation_checkpointing: false
   # SIGReg + JEPA all-gather depend on the global batch, so this is part of the recipe and stays fixed across hardware.
@@ -77,8 +75,10 @@ probe:
     - pcam
   segmentation_datasets:
     - pannuke
-  # Dataset roots are read by probe.py and download_probe_datasets.py. External users should
-  # point these at the directories produced by `python download_probe_datasets.py <this config>`.
+  # Dataset roots are read by probe.py. Defaults are the MedARC cluster's
+  # shared /block paths (already populated, zero setup). Off-cluster, point
+  # these at writable directories and run prepare.py with download=True to
+  # fetch the data.
   dataset_roots:
     bach: /block/eva-data/bach
     bracs: /block/eva-data/bracs

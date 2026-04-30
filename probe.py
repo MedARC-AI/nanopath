@@ -64,7 +64,7 @@ CLASSIFICATION_DATASETS = ["bach", "bracs", "break_his", "mhist", "pcam"]
 SEGMENTATION_DATASETS = ["pannuke"]
 # Module-level so ClassificationDataset / inline_pannuke_jaccard can read it without threading
 # cfg through every call. Populated from cfg.probe.dataset_roots by prepare_probe_state() (main
-# process) and run_probe_job() (subprocess); also by download_probe_datasets.py at fetch time.
+# process) and run_probe_job() (subprocess); also by prepare.py at fetch time.
 DATASET_ROOTS = {}
 
 

@@ -9,6 +9,7 @@
 #SBATCH --partition=n
 #SBATCH --account=sophont
 #SBATCH --qos=normal # low | normal | top
+#SBATCH --requeue
 
 set -euo pipefail
 

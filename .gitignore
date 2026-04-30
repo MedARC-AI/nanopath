@@ -48,3 +48,6 @@ checkpoints/
 *.log
 slurm/
 core.*
+
+# Probe datasets fetched by prepare.py (when configured under repo)
+probe_data/

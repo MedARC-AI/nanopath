@@ -2,9 +2,9 @@
 
 ![nanopath logo](nanopath_logo.png)
 
-`nanopath` is a simple experimental harness for training tile-level computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). It is designed to run on a single GPU (but can also be run with multi-gpu if you want faster, identical results), the code is minimal/hackable, and covers the full pretraining-from-scratch pipeline using the public TCGA dataset (12k WSIs) and built-in probe evals from the [Thunder benchmark](https://mics-lab.github.io/thunder/).
+`nanopath` is a super lean experimental harness for training tile-level computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). It runs on a single GPU (can also be run multi-gpu if you want faster, identical results), the code is minimal/hackable, and covers the full pretraining pipeline using the public TCGA dataset (12k WSIs) and built-in probe evals from the [Thunder benchmark](https://mics-lab.github.io/thunder/). 
 
-The current leaderboard winner uses a LeJEPA-style training objective: pull the projector outputs of all global and local crops of an image toward their per-sample mean (multi-view consistency), regularized by SIGReg to prevent representational collapse. An EMA copy of the backbone is maintained alongside training and used only as the weights the downstream probes read from. The reference recipe (`configs/leader.yaml`) takes ~4 h on one H100 or ~1.25 h on 4×H100 (this includes the six probes evaluated in the same job).
+This repository is intentionally made to be compatible with [autoresearch](https://github.com/karpathy/autoresearch)-style pursuits. We will continuously update our codebase and [Leaderboard](#leaderboard) to reflect the best performing model. The current leaderboard winner (`configs/leader.yaml`) takes ~1 hour on one H100 GPU (this includes the six downstream probes evaluated at the end of the same job).
 
 **Want to get involved? Join us in the [MedARC Discord](https://discord.gg/tVR4TWnRM9) (find us in #path-fm)!**
 
@@ -16,15 +16,26 @@ Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:
 git clone https://github.com/MedARC-AI/nanopath.git && cd nanopath
 uv sync && source .venv/bin/activate
 wandb login
+
+# first-time setup to verify pretrain + probe datasets exist
+python prepare.py configs/smoke.yaml download=False   
+
+# "smoke test": train + eval model in <10 min to check everything works
 sbatch submit/train_1gpu.sbatch configs/smoke.yaml
 # or directly: python train.py configs/smoke.yaml
+
+# train and evaluate current first place model in the leaderboard 
+sbatch submit/train_1gpu.sbatch configs/leader.yaml
+# or directly: python train.py configs/leader.yaml
 ```
 
-If you are a MedARC volunteer using our shared cluster, the above steps should work as-is. If you are using your own compute, you'll also need to download the TCGA pretraining data and the downstream probe datasets. See Data section of this README for instructions.
+If you are a MedARC volunteer on our shared cluster, the checked-in configs already point at `/data/nanopath_parquet` for the tile shards and `/block/{eva-data,thunder-data}/<name>` for the probe datasets. `python prepare.py configs/leader.yaml download=False` should print all `[skip]` lines. 
+
+For non-MedARC cluster users, run `python prepare.py configs/leader.yaml download=True` to download our 4M-tile dataset (200 parquet shards, ~120 GB) from the [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) HF mirror and pull each probe dataset from its public source. That is the entire data setup; you do not need the original TCGA SVS files to train.
 
 `pyproject.toml` pins `torch` / `torchvision` against the CUDA 12.9 wheel index. If your GPU/driver needs a different CUDA build (e.g. cu118 for older A100/V100 setups), edit the `torch` and `torchvision` lines in `pyproject.toml` before `uv sync`.
 
-A successful smoke prints periodic train/val lines, logs to wandb, and ends with final summary in `metrics.jsonl`. Probe scores will be near-random since smoke is undertrained; the goal is just to confirm everything wires up. The full `configs/leader.yaml` should land near the leaderboard's ~0.52 `mean_probe_score`; for context, a randomly initialized backbone scores roughly ~0.2.
+A successful model training prints periodic train/val lines, logs to wandb, and ends with final summary in `metrics.jsonl`. `configs/smoke.yaml` probe scores will be near-random since it is undertrained — use `configs/leader.yaml` for full runs.
 
 ## Leaderboard
 
@@ -36,14 +47,17 @@ Score is final `mean_probe_score`: unweighted mean of standard classification pr
 
 ### How to submit to leaderboard
 
-The checked-in `configs/leader.yaml` is the top performing leaderboard recipe. To get on the leaderboard you must run that config end-to-end and outperform the existing top leaderboard `mean_probe_score` by at least 0.01. If you do so, contact [@PaulScotti](https://github.com/PaulScotti) and share your code with him; he will train a new model using your code but with a different rng seed. If it still improves `mean_probe_score` by at least 0.01, you should open a PR to this repo (please keep only the minimal necessary code changes that improve performance) and a description of your changes. Paul will update the README & leaderboard accordingly.
+The current `configs/leader.yaml` is the top performing leaderboard recipe. To get on the leaderboard you must outperform the existing top leaderboard `mean_probe_score` by at least 0.01. If you do so, open a PR to this repo with a description of your changes (please keep only the minimal necessary code changes that improve performance) and share your wandb run/report. [@PaulScotti](https://github.com/PaulScotti) will train a new model using your code on his H100 but with a different rng seed. If it still improves `mean_probe_score` by at least 0.01, we will update the README & leaderboard accordingly. **You don't need an H100 yourself to submit** — train on whatever hardware you have access to, share the run if you think it's a winner, and Paul handles H100 verification.
 
 ### What you must NOT change for a leaderboard submission
 
-To keep entries comparable, the following are fixed across all submissions. Anything else (model architecture, training objective, optimizer, schedule shape, augmentation policy, EMA decay, masking, predictor design, dataset curation, etc.) is fair game.
+To keep entries comparable, the following are fixed across all submissions. Anything else (model architecture, training objective, optimizer, schedule shape, augmentation policy, EMA decay, masking, predictor design, dataset curation, using a pretrained image model ckpt, etc.) is fair game.
 
 **Compute budget**
 - `train.max_train_flops` (1e18). Compute budget is fixed to facilitate direct comparisons across training approaches; you can't buy higher score with more compute.
+
+**Wall-clock budget**
+- End-to-end `train.py` (training + inline probes) must complete in **≤3 hours on a single 80 GB H100**. Memory tricks like `train.activation_checkpointing: true` are fair game. `prepare.py`'s one-time data prep is excluded. We will verify any submissions using our own H100 hardware, so you do not yourself need to test on an H100.
 
 **Activated parameter count**
 - **≤150M activated backbone params**, where "backbone" is everything in `NanoPathFM` except `self.projector` (the projector is pretraining-only scaffolding and is discarded for downstream probes).
@@ -52,62 +66,83 @@ To keep entries comparable, the following are fixed across all submissions. Anyt
 
 **TCGA pretraining**
 - TCGA (12K WSIs) is the only dataset allowed for pretraining, but you are free to revise how we select the tiles used for training.
+- The six probe datasets (bach, bracs, break_his, mhist, pcam, pannuke) are eval-only. Their images, labels, and splits cannot be observed by the pretraining model — neither directly (training data) nor indirectly (distillation target, contrastive negatives, label-smoothing prior, etc.).
 
 **Probe evaluation**
-- All of `probe.py`.
-- `seg_head.py` — the pannuke `MaskTransformer` head and `multiclass_dice_loss`.
+- All of `probe.py` and `seg_head.py`.
 - `probe_data_splits/` — the checked-in classification splits.
-- All probe config variables in `configs/leader.yaml`. Probes should run on EMA weights.
+- All probe config variables in `configs/leader.yaml`.
 
 ## Repository layout
 
 ### Primary files meant to be hacked
 - `train.py` — the main pretraining loop (DDP via torchrun, JEPA + SIGReg, EMA, probe dispatch, wandb logging).
 - `model.py` — `NanoPathFM` ViT backbone. Hack here for new model architectures / training objectives.
-- `dataloader.py` — TCGA JPEG-tile loader and augmentation stack. Hack here for crop/color/HED augmentation or data curation changes.
-- `preprocessing.py` — one-time job that decodes 4M 224×224 tiles from the TCGA SVS sample list into JPEGs under `data.dataset_dir`. Hack here to change tile sampling, count, or compression.
+- `dataloader.py` — TCGA tile loader (parquet shards via pyarrow, mmap'd) and augmentation stack. Hack here for crop/color/HED augmentation tweaks.
 - `configs/{smoke,leader}.yaml` — recipes (model shape, optimizer, schedule, augmentation knobs, probe config).
 
 ### Helper files
 - `AGENTS.md` — guidelines for AI assistants and human contributors: design philosophy (minimal/hackable, nanochat-flavored), coding rules, experiment discipline, and cluster/storage conventions. Note some language is specific to the MedARC cluster.
+- `prepare.py` — data prep (verify or download HF mirror + probe datasets); also hosts the SVS-decode + parquet-pack helpers used by the regen workflow.
 - `probe.py` — downstream probes (KNN, few shot, linear, segmentation).
-- `submit/train_{1,4}gpu.sbatch` — SLURM launchers.
+- `submit/{prepare,train_1gpu,train_4gpu}.sbatch` — SLURM launchers (CPU node for prepare, GPU node for training).
 - `seg_head.py` — `MaskTransformer` + `multiclass_dice_loss` (used by `probe.py`'s pannuke segmentation), vendored by Thunder.
-- `download_probe_datasets.py` — auto-downloads the six probe datasets if missing.
-- `download_TCGA.sh` — downloads TCGA SVS pretraining slides plus `sample_dataset_30.txt` (specifies the specific tiles to load).
 - `probe_data_splits/` — checked-in classification splits for probes.
-- `pyproject.toml` + `uv.lock` — Python dependency spec consumed by `uv sync` in Quickstart.
+- `download_TCGA.sh` — manual utility, run by hand if you want the full 12K TCGA open-access SVS slide set (~13 TB) for forking the tile-extraction recipe. Not invoked by `prepare.py` and not needed for any standard training workflow.
+- `LOG.md` — running notes on what has been tried, including negative results.
+- `pyproject.toml` + `uv.lock` — Python dependency spec consumed by `uv sync`.
 
 ## Data
 
-**To download the datasets you'll need:**
-- A HuggingFace login (`huggingface-cli login` or `HF_TOKEN`) — the TCGA SVS mirror is gated.
-- Kaggle credentials in `~/.kaggle/kaggle.json` — required to download `break_his`.
-- mhist form access — the script prints the form URL the first time it runs and waits for the resulting download.
-- ~13 TB free disk for TCGA SVS files, ~200 GB for the precomputed JPEG tile dataset, plus ~30 GB for the six probe datasets. *(TODO: provide alternative that requires less disk space.)*
+`prepare.py` prepares the necessary data for pretraining. Flag `download=True` to download all datasets to the folders specified by the .yaml, or flag `download=False` to simply verify if all datasets are already present.
 
-- **TCGA pretraining data**: a two-step setup. First download the SVS slides + sample list, then run `preprocessing.py` to materialize 4M 224×224 JPEG tiles that `train.py` actually reads. Checked-in configs default to `/block/TCGA/sample_dataset_30.txt` (shared [MedARC](https://www.medarc.ai/) cluster path) and `/data/nanopath_dataset/` (the JPEG tiles + manifest); external users should download their own copy:
+Edit `data.dataset_dir` and every `probe.dataset_roots.*` in your config (`configs/leader.yaml` and `configs/smoke.yaml` if you also smoke-test) to your own correct paths.
 
-  ```bash
-  # 1) Download the TCGA SVS files and sample list (multi-TB).
-  # If the Hugging Face repo is gated, set HF_TOKEN or run huggingface-cli login first.
-  bash download_TCGA.sh /data/TCGA 8
+```bash
+# Pull the 4M-tile parquet dataset from the medarc/nanopath HF mirror into
+# data.dataset_dir, and pull each missing probe dataset from its public
+# source into the configured probe.dataset_roots paths.
+python prepare.py configs/leader.yaml download=True
 
-  # 2) Decode 4M tiles to JPEG once. ~200 GB output, parallelized over CPU cores.
-  python preprocessing.py configs/leader.yaml
-  ```
+# Verify-only: confirms the parquet shards and every probe dataset listed
+# in the config exist on disk where the YAML says they should.
+python prepare.py configs/leader.yaml download=False
+```
 
-  `download_TCGA.sh` writes `/data/TCGA/sample_dataset_30.txt`, downloads open-access TCGA SVS files from GDC, and creates flat `/data/TCGA/*.svs` symlinks for the sample list. `preprocessing.py` reads `data.sample_list`, deterministically subsamples to 4M tiles, and writes JPEGs + `manifest.txt` under `data.dataset_dir`. Reruns skip already-decoded tiles. To point a config at custom paths, copy a config and set:
+**What `download=True` does**
+1. **TCGA tiles**: `huggingface_hub.snapshot_download` (filtered to `shard-*.parquet`) pulls the 200 parquet shards (~120 GB total, `{path: string, jpeg: binary}` rows with 64-row row groups) from [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) into `data.dataset_dir`.
+2. **Probe datasets** (bach / bracs / break_his / mhist / pcam / pannuke): for each empty root, fetches + unpacks the dataset from its public source into the configured path.
 
-  ```yaml
-  data:
-    sample_list: /data/TCGA/sample_dataset_30.txt
-    dataset_dir: /data/nanopath_dataset
-  ```
+**Prerequisites**
+- ~120 GB free wherever `data.dataset_dir` lives for the parquet shards (cluster default: `/data/nanopath_parquet`).
+- ~30 GB free in total across the six `probe.dataset_roots` entries (pannuke ~13 GB + bach ~10 GB are the bulk; the rest are smaller).
+- mhist requires a one-time form at https://bmirds.github.io/MHIST/. Drop the resulting `annotations.csv` + `images.zip` into `probe.dataset_roots.mhist`, then rerun `prepare.py … download=True` to unpack.
 
-  `train.py` errors before training if the JPEG manifest is missing, with a one-line hint to run `preprocessing.py`.
-- **Probe datasets** (bach / bracs / break_his / mhist / pcam / pannuke):
-  `python download_probe_datasets.py configs/leader.yaml` pulls each one to the path given in `probe.dataset_roots` if not already present. Off-cluster, edit `probe.dataset_roots` in the config to point at writable directories before running. mhist requires a one-time form access (the script prints instructions); break_his requires Kaggle credentials in `~/.kaggle/kaggle.json`.
+### Regenerating the tile dataset from raw SVS
+
+`prepare.py` itself never touches raw SVS files — it always pulls the ready-made parquet shards from HF. If you want, however, you can download the full ~13 TB original SVS files from TCGA and pre-extract different tiles to pretrain on. Two-step workflow (decode SVS → JPEG dir + manifest, then pack into parquet shards):
+
+```bash
+# 1) Download the full 12K open-access TCGA SVS slide set (~13 TB).
+bash download_TCGA.sh /data/TCGA 8
+
+# 2) Decode + pack. prepare_tiles deterministically subsamples the sample list
+#    to TARGET_TILE_COUNT (4M, hardcoded in prepare.py — bump it for a bigger
+#    dataset) and writes JPEGs + manifest.txt under jpeg_dir; reruns are
+#    resumable (existing JPEGs are EOF-validated and reused). pack_from_jpeg_dir
+#    then walks the manifest, splits into NUM_SHARDS=200 chunks, and writes
+#    shard-NNNNN.parquet files with 64-row row groups (the layout the
+#    dataloader expects). Once it's done you can rm -rf the jpeg_dir.
+python -c "
+from pathlib import Path
+from prepare import prepare_tiles, pack_from_jpeg_dir
+jpeg_dir = Path('/data/nanopath_jpegs_tmp')
+prepare_tiles(Path('/data/TCGA/sample_dataset_30.txt'), jpeg_dir, split_seed=42)
+pack_from_jpeg_dir(jpeg_dir, jpeg_dir / 'manifest.txt', Path('/data/nanopath_parquet'))
+"
+```
+
+Once `data.dataset_dir` contains `shard-*.parquet`, `prepare.py … download=False` will print `[skip] tiles` and only fetch the probe datasets. To publish a new variant of the dataset, push the resulting shards to a fresh HF dataset repo and update `HF_REPO_ID` in `prepare.py`.
 
 ## Running
 
@@ -118,7 +153,7 @@ sbatch submit/train_1gpu.sbatch configs/smoke.yaml
 # or directly: `python train.py configs/smoke.yaml`
 ```
 
-Leader recipe (1 H100 gpu = ~4h; 4 H100 gpus = ~1.25h)
+Leader (full train+probe for the first place recipe in our Leaderboard)
 
 ```bash
 sbatch submit/train_1gpu.sbatch configs/leader.yaml
@@ -130,19 +165,23 @@ sbatch submit/train_1gpu.sbatch configs/leader.yaml
 
 ## Outputs
 
-- run outputs: `project.output_dir` (checked-in configs default under `/data/$USER/nanopath/leader/...`; wiped on fresh launch).
+- run outputs: `project.output_dir` (default is `/data/$USER/nanopath/leader/...`). Final probe results log to `metrics.jsonl`.
 - wandb: `/data/$USER/nanopath/wandb`.
-- precomputed JPEG tiles: `data.dataset_dir` (checked-in configs default to `/data/nanopath_dataset`); produced once by `preprocessing.py` and shared across runs.
-- SLURM logs: `slurm/<jobid>.{out,err}` in the repo checkout.
+- parquet tile shards: `data.dataset_dir` (defaults to `/data/nanopath_parquet`).
+- probe datasets: `probe.dataset_roots` (defaults to `/block/{eva-data,thunder-data}/<name>`).
+- SLURM logs: `slurm/<jobid>.{out,err}` in the repo.
+- checkpoints: rolling `latest.pt` written every `train.save_every` steps under `project.output_dir`; smoke leaves none because `save_every: null`.
 
-`train.py` runs `os.path.expandvars` on the YAML text, so `$USER` in checked-in configs resolves to the cluster user at load time.
+### Auto-resume / SLURM requeuing after a kill
 
-Recipes with `train.save_every` set write a rolling `latest.pt`; smoke sets `train.save_every: null`, so it leaves no persistent checkpoints. Probes run inline in the same job using EMA weights with training paused while they run, logged into wandb + `metrics.jsonl`.
+`submit/train_*.sbatch` set `--requeue`, so SLURM auto-resubmits the job on preemption / walltime / `scancel`. The requeued job sees an existing `output_dir/latest.pt` and resumes from that checkpoint, same wandb run id, same step counter, same optimizer + EMA state, no `train.resume` config edit. You'll lose at most `train.save_every` steps of progress.
+
+To start a run completely fresh instead, either delete the run's `project.output_dir` or change `project.output_dir` to a new path before launching. The `train.resume` config field still works as an explicit override (e.g. resuming from a different run's checkpoint) and takes priority over the auto-detect.
 
 ## Experiment log
 
 See [LOG.md](LOG.md) for running notes on what has been tried in nanopath. Negative results included! Such logs help contributors avoid retrying dead ends.
 
-# Acknowledgements
+## Acknowledgements
 
 Inspired by [nanochat](https://github.com/karpathy/nanochat). Probe code, dataset splits, and the pannuke `MaskTransformer` head are adapted from the [Thunder benchmark](https://mics-lab.github.io/thunder/). 

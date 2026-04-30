@@ -3,7 +3,7 @@
 Cached classification data splits for the bach / bracs / break_his / mhist
 probes. These are deterministic outputs of the dataset directory layout +
 Thunder's `generate-data-splits` seed; we ship them here so a fresh checkout
-can run probes immediately after `python download_probe_datasets.py` without needing
+can run probes immediately after `python prepare.py <config>` without needing
 Thunder installed.
 
 Each JSON has the shape:
