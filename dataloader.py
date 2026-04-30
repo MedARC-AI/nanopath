@@ -1,15 +1,25 @@
-# TCGA tile input pipeline for the JPEG dataset produced by preprocessing.py.
-# Reads {data.dataset_dir}/manifest.txt (one relative path per line of the
-# form `{slide_stem}/{x}_{y}_{level}.jpg`), splits patients (not tiles)
-# train/val by hashing the TCGA barcode parsed from each slide stem, and
-# emits the JEPA global+local view stacks with ColorJitter + optional HED
-# jitter. No WSI decoding at train time; JPEG tiles decode in ~1 ms each so
-# throughput is dataloader-bound by IO + augmentation, not WSI seeking.
+# TCGA tile input pipeline backed by Parquet shards. Each shard is a parquet
+# file of `{path: string, jpeg: binary}` rows. We open the shards via pyarrow
+# directly (NOT `datasets.load_dataset`, which copies into ~/.cache) so the
+# 112 GB of shards are mmap'd in place with zero duplication. Random access is
+# resolved by per-shard ParquetFile.read_row_group; prepare.py packs each
+# shard with PARQUET_ROW_GROUP_SIZE=64 rows/group so reading one row group is
+# ~2 MB and __getitem__ is ~2-3 ms incl. JPEG decode.
+#
+# Patients (not tiles) are split train/val by hashing the TCGA barcode parsed
+# from the path, identical to the prior JPEG-on-disk layout.
+#
+# data.dataset_dir holds the shards. Both the cluster-shared
+# /data/nanopath_parquet and the medarc/nanopath HF mirror use this layout.
+# Hack here for crop/color/HED augmentation tweaks; storage-layer changes
+# (shard count, schema, decoding) belong in prepare.py.
 
 import hashlib
+import io
 from pathlib import Path
 
 import numpy as np
+import pyarrow.parquet as pq
 import torch
 import torch.nn as nn
 from PIL import Image
@@ -44,7 +54,7 @@ def patient_in_val(patient_id, seed, val_fraction):
     return value < float(val_fraction)
 
 
-# Manifest entries start with the SVS stem (TCGA-XX-XXXX-...); the first three dash parts are the patient barcode.
+# Path entries start with the SVS stem (TCGA-XX-XXXX-...); the first three dash parts are the patient barcode.
 def patient_id_from_relpath(rel):
     return "-".join(rel.split("/", 1)[0].split("-")[:3])
 
@@ -72,33 +82,39 @@ class HEDJitter(nn.Module):
 
 # Map-style TCGA tile dataset that emits global/local multi-view stacks for train.py.
 class TCGATileDataset(Dataset):
-    # Filter the manifest to one split and configure the two augmentation views.
+    # Glob shards, build a per-split (shard_idx, row_in_shard) index, and configure the two augmentation views.
     def __init__(self, cfg, split):
         data = cfg["data"]
         train = cfg["train"]
         self.is_train = split == data["train_split"]
-        self.dataset_dir = Path(data["dataset_dir"])
-        manifest_path = self.dataset_dir / "manifest.txt"
-        if not manifest_path.is_file():
+        dataset_dir = Path(data["dataset_dir"])
+        self.shards = sorted(dataset_dir.glob("shard-*.parquet"))
+        if not self.shards:
             raise FileNotFoundError(
-                f"Tile manifest not found at {manifest_path}. Run "
-                f"`python preprocessing.py {cfg['config_path']}` to materialize JPEG tiles "
-                f"from the SVS sample list before training."
+                f"No parquet shards (shard-*.parquet) under {dataset_dir}. Run "
+                f"`python prepare.py {cfg['config_path']} download=True` to fetch them from "
+                f"the medarc/nanopath HF dataset before training."
             )
         if int(train["global_size"]) > TILE_SIZE:
             raise ValueError(f"global_size must be <= {TILE_SIZE}, got global_size={train['global_size']}")
-        # Patient-level filter; numpy bytes array stays COW-shared across DataLoader fork workers.
-        in_split = []
-        with manifest_path.open() as f:
-            for rel in f:
-                rel = rel.rstrip("\n")
-                if not rel:
-                    continue
-                if patient_in_val(patient_id_from_relpath(rel), data["split_seed"], data["val_fraction"]) != self.is_train:
-                    in_split.append(rel)
-        if len(in_split) == 0:
-            raise ValueError(f"split '{split}' has zero tiles; check {manifest_path} and val_fraction={data['val_fraction']}")
-        self.paths = np.array(in_split, dtype=np.bytes_)
+        # Lazy ParquetFile handles, opened on first __getitem__ in each worker
+        # so fork-children own their own file positions.
+        self._readers = [None] * len(self.shards)
+        # Pull just the path column from each shard once to build the per-split
+        # index; the JPEG bytes column stays on disk until __getitem__.
+        in_split_shard = []
+        in_split_row = []
+        for shard_idx, shard_path in enumerate(self.shards):
+            paths = pq.read_table(str(shard_path), columns=["path"], memory_map=True)["path"].to_pylist()
+            for row_idx, p in enumerate(paths):
+                if patient_in_val(patient_id_from_relpath(p), data["split_seed"], data["val_fraction"]) != self.is_train:
+                    in_split_shard.append(shard_idx)
+                    in_split_row.append(row_idx)
+        if not in_split_shard:
+            raise ValueError(f"split '{split}' has zero tiles in {dataset_dir}; check val_fraction={data['val_fraction']}")
+        # Two parallel int32 arrays (~32 MB total for 4M tiles) shared COW across DataLoader fork-workers.
+        self.shard_of = np.asarray(in_split_shard, dtype=np.int32)
+        self.row_of = np.asarray(in_split_row, dtype=np.int32)
         mean, std = data["mean"], data["std"]
         self.global_views = int(train["global_views"])
         self.local_views = int(train["local_views"])
@@ -127,12 +143,25 @@ class TCGATileDataset(Dataset):
 
     # Dataset length is the number of tiles assigned to this split.
     def __len__(self):
-        return int(self.paths.shape[0])
+        return int(self.shard_of.shape[0])
 
-    # Decode one JPEG tile, apply train or deterministic-val augmentations, and return train.py fields.
+    # Read one JPEG row, decode, apply augmentations, and return train.py fields.
     def __getitem__(self, idx):
-        rel = self.paths[idx].decode("utf-8")
-        with Image.open(self.dataset_dir / rel) as img:
+        shard_idx = int(self.shard_of[idx])
+        row_idx = int(self.row_of[idx])
+        reader = self._readers[shard_idx]
+        if reader is None:
+            reader = pq.ParquetFile(str(self.shards[shard_idx]), memory_map=True)
+            self._readers[shard_idx] = reader
+        # Each shard has uniform-size row groups (PARQUET_ROW_GROUP_SIZE in
+        # prepare.py); reading one group is ~2 MB and ~2-3 ms incl. JPEG decode.
+        rg_size = reader.metadata.row_group(0).num_rows
+        rg_idx = row_idx // rg_size
+        row_in_rg = row_idx % rg_size
+        table = reader.read_row_group(rg_idx, columns=["path", "jpeg"])
+        rel = table["path"][row_in_rg].as_py()
+        jpeg_bytes = table["jpeg"][row_in_rg].as_py()
+        with Image.open(io.BytesIO(jpeg_bytes)) as img:
             tile = self.to_tensor(img.convert("RGB"))
         slide_stem = rel.split("/", 1)[0]
         patient_id = "-".join(slide_stem.split("-")[:3])

@@ -4,7 +4,7 @@ Project goals:
 - Keep the codebase hackable and nanochat-like: flat organization, few files, few lines, and minimal abstractions.
 
 Before changing code:
-- Source the venv via `source ~/nanopath/.venv/bin/activate`.
+- Make sure the active venv is ours: `~/nanopath/.venv/bin/activate`.
 - For broad or ambiguous tasks, read deeply enough into the current repo to understand the training/probing/data path before recommending changes. Look at every relevant source, config, script, and doc file rather than optimizing one file in isolation.
 - Make a concrete multi-step plan for nontrivial work, then keep going through implementation, validation, and any needed doc/comment updates.
 - Default to immediately implementing sensible recommendations and validating them rather than simply suggesting recommendations.
@@ -25,12 +25,11 @@ Experiment and benchmark discipline:
 - Validate opinions experimentally whenever feasible. Run code, tests, probes, or short jobs that directly support the conclusion.
 - Use downstream probing as the main comparison signal because objectives like JEPA, MAE, DINO, and iBOT may not have comparable validation losses.
 - An improvement should only actually be considered an improvement mean_probe_score improves over .01, anything less is within random variance.
-- Keep recipe/model comparisons on equal reported training FLOPs unless deliberately changing the benchmark protocol.
 - Use wandb for logging, plotting, and utilization monitoring throughout pretraining. Log all metrics needed to validate training behavior (i.e., gradient norm).
 - Aim for >80% GPU utilization during GPU runs; investigate and remedy code when utilization is poor.
 
 Cluster and storage:
-- The login node has no GPU access. For full training runs (or anything that would take more than a few minutes) you should submit SLURM jobs to H100 nodes (`n-#`) or CPU nodes (`c-1`). If it's a quick single-GPU assessment you can use `ssh n-#` directly (but only when an idle GPU is available!).
+- The login node has no GPU access, and has a different /tmp folder than the compute nodes. For full training runs (or anything that would take more than a few minutes) you should submit SLURM jobs to H100 nodes (`n-#`) or CPU nodes (`c-1`). If it's a quick single-GPU assessment you can use `ssh n-#` directly (but only when an idle GPU is available!).
 - Store large files, checkpoints, embeddings, caches, and pretrained models under `/data/$USER/nanopath` (configs use literal `$USER`, expanded by `train.py` at load time), not the repo.
 - Do not define `#SBATCH --cpus-per-task` in sbatch scripts and do not add unnecessary lines like `OMP_NUM_THREADS` or `MKL_NUM_THREADS` exports.
 
