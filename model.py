@@ -1,9 +1,9 @@
 # DinoV2ViT: clean ViT-S/14 + 4 register tokens that loads Meta's
 # `dinov2_vits14_reg` pretrained weights via state_dict (no xformers, no dinov2
 # codebase imports). Attention runs on `F.scaled_dot_product_attention` so we
-# get FlashAttention-2 on H100 bf16 with the same backend the prior LeJEPA
-# model used. Module names below match Meta's checkpoint key layout exactly,
-# so `load_dinov2_pretrained(model)` does a strict load.
+# get FlashAttention-2 on H100 bf16 with no third-party kernel dependency.
+# Module names below match Meta's checkpoint key layout exactly, so
+# `load_dinov2_pretrained(model)` does a strict load.
 #
 # DINOHead is the small MLP + weight-normed classifier used by train.py for the
 # DINO CLS / iBOT patch self-distillation losses. It is intentionally trivial

@@ -11,8 +11,6 @@ data:
   dataset_dir: /data/nanopath_parquet
   split_seed: 42
   val_fraction: 0.05
-  train_split: train
-  val_split: val
   mean: [0.485, 0.456, 0.406]
   std: [0.229, 0.224, 0.225]
   global_crop_scale: [0.32, 1.0]
