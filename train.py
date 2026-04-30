@@ -1,11 +1,13 @@
-# Pretraining entry point. Runs JEPA + SIGReg loop end-to-end: parse a YAML
-# config (e.g. configs/leader.yaml), build the TCGA dataloader, construct the
-# NanoPathFM model and EMA copy, optimize across DDP ranks under torchrun, log
-# to wandb + output_dir/metrics.jsonl, optionally write rolling latest.pt
-# checkpoints, and queue downstream probes (probe.py).
-# Researchers changing objectives should start at loss_terms() here and SIGReg
-# in model.py; changing data preprocessing starts in dataloader.py; changing
-# downstream comparisons starts in probe.py.
+# Pretraining entry point. Continual DINOv2 pretraining of Meta's
+# `dinov2_vits14_reg` student/teacher pair on TCGA tiles, with the three losses
+# Tanishq's sweep showed move the needle: DINO CLS self-distillation,
+# iBOT masked-patch self-distillation, and a cross-GPU KDE uniformity term.
+# YAML drives the few knobs we tune (LR, KDE weight + concentration, FLOP
+# budget, batch shape); every other DINOv2 hyper is hard-coded below at the
+# 3-seed-confirmed values from Tanishq's `kde_vmf_xgpu` recipe.
+# Researchers changing objectives should start at the loss block in main();
+# changing data preprocessing starts in dataloader.py; changing downstream
+# comparisons starts in probe.py.
 
 import contextlib
 import json
@@ -15,6 +17,7 @@ import random
 import shutil
 import sys
 import time
+from copy import deepcopy
 from datetime import timedelta
 from pathlib import Path
 
@@ -22,15 +25,15 @@ import numpy as np
 import pynvml
 import torch
 import torch.distributed as dist
-import torch.distributed.nn.functional as dist_nn
 import torch.nn as nn
+import torch.nn.functional as F
 import wandb
 import yaml
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
 
 from dataloader import TCGATileDataset, TILE_SIZE
-from model import SIGReg, NanoPathFM
+from model import DINOHead, DinoV2ViT, load_dinov2_pretrained
 from probe import (
     completed_probe_summary,
     collect_probe_results,
@@ -40,8 +43,31 @@ from probe import (
 )
 
 
-EVAL_KEYS = ("jepa_pred", "sig", "total")
-TRAIN_KEYS = ("jepa_pred", "sig", "total", "proj_std")
+# Recipe constants (Tanishq's 3-seed-confirmed `kde_vmf_xgpu` values).
+DROP_PATH_RATE = 0.1
+LAYERWISE_DECAY = 0.7
+PATCH_EMBED_LR_MULT = 0.2
+LR_MIN = 1e-6
+WEIGHT_DECAY = 0.04
+WEIGHT_DECAY_END = 0.2
+MOMENTUM_TEACHER = 0.994
+FINAL_MOMENTUM_TEACHER = 1.0
+TEACHER_TEMP = 0.07
+WARMUP_TEACHER_TEMP = 0.04
+TEACHER_TEMP_WARMUP_FRACTION = 0.2727
+STUDENT_TEMP = 0.1
+CLIP_GRAD = 3.0
+FREEZE_LAST_LAYER_FRACTION = 0.0091
+MASK_SAMPLE_PROBABILITY = 0.5
+MASK_RATIO_MIN_MAX = (0.1, 0.45)
+HEAD_N_PROTOTYPES = 131072
+HEAD_HIDDEN_DIM = 2048
+HEAD_BOTTLENECK_DIM = 384
+HEAD_NLAYERS = 3
+KDE_START_FRACTION = 0.1
+KDE_WARMUP_FRACTION = 0.4
+KDE_ALL_GATHER = True
+WARMUP_FLOP_FRACTION = 0.0909
 
 
 # Prefix every console line with wall time and job/process id so SLURM logs are easy to scan.
@@ -66,62 +92,94 @@ def load_config():
     return cfg
 
 
-# Training objective: JEPA-style view consistency plus SIGReg anti-collapse regularization.
-def loss_terms(sigreg, proj, train_cfg, sigreg_generator, proj_sigreg=None):
-    # jepa_pred_loss is the JEPA-style multi-view consistency term on the projector outputs:
-    # if global/local views of the same tile disagree, this grows.
-    # sig_loss is the anti-collapse regularizer on those same projector outputs.
-    # total_loss is the objective we backprop through.
-    proj_sigreg = proj if proj_sigreg is None else proj_sigreg
-    jepa_pred_loss = (proj - proj.mean(dim=1, keepdim=True)).square().mean()
-    sig_loss = sigreg(proj_sigreg.transpose(0, 1), generator=sigreg_generator)
-    total_loss = train_cfg["lambda_jepa_pred"] * jepa_pred_loss + train_cfg["lambda_sig"] * sig_loss
-    return jepa_pred_loss, sig_loss, total_loss
+# Cosine schedule from `start` to `end` over fractional progress in [0, 1].
+def cosine_schedule(start, end, frac):
+    return end + 0.5 * (start - end) * (1 + math.cos(math.pi * min(1.0, max(0.0, frac))))
 
 
-# Run a short validation pass with the same objective so optimization curves stay comparable.
-def evaluate(model, sigreg, loader, cfg, device, world_size):
-    model.eval()
-    train_cfg = cfg["train"]
-    losses = [0.0] * len(EVAL_KEYS)
-    batches = 0
-    autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if train_cfg["bf16"] else contextlib.nullcontext()
-    eval_generator = torch.Generator(device="cuda")
-    eval_generator.manual_seed(train_cfg["seed"])
-    # Validation uses deterministic SIGReg directions so validation loss noise is not seed drift.
-    with torch.no_grad():
-        for batch in loader:
-            with autocast:
-                global_views = batch["global_views"].to(device, non_blocking=True)
-                local_views = batch["local_views"].to(device, non_blocking=True)
-                proj = model(global_views, local_views, train_cfg)
-                jepa_pred_loss, sig_loss, total_loss = loss_terms(
-                    sigreg,
-                    proj,
-                    train_cfg,
-                    eval_generator,
-                    torch.cat(dist_nn.all_gather(proj), dim=0) if world_size > 1 else proj,
-                )
-            for i, value in enumerate((jepa_pred_loss, sig_loss, total_loss)):
-                losses[i] += value.item()
-            batches += 1
-            if batches >= train_cfg["val_batches"]:
-                break
-    # Every rank validates its shard, then rank-reduced sums recover the global mean loss.
+# Sinkhorn-Knopp centring across global batch (and ranks) used as DINO/iBOT teacher targets.
+def sinkhorn(x, temp, world_size):
+    q = torch.exp(x.float() / temp).t()
+    b = q.shape[1] * world_size
+    k = q.shape[0]
+    s = q.sum()
     if world_size > 1:
-        tensor = torch.tensor([*losses, batches], device=device)
-        dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
-        losses = tensor[:-1].tolist()
-        batches = int(tensor[-1].item())
-    return {key: value / batches for key, value in zip(EVAL_KEYS, losses)}
+        dist.all_reduce(s)
+    q /= s
+    for _ in range(3):
+        rows = q.sum(1, keepdim=True)
+        if world_size > 1:
+            dist.all_reduce(rows)
+        q /= rows * k
+        q /= q.sum(0, keepdim=True) * b
+    return (q * b).t()
 
 
-# Orchestrates one pretraining run: setup, train/eval/probe loop, checkpoint, summary.
+# Cross-entropy between teacher distribution and softmax(student / student_temp).
+def dino_ce(student, teacher, student_temp):
+    return -(teacher * F.log_softmax(student / student_temp, dim=-1)).sum(-1).mean()
+
+
+# KDE uniformity loss on L2-normalised CLS tokens; cross-rank gather widens the kernel support
+# (the dominant signal in Tanishq's sweep). Detached gathers from other ranks keep gradients local.
+def kde_loss(x, concentration, world_size):
+    x = F.normalize(x, p=2, dim=-1)
+    if KDE_ALL_GATHER and world_size > 1:
+        gathered = [torch.zeros_like(x) for _ in range(world_size)]
+        dist.all_gather(gathered, x.detach())
+        gathered[dist.get_rank()] = x
+        x = torch.cat(gathered)
+    sim = concentration * (x @ x.T)
+    sim.fill_diagonal_(-float("inf"))
+    return torch.logsumexp(sim, dim=1).mean() - math.log(max(1, sim.shape[1] - 1))
+
+
+# Sample iBOT masking pattern: per-image bernoulli on whether to mask, then random patch ratio.
+def make_masks(batch, patches, prob, ratio, device):
+    masks = torch.zeros(batch, patches, dtype=torch.bool, device=device)
+    for i in range(batch):
+        if random.random() < prob:
+            masks[i, torch.randperm(patches, device=device)[: int(patches * random.uniform(*ratio))]] = True
+    idx = masks.flatten().nonzero().flatten()
+    weights = (1 / masks.sum(-1).clamp(min=1)).unsqueeze(-1).expand_as(masks)[masks]
+    return masks, idx, weights
+
+
+# AdamW parameter groups with layer-wise LR decay on the backbone (Tanishq's recipe):
+# block i gets lr * LAYERWISE_DECAY^(depth - 1 - i); patch_embed gets the deepest decay
+# multiplied by PATCH_EMBED_LR_MULT; biases and norms get no weight decay; the head's
+# final weight-norm last_layer parameters get an LR-freeze for the first FREEZE_LAST_LAYER_FRACTION.
+def build_param_groups(student_backbone, student_dino_head, student_ibot_head):
+    depth = len(student_backbone.blocks)
+    groups = []
+    modules = ((student_backbone, "backbone"), (student_dino_head, "dino_head"), (student_ibot_head, "ibot_head"))
+    for module, kind in modules:
+        for name, p in module.named_parameters():
+            if not p.requires_grad:
+                continue
+            lr_mult = 1.0
+            if kind == "backbone" and name.startswith("blocks."):
+                lr_mult = LAYERWISE_DECAY ** (depth - 1 - int(name.split(".")[1]))
+            elif kind == "backbone" and name.startswith("patch_embed."):
+                lr_mult = (LAYERWISE_DECAY ** depth) * PATCH_EMBED_LR_MULT
+            wd_mult = 0.0 if name.endswith("bias") or "norm" in name or p.ndim < 2 else 1.0
+            groups.append({"params": [p], "lr_mult": lr_mult, "wd_mult": wd_mult, "last_layer": "last_layer" in name})
+    return groups
+
+
+# EMA-update teacher modules from student modules with a single multiplicative decay.
+def update_ema(student_module, teacher_module, momentum):
+    for ps, pt in zip(student_module.parameters(), teacher_module.parameters()):
+        pt.mul_(momentum).add_(ps.detach(), alpha=1 - momentum)
+    for bs, bt in zip(student_module.buffers(), teacher_module.buffers()):
+        bt.copy_(bs)
+
+
+# Orchestrates one pretraining run: setup, train+probe loop, checkpoint, summary.
 def main():
     cfg = load_config()
     train_cfg = cfg["train"]
-    ema_decay = float(train_cfg["ema_decay"])
-    probe_model_weights = str(cfg["probe"]["model_weights"])
+    dino_cfg = cfg["dino"]
     save_every = train_cfg["save_every"]
     save_checkpoints = save_every is not None
     # torchrun sets WORLD_SIZE/RANK/LOCAL_RANK; absence of those variables means local single-process.
@@ -142,30 +200,37 @@ def main():
     torch.backends.cudnn.allow_tf32 = True
     pynvml.nvmlInit()
     nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(torch.cuda.current_device())
-    # NanoPathFM is the encoder/projector; SIGReg is kept separate so objective edits stay local.
-    model = NanoPathFM(cfg).to(device)
-    sigreg = SIGReg().to(device)
-    model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    # Excludes the projector head because downstream probes read pre-projector pooled registers,
-    # so the projector is pretraining-only scaffolding and shouldn't count toward the leaderboard
-    # size cap. The sum below is exact for dense models; MoE / sparse-routing contributors must
-    # rewrite it to count per-token activated params.
-    backbone_activated_params = sum(p.numel() for n, p in model.named_parameters() if p.requires_grad and not n.startswith("projector."))
+    # Build student/teacher backbones; rank 0 downloads pretrained weights once (others read the cache).
+    if rank == 0:
+        load_dinov2_pretrained(DinoV2ViT())
+    if distributed:
+        dist.barrier()
+    student_backbone = load_dinov2_pretrained(DinoV2ViT(drop_path_rate=DROP_PATH_RATE)).to(device)
+    teacher_backbone = deepcopy(student_backbone)
+    teacher_backbone.train(False)
+    for p in teacher_backbone.parameters():
+        p.requires_grad = False
+    student_dino_head = DINOHead(student_backbone.embed_dim, HEAD_N_PROTOTYPES, HEAD_HIDDEN_DIM, HEAD_BOTTLENECK_DIM, HEAD_NLAYERS).to(device)
+    student_ibot_head = DINOHead(student_backbone.embed_dim, HEAD_N_PROTOTYPES, HEAD_HIDDEN_DIM, HEAD_BOTTLENECK_DIM, HEAD_NLAYERS).to(device)
+    teacher_dino_head = deepcopy(student_dino_head)
+    teacher_ibot_head = deepcopy(student_ibot_head)
+    for m in (teacher_dino_head, teacher_ibot_head):
+        for p in m.parameters():
+            p.requires_grad = False
+    backbone_activated_params = sum(p.numel() for p in student_backbone.parameters() if p.requires_grad)
     print(f"{console_prefix()} backbone_activated_params: {backbone_activated_params:,} / 150,000,000", flush=True)
     if backbone_activated_params > 150_000_000:
         raise ValueError(f"backbone_activated_params={backbone_activated_params:,} exceeds the 150M activated-parameter leaderboard cap; failing fast to avoid spending training compute on an ineligible backbone.")
-    # Optimizer groups live in model.py so weight-decay policy follows model changes.
-    opt = torch.optim.AdamW(model.param_groups(train_cfg["weight_decay"]), lr=1.0, betas=(0.9, 0.95))
+    # AdamW param groups carry per-parameter LR/WD multipliers (LWD + patch_embed + biases-no-WD).
+    opt = torch.optim.AdamW(build_param_groups(student_backbone, student_dino_head, student_ibot_head), lr=1.0, betas=(0.9, 0.999))
     step = 0
     global_batch_size = int(train_cfg["global_batch_size"])
     if global_batch_size % world_size != 0:
         raise ValueError(f"global_batch_size={global_batch_size} not divisible by world_size={world_size}")
     batch_size = global_batch_size // world_size
-    lr = train_cfg["lr_ref"]
     examples_seen = 0
     visible_patch_presentations = 0
     train_flops = 0
-    best_val_total = float("inf")
     output_dir = Path(cfg["project"]["output_dir"])
     wandb_dir = Path(cfg["project"]["wandb_dir"])
     slurm_job_id = os.environ.get("SLURM_JOB_ID")
@@ -196,19 +261,20 @@ def main():
             print(f"{console_prefix()} Resume  loading checkpoint: {resume_path}", flush=True)
         # Resume restores training progress, optimizer state, and wandb identity.
         checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
-        model.load_state_dict(checkpoint["model"])
+        student_backbone.load_state_dict(checkpoint["model"])
+        teacher_backbone.load_state_dict(checkpoint["model_ema"])
+        student_dino_head.load_state_dict(checkpoint["dino_head"])
+        student_ibot_head.load_state_dict(checkpoint["ibot_head"])
+        teacher_dino_head.load_state_dict(checkpoint["dino_head_ema"])
+        teacher_ibot_head.load_state_dict(checkpoint["ibot_head_ema"])
         opt.load_state_dict(checkpoint["opt"])
         (
             step,
-            lr,
-            best_val_total,
             examples_seen,
             visible_patch_presentations,
             train_flops,
         ) = (
             int(checkpoint["step"]),
-            float(checkpoint["lr"]),
-            float(checkpoint["best_val_total"]),
             int(checkpoint["examples_seen"]),
             int(checkpoint["visible_patch_presentations"]),
             int(checkpoint["train_flops"]),
@@ -234,9 +300,10 @@ def main():
         print(
             f"{console_prefix()} Run  start: {cfg['project']['name']}  "
             f"config: {cfg['config_path']}  batch_size: {batch_size}  max_train_flops: {train_cfg['max_train_flops']}  "
-            f"eval_every: {train_cfg['eval_every']}  probe_count: {cfg['probe']['count']}  "
-            f"warmdown_flop_fraction: {train_cfg['warmdown_flop_fraction']}  final_lr_frac: {train_cfg['final_lr_frac']}  "
-            f"ema_decay: {ema_decay}  probe_model_weights: {probe_model_weights}",
+            f"probe_count: {cfg['probe']['count']}  warmup_flop_fraction: {WARMUP_FLOP_FRACTION}  "
+            f"lr: {dino_cfg['lr']}  kde_loss_weight: {dino_cfg['kde_loss_weight']}  "
+            f"kde_concentration: {dino_cfg['kde_concentration']}  drop_path: {DROP_PATH_RATE}  "
+            f"layerwise_decay: {LAYERWISE_DECAY}",
             flush=True,
         )
         source_artifact = wandb.Artifact(f"nanopath-source-{wandb_run.id}", type="code")
@@ -251,71 +318,64 @@ def main():
     else:
         wandb_run = None
     train_ds = TCGATileDataset(cfg, cfg["data"]["train_split"])
-    val_ds = TCGATileDataset(cfg, cfg["data"]["val_split"])
     probe_state = prepare_probe_state(cfg, output_dir) if rank == 0 and probe_enabled(cfg) else None
 
-    # Wrap datasets in DistributedSampler only when DDP is active; the recipe defines global batch size.
-    def make_loader(dataset, shuffle, batch):
-        sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=shuffle, drop_last=shuffle) if distributed else None
-        return DataLoader(
-            dataset,
-            batch_size=batch,
-            shuffle=sampler is None and shuffle,
-            sampler=sampler,
-            drop_last=shuffle,
-            num_workers=train_cfg["num_workers"],
-            pin_memory=True,
-            prefetch_factor=train_cfg["prefetch_factor"] if train_cfg["num_workers"] > 0 else None,
-            persistent_workers=train_cfg["persistent_workers"] and train_cfg["num_workers"] > 0,
-        )
-
-    train_loader = make_loader(train_ds, True, batch_size)
-    val_loader = make_loader(val_ds, False, batch_size)
+    sampler = DistributedSampler(train_ds, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True) if distributed else None
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=batch_size,
+        shuffle=sampler is None,
+        sampler=sampler,
+        drop_last=True,
+        num_workers=train_cfg["num_workers"],
+        pin_memory=True,
+        prefetch_factor=train_cfg["prefetch_factor"] if train_cfg["num_workers"] > 0 else None,
+        persistent_workers=train_cfg["persistent_workers"] and train_cfg["num_workers"] > 0,
+    )
 
     if distributed:
-        model = DDP(model, device_ids=[local_rank], find_unused_parameters=False)
-    root_model = model.module if distributed else model
-    model = torch.compile(model, dynamic=False)
-    # EMA is a lightweight target snapshot for probes, not a separate forward path during training.
-    model_state = root_model.state_dict()
-    ema_source = checkpoint["model_ema"] if resume_path is not None else model_state
-    ema_state = {k: ema_source[k].detach().to(device).clone() for k in model_state}
-    global_patches = (train_cfg["global_size"] // cfg["model"]["patch_size"]) ** 2
-    local_patches = (train_cfg["local_size"] // cfg["model"]["patch_size"]) ** 2
+        student_backbone = DDP(student_backbone, device_ids=[local_rank], find_unused_parameters=False)
+        student_dino_head = DDP(student_dino_head, device_ids=[local_rank], find_unused_parameters=False)
+        student_ibot_head = DDP(student_ibot_head, device_ids=[local_rank], find_unused_parameters=False)
+    root_backbone = student_backbone.module if distributed else student_backbone
+    root_dino_head = student_dino_head.module if distributed else student_dino_head
+    root_ibot_head = student_ibot_head.module if distributed else student_ibot_head
+
+    activation_checkpointing = bool(train_cfg["activation_checkpointing"])
+    global_patches = (train_cfg["global_size"] // root_backbone.patch_size) ** 2
+    local_patches = (train_cfg["local_size"] // root_backbone.patch_size) ** 2
     last_time = time.time()
     last_examples = examples_seen
     last_visible_patch_presentations = visible_patch_presentations
     last_train_flops = train_flops
-    unique_tile_patch_count = (TILE_SIZE // cfg["model"]["patch_size"]) ** 2
+    unique_tile_patch_count = (TILE_SIZE // root_backbone.patch_size) ** 2
     seen_ids = {"sample": set(), "slide": set(), "patient": set()}
     pending_ids = {key: set() for key in seen_ids}
 
     # Full checkpoint payload used for latest.pt resume.
     def checkpoint_payload(next_step):
         return {
-            "model": {k: v.detach().cpu().clone() for k, v in root_model.state_dict().items()},
-            "model_ema": {k: v.detach().cpu().clone() for k, v in ema_state.items()},
+            "model": {k: v.detach().cpu().clone() for k, v in root_backbone.state_dict().items()},
+            "model_ema": {k: v.detach().cpu().clone() for k, v in teacher_backbone.state_dict().items()},
+            "dino_head": {k: v.detach().cpu().clone() for k, v in root_dino_head.state_dict().items()},
+            "ibot_head": {k: v.detach().cpu().clone() for k, v in root_ibot_head.state_dict().items()},
+            "dino_head_ema": {k: v.detach().cpu().clone() for k, v in teacher_dino_head.state_dict().items()},
+            "ibot_head_ema": {k: v.detach().cpu().clone() for k, v in teacher_ibot_head.state_dict().items()},
             "opt": opt.state_dict(),
             "step": next_step,
-            "best_val_total": best_val_total,
             "examples_seen": examples_seen,
             "visible_patch_presentations": visible_patch_presentations,
             "train_flops": train_flops,
-            "lr": lr,
-            "ema_decay": ema_decay,
-            "probe_model_weights": probe_model_weights,
             "wandb": wandb_meta,
             "config": cfg,
         }
 
-    # Smaller probe payload: probe workers only need weights and config, not optimizer state.
+    # Smaller probe payload: probes only need backbone weights and config (no heads, no opt state).
     def probe_checkpoint_payload(next_step):
         return {
-            "model": {k: v.detach().cpu().clone() for k, v in root_model.state_dict().items()},
-            "model_ema": {k: v.detach().cpu().clone() for k, v in ema_state.items()},
+            "model": {k: v.detach().cpu().clone() for k, v in root_backbone.state_dict().items()},
+            "model_ema": {k: v.detach().cpu().clone() for k, v in teacher_backbone.state_dict().items()},
             "step": next_step,
-            "ema_decay": ema_decay,
-            "probe_model_weights": probe_model_weights,
             "config": cfg,
         }
 
@@ -349,23 +409,7 @@ def main():
             return
         collect_probe_results(probe_state, wandb_run, metrics_path)
 
-    # Record validation losses with an optional event tag such as final_eval.
-    def log_val(step_value, val, event=None):
-        payload = {"step": step_value, **{f"val_{key}": val[key] for key in EVAL_KEYS}}
-        if event is not None:
-            payload["event"] = event
-        with metrics_path.open("a") as handle:
-            handle.write(json.dumps(payload) + "\n")
-        wandb_run.log({f"val/{key}": val[key] for key in EVAL_KEYS}, step=step_value)
-        print(
-            f"{console_prefix()} Validation  [{step_value}]  "
-            f"event: {event or 'scheduled'}  "
-            f"jepa_pred: {val['jepa_pred']:.6f}  sig: {val['sig']:.6f}  total: {val['total']:.6f}  "
-            f"best_total: {best_val_total:.6f}",
-            flush=True,
-        )
-
-    # Queue the furthest crossed FLOP milestone so delayed validation does not run stale probes.
+    # Queue the furthest crossed FLOP milestone so delayed probes do not run on stale checkpoints.
     def maybe_run_probe(checkpoint_step):
         nonlocal next_probe_idx
         if probe_state is None or next_probe_idx >= len(probe_targets) or train_flops < probe_targets[next_probe_idx]:
@@ -387,10 +431,7 @@ def main():
     if distributed:
         dist.barrier()
     max_train_flops = int(train_cfg["max_train_flops"])
-    warmup_flop_fraction = float(train_cfg["warmup_flop_fraction"])
-    warmup_train_flops = math.ceil(max_train_flops * warmup_flop_fraction)
-    warmdown_train_flops = round(max_train_flops * float(train_cfg["warmdown_flop_fraction"]))
-    final_lr_frac = float(train_cfg["final_lr_frac"])
+    warmup_train_flops = math.ceil(max_train_flops * WARMUP_FLOP_FRACTION)
     # Probe targets are FLOP milestones, not step milestones, so comparisons survive batch-size changes.
     probe_targets = []
     next_probe_idx = 0
@@ -412,11 +453,11 @@ def main():
                 next_probe_idx = min(len(probe_targets), sum(target <= max_completed_probe_flops for target in probe_targets))
     train_loop_started_at = time.monotonic()
     stop_reason = "max_train_flops" if train_flops >= max_train_flops else None
-    last_eval_step = step if math.isfinite(best_val_total) else -1
     last_saved_step = step if resume_path is not None else 0
     last_console_step = step
     last_console_monotonic = time.monotonic()
     data_wait_started_at = time.monotonic()
+    autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if train_cfg["bf16"] else contextlib.nullcontext()
 
     while stop_reason is None:
         if distributed:
@@ -424,7 +465,9 @@ def main():
         for batch in train_loader:
             batch_started_at = time.monotonic()
             data_seconds = batch_started_at - data_wait_started_at
-            model.train()
+            student_backbone.train()
+            student_dino_head.train()
+            student_ibot_head.train()
             completed_step = step + 1
             should_log = completed_step == 1 or completed_step % train_cfg["log_every"] == 0
             # Data identifiers stay on CPU and feed coverage metrics; image tensors move below.
@@ -433,64 +476,62 @@ def main():
             global_views, local_views = [batch[key].to(device, non_blocking=True) for key in ("global_views", "local_views")]
             current_batch = global_views.shape[0]
             global_batch = current_batch * world_size
-            # Training budget is estimated FLOPs from visible patch presentations and trainable params.
             visible_now = global_batch * (train_cfg["global_views"] * global_patches + train_cfg["local_views"] * local_patches)
-            step_train_flops = int(6 * model_params * visible_now)
-            # Nanochat-style schedule: linear warmup, flat middle, linear warmdown by FLOPs.
-            lr_flops = min(max_train_flops, train_flops + step_train_flops)
-            lr_multiplier = min(1.0, lr_flops / warmup_train_flops)
-            lr_multiplier = min(lr_multiplier, final_lr_frac + (1.0 - final_lr_frac) * (max_train_flops - lr_flops) / warmdown_train_flops)
+            step_train_flops = int(6 * backbone_activated_params * visible_now)
+            # Linear warmup then cosine decay to LR_MIN, all keyed off train_flops not step count.
+            frac = min(1.0, train_flops / max_train_flops)
+            warmup = min(1.0, train_flops / max(1, warmup_train_flops))
+            if warmup < 1.0:
+                lr = dino_cfg["lr"] * warmup
+            else:
+                lr = cosine_schedule(dino_cfg["lr"], LR_MIN, (frac - WARMUP_FLOP_FRACTION) / max(1e-9, 1 - WARMUP_FLOP_FRACTION))
+            wd = cosine_schedule(WEIGHT_DECAY, WEIGHT_DECAY_END, frac)
+            teacher_temp = WARMUP_TEACHER_TEMP + min(1.0, frac / TEACHER_TEMP_WARMUP_FRACTION) * (TEACHER_TEMP - WARMUP_TEACHER_TEMP)
+            last_layer_lr = 0.0 if frac < FREEZE_LAST_LAYER_FRACTION else lr
             for group in opt.param_groups:
-                group["lr"] = lr * lr_multiplier
-            autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if train_cfg["bf16"] else contextlib.nullcontext()
-            sigreg_generator = torch.Generator(device="cuda")
-            sigreg_generator.manual_seed(train_cfg["seed"] + step)
+                base_lr = last_layer_lr if group["last_layer"] else lr
+                group["lr"] = base_lr * group["lr_mult"]
+                group["weight_decay"] = wd * group["wd_mult"]
+            # iBOT mask sample is in the same per-rank order as the global tokens (b * 2 globals).
+            masks, mask_idx, mask_w = make_masks(current_batch * train_cfg["global_views"], global_patches, MASK_SAMPLE_PROBABILITY, MASK_RATIO_MIN_MAX, device)
             with autocast:
-                # Model returns per-view projector features; loss_terms() defines the pretraining objective.
-                proj = model(global_views, local_views, train_cfg)
-                jepa_pred_loss, sig_loss, total_loss = loss_terms(
-                    sigreg,
-                    proj,
-                    train_cfg,
-                    sigreg_generator,
-                    torch.cat(dist_nn.all_gather(proj), dim=0) if distributed else proj,
-                )
-                proj_std = proj.float().reshape(-1, proj.shape[-1]).std(dim=0).mean() if should_log else None
+                # Crop-major flatten: collate shape is (B, V, 3, H, W) but DINO wants per-crop chunks
+                # so [crop0_img0, crop0_img1, ..., crop1_img0, ...] for clean teacher/student alignment.
+                gf = global_views.transpose(0, 1).flatten(0, 1)
+                lf = local_views.transpose(0, 1).flatten(0, 1)
+                with torch.no_grad():
+                    t = teacher_backbone.forward_features(gf)
+                    t_cls = teacher_dino_head(t["x_norm_clstoken"]).chunk(train_cfg["global_views"])
+                    # Cross-pair: each global view is supervised against the OTHER global's teacher CLS.
+                    t_prob = sinkhorn(torch.cat((t_cls[1], t_cls[0])), teacher_temp, world_size).view(2, current_batch, -1)
+                    t_patch_tokens = t["x_norm_patchtokens"].flatten(0, 1)
+                    t_patch_prob = sinkhorn(teacher_ibot_head(t_patch_tokens[mask_idx]), teacher_temp, world_size)
+                sg = student_backbone(gf, masks=masks, checkpoint=activation_checkpointing) if distributed else root_backbone.forward_features(gf, masks=masks, checkpoint=activation_checkpointing)
+                sl = student_backbone(lf, checkpoint=activation_checkpointing) if distributed else root_backbone.forward_features(lf, checkpoint=activation_checkpointing)
+                sg_cls = student_dino_head(sg["x_norm_clstoken"])
+                sl_cls = student_dino_head(sl["x_norm_clstoken"])
+                # Local-view distillation: each local CLS chases each teacher global CLS distribution.
+                local_loss = sum(dino_ce(x, y, STUDENT_TEMP) for x in sl_cls.chunk(train_cfg["local_views"]) for y in t_prob) / (2 * train_cfg["local_views"] + 2)
+                # Global-view distillation: student global CLS chases the cross-paired teacher CLS.
+                global_loss = dino_ce(sg_cls, t_prob.flatten(0, 1), STUDENT_TEMP) * 2 / (2 * train_cfg["local_views"] + 2)
+                s_patch = student_ibot_head(sg["x_norm_patchtokens"].flatten(0, 1)[mask_idx])
+                ibot_loss = -(t_patch_prob * F.log_softmax(s_patch / STUDENT_TEMP, dim=-1)).sum(-1).mul(mask_w).sum() / max(1, current_batch * 2)
+                kde_scale = min(1.0, max(0.0, (frac - KDE_START_FRACTION) / KDE_WARMUP_FRACTION))
+                kde = dino_cfg["kde_loss_weight"] * kde_scale * sum(kde_loss(x, dino_cfg["kde_concentration"], world_size) for x in sg["x_norm_clstoken"].chunk(train_cfg["global_views"]))
+                dino_loss_value = local_loss + global_loss
+                total_loss = dino_loss_value + ibot_loss + kde
             opt.zero_grad(set_to_none=True)
             total_loss.backward()
-            # Gradient norm is both a stability diagnostic and the value used for optional clipping.
-            clip_grad_norm = nn.utils.clip_grad_norm_(root_model.parameters(), train_cfg["grad_clip"]) if train_cfg["grad_clip"] > 0 else None
-            grad_norm = None
-            param_norm = None
-            grad_param_ratio = None
-            grad_clip_scale = None
-            if should_log:
-                if clip_grad_norm is None:
-                    grad_sq = 0.0
-                    for param in root_model.parameters():
-                        if param.grad is not None:
-                            grad_sq += param.grad.detach().float().square().sum().item()
-                    grad_norm = grad_sq ** 0.5
-                else:
-                    grad_norm = float(clip_grad_norm.detach().float().item())
-                param_sq = 0.0
-                for param in root_model.parameters():
-                    param_sq += param.detach().float().square().sum().item()
-                param_norm = param_sq**0.5
-                grad_param_ratio = grad_norm / max(param_norm, 1e-12)
-                grad_clip_scale = min(1.0, train_cfg["grad_clip"] / max(grad_norm, 1e-12)) if train_cfg["grad_clip"] > 0 else 1.0
+            grad_norm = nn.utils.clip_grad_norm_(
+                [*root_backbone.parameters(), *root_dino_head.parameters(), *root_ibot_head.parameters()],
+                CLIP_GRAD,
+            )
             opt.step()
-            # EMA mirrors floating-point model tensors and directly copies non-floating buffers.
-            ema_floating, model_floating = [], []
-            for key, value in root_model.state_dict().items():
-                source = value.detach()
-                if torch.is_floating_point(ema_state[key]):
-                    ema_floating.append(ema_state[key])
-                    model_floating.append(source)
-                else:
-                    ema_state[key].copy_(source)
-            torch._foreach_mul_(ema_floating, ema_decay)
-            torch._foreach_add_(ema_floating, model_floating, alpha=1.0 - ema_decay)
+            with torch.no_grad():
+                m = cosine_schedule(MOMENTUM_TEACHER, FINAL_MOMENTUM_TEACHER, frac)
+                update_ema(root_backbone, teacher_backbone, m)
+                update_ema(root_dino_head, teacher_dino_head, m)
+                update_ema(root_ibot_head, teacher_ibot_head, m)
             step_seconds = time.monotonic() - batch_started_at
             examples_seen += global_batch
             visible_patch_presentations += visible_now
@@ -501,18 +542,18 @@ def main():
                 if distributed:
                     reduced = torch.tensor(
                         [
-                            jepa_pred_loss.item(),
-                            sig_loss.item(),
-                            total_loss.item(),
-                            proj_std.item(),
+                            float(dino_loss_value.detach()),
+                            float(ibot_loss.detach()),
+                            float(kde.detach()),
+                            float(total_loss.detach()),
                         ],
                         device=device,
                     )
                     dist.all_reduce(reduced, op=dist.ReduceOp.SUM)
                     reduced = (reduced / world_size).tolist()
                 else:
-                    reduced = [jepa_pred_loss.item(), sig_loss.item(), total_loss.item(), proj_std.item()]
-                reduced = dict(zip(TRAIN_KEYS, reduced))
+                    reduced = [float(dino_loss_value.detach()), float(ibot_loss.detach()), float(kde.detach()), float(total_loss.detach())]
+                reduced = dict(zip(("dino", "ibot", "kde", "total"), reduced))
             unique_counts = flush_unique_counts() if should_log else None
             if rank == 0 and should_log:
                 now = time.time()
@@ -549,7 +590,10 @@ def main():
                     "eta_seconds": eta_seconds,
                     "flop_fraction": min(1.0, float(train_flops) / float(max_train_flops)),
                     "lr": current_lr,
-                    "lr_multiplier": lr_multiplier,
+                    "wd": wd,
+                    "teacher_temp": teacher_temp,
+                    "teacher_momentum": m,
+                    "kde_scale": kde_scale,
                     "batch_size": batch_size,
                     "global_batch_size": global_batch,
                     "examples_seen": examples_seen,
@@ -558,22 +602,15 @@ def main():
                     "gpu_util_pct": gpu_util_pct,
                     "gpu_mem_gb": gpu_mem_gb,
                     "gpu_peak_mem_gb": gpu_peak_mem_gb,
-                    "grad_norm": grad_norm,
-                    "param_norm": param_norm,
-                    "grad_param_ratio": grad_param_ratio,
-                    "grad_clip_scale": grad_clip_scale,
+                    "grad_norm": float(grad_norm.detach()),
                 }
                 train_log.update(unique_counts)
                 print(
                     f"{console_prefix()} Training  "
                     f"[{completed_step}/{total_steps_estimate}]  eta: {eta_string}  gap: {console_gap_ms:.2f} ms  "
-                    f"lr: {current_lr:.6f}  lrm: {lr_multiplier:.4f}  "
-                    f"current_batch_size: {batch_size}  "
-                    f"total_loss: {reduced['total']:.4f}  "
-                    f"jepa_pred_loss: {reduced['jepa_pred']:.4f}  "
-                    f"sig_loss: {reduced['sig']:.4f}  "
-                    f"proj_std: {reduced['proj_std']:.4f}  "
-                    f"grad_norm: {grad_norm:.4f}  flops/s: {flops_per_sec:.3e}  gpu: {gpu_util_pct:.0f}  "
+                    f"lr: {current_lr:.6f}  total: {reduced['total']:.4f}  "
+                    f"dino: {reduced['dino']:.4f}  ibot: {reduced['ibot']:.4f}  kde: {reduced['kde']:.4f}  "
+                    f"grad_norm: {train_log['grad_norm']:.4f}  flops/s: {flops_per_sec:.3e}  gpu: {gpu_util_pct:.0f}  "
                     f"time: {step_seconds:.6f}  data: {data_seconds:.6f}  "
                     f"max mem: {int(gpu_peak_mem_gb * 1024)}",
                     flush=True,
@@ -583,29 +620,11 @@ def main():
                 with metrics_path.open("a") as handle:
                     handle.write(json.dumps(train_log) + "\n")
                 wandb_run.log(
-                    {
-                        f"train/{key}": value
-                        for key, value in train_log.items()
-                        if key != "step"
-                    },
+                    {f"train/{key}": value for key, value in train_log.items() if key != "step"},
                     step=completed_step,
                 )
                 log_probe_results()
                 torch.cuda.reset_peak_memory_stats(device)
-            if completed_step % train_cfg["eval_every"] == 0:
-                # Validation is also the synchronization point for probe milestones.
-                if rank == 0:
-                    print(f"{console_prefix()} Validation  [{completed_step}]  start", flush=True)
-                val = evaluate(model, sigreg, val_loader, cfg, device, world_size)
-                if val["total"] < best_val_total:
-                    best_val_total = val["total"]
-                last_eval_step = completed_step
-                if rank == 0:
-                    log_val(completed_step, val)
-                    maybe_run_probe(completed_step)
-                    log_probe_results()
-                if distributed:
-                    dist.barrier()
             if rank == 0 and save_checkpoints and completed_step % save_every == 0:
                 print(f"{console_prefix()} Checkpoint  [{completed_step}]  save: latest.pt", flush=True)
                 # Atomic rename: a SLURM kill or scontrol requeue mid-save
@@ -618,7 +637,6 @@ def main():
                     stale_checkpoint_path.unlink()
                 last_saved_step = completed_step
             step = completed_step
-            train_loop_wall_seconds = time.monotonic() - train_loop_started_at
             data_wait_started_at = time.monotonic()
             if train_flops >= max_train_flops:
                 stop_reason = "max_train_flops"
@@ -627,28 +645,19 @@ def main():
     final_unique_counts = flush_unique_counts()
     if distributed:
         dist.barrier()
-    if step > 0 and last_eval_step != step:
-        # Always end on a validation/probe opportunity so summary.json reflects final weights.
-        if rank == 0:
-            print(f"{console_prefix()} Validation  [{step}]  start final_eval", flush=True)
-        val = evaluate(model, sigreg, val_loader, cfg, device, world_size)
-        if val["total"] < best_val_total:
-            best_val_total = val["total"]
-        last_eval_step = step
-        # Final probes have their own readers; close pretraining workers before they compete for CPU and IO.
+    if step > 0:
+        # Final probes have their own readers; close pretraining workers before they compete for CPU/IO.
         if train_cfg["num_workers"] > 0:
-            for loader in (train_loader, val_loader):
-                if loader._iterator is not None:
-                    loader._iterator._shutdown_workers()
-                    loader._iterator = None
+            if train_loader._iterator is not None:
+                train_loader._iterator._shutdown_workers()
+                train_loader._iterator = None
         if rank == 0:
-            log_val(step, val, "final_eval")
+            # Force the final FLOP milestone so summary.json has a probe score even if rounding left it short.
+            train_flops = max(train_flops, max_train_flops)
             maybe_run_probe(step)
             log_probe_results()
         if distributed:
             dist.barrier()
-    if not math.isfinite(best_val_total):
-        raise ValueError("run finished without a finite best_val_total; check max_train_flops, eval_every, validation data, and loss stability")
     if rank == 0:
         log_probe_results()
         if save_checkpoints and step > 0 and step != last_saved_step:
@@ -666,7 +675,6 @@ def main():
             "recipe_id": cfg["project"]["recipe_id"],
             "config_path": cfg["config_path"],
             "slurm_job_id": slurm_job_id,
-            "model_params": model_params,
             "backbone_activated_params": backbone_activated_params,
             "world_size": world_size,
             "batch_size_per_rank": batch_size,
@@ -675,16 +683,18 @@ def main():
             "train_loop_wall_seconds": train_loop_wall_seconds,
             "stop_reason": stop_reason,
             "steps_completed": step,
-            "best_val_total": best_val_total,
             "tile_presentations": examples_seen,
             "visible_patch_presentations": visible_patch_presentations,
             **final_unique_counts,
             "train_flops": train_flops,
             "flop_fraction": min(1.0, float(train_flops) / float(max_train_flops)),
-            "warmup_flop_fraction": warmup_flop_fraction,
+            "warmup_flop_fraction": WARMUP_FLOP_FRACTION,
             "warmup_train_flops": warmup_train_flops,
-            "ema_decay": ema_decay,
-            "probe_model_weights": probe_model_weights,
+            "lr": dino_cfg["lr"],
+            "kde_loss_weight": dino_cfg["kde_loss_weight"],
+            "kde_concentration": dino_cfg["kde_concentration"],
+            "drop_path_rate": DROP_PATH_RATE,
+            "layerwise_decay": LAYERWISE_DECAY,
             "probe_target_flops": probe_targets,
             "probe_target_fractions": [None if max_train_flops == 0 else target / max_train_flops for target in probe_targets],
             **({} if probe_state is None else completed_probe_summary(output_dir)),
@@ -695,11 +705,10 @@ def main():
         print(
             f"{console_prefix()} Summary  "
             f"steps: {step}  train_wall: {train_loop_wall_seconds:.2f}s  "
-            f"best_val_total: {best_val_total:.6f}  "
             f"final_probe_score: {summary.get('final_probe_score')}",
             flush=True,
         )
-        for key in summary.keys() - {"best_val_total"}:
+        for key in summary.keys():
             wandb_run.summary[key] = summary[key]
         wandb_run.finish()
     if distributed:
