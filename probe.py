@@ -427,7 +427,7 @@ def inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels):
 # Worker entry point launched by queue_probe_job(); owns model loading and probe aggregation.
 def run_probe_job(request_path):
     from torchvision import transforms
-    from model import NanoPathFM
+    from model import DinoV2ViT
 
     probe_started_at = time.monotonic()
     request = json.loads(Path(request_path).read_text())
@@ -447,8 +447,8 @@ def run_probe_job(request_path):
     model_state = checkpoint[state_key]
     del checkpoint
     device = torch.device("cuda")
-    model = NanoPathFM(cfg).to(device).eval()
-    model.load_state_dict(model_state)
+    model = DinoV2ViT().to(device).eval()
+    model.load_state_dict(model_state, strict=True)
     for param in model.parameters():
         param.requires_grad = False
     mean = torch.tensor(cfg["data"]["mean"], device=device).view(1, 3, 1, 1)
