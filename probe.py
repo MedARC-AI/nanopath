@@ -7,7 +7,7 @@
 # this file as a subprocess (`python probe.py req.json`); training pauses, the
 # subprocess writes a result JSON, collect_probe_results ingests it back into
 # wandb + metrics.jsonl. Inside the subprocess, two threads share one GPU and
-# one loaded NanoPathFM: the main thread loops classification datasets (for
+# one loaded DinoV2ViT: the main thread loops classification datasets (for
 # each, embed train+val with the frozen backbone once, then run all three
 # heads — KNN, SimpleShot few-shot, and linear — on those cached embeddings)
 # while a background thread runs PanNuke. Putting both on one GPU helps
@@ -230,7 +230,8 @@ def embed_classification_dataset(model, mean, std, dataset, split, device, trans
     )
     embs, labels = [], []
     autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
-    # Probe embeddings use model.probe_features(), not the pretraining projector.
+    # Probe embeddings use model.probe_features(), which returns the cls token
+    # — none of the DINO/iBOT training heads are involved.
     with torch.no_grad():
         for x, y in loader:
             x = x.to(device, non_blocking=True)
@@ -456,7 +457,7 @@ def run_probe_job(request_path):
     transform = transforms.Compose([transforms.Resize(256, antialias=True), transforms.CenterCrop(224), transforms.ToTensor()])
 
     # Segmentation overlaps with the classification loop on the same GPU and the
-    # same loaded NanoPathFM. Both paths only read the backbone (no .train()/.eval()
+    # same loaded DinoV2ViT. Both paths only read the backbone (no .train()/.eval()
     # flips, all backbone forwards are no_grad), and PanNuke trains its own
     # MaskTransformer head with its own optimizer, so sharing the module is safe.
     # CUDA kernels still serialize on the default stream; the win comes from

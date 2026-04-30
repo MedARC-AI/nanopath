@@ -1,13 +1,13 @@
 # Pretraining entry point. Continual DINOv2 pretraining of Meta's
-# `dinov2_vits14_reg` student/teacher pair on TCGA tiles, with the three losses
-# Tanishq's sweep showed move the needle: DINO CLS self-distillation,
-# iBOT masked-patch self-distillation, and a cross-GPU KDE uniformity term.
-# YAML drives the few knobs we tune (LR, KDE weight + concentration, FLOP
-# budget, batch shape); every other DINOv2 hyper is hard-coded below at the
-# 3-seed-confirmed values from Tanishq's `kde_vmf_xgpu` recipe.
-# Researchers changing objectives should start at the loss block in main();
-# changing data preprocessing starts in dataloader.py; changing downstream
-# comparisons starts in probe.py.
+# `dinov2_vits14_reg` student/teacher pair on TCGA tiles. Three loss terms:
+# DINO CLS self-distillation (Sinkhorn-Knopp centred teacher targets),
+# iBOT masked-patch self-distillation, and a cross-rank KDE uniformity term
+# on the L2-normalised CLS tokens. YAML drives the few knobs we tune (LR,
+# KDE weight + concentration, FLOP budget, batch shape); every other DINOv2
+# hyper is a module constant below — see LOG.md for the sweeps that picked
+# those values. Researchers changing objectives should start at the loss
+# block in main(); changing data preprocessing starts in dataloader.py;
+# changing downstream comparisons starts in probe.py.
 
 import contextlib
 import json
@@ -317,7 +317,7 @@ def main():
         wandb_meta = {"project": "nanopath", "id": wandb_run.id, "name": cfg["project"]["name"]}
     else:
         wandb_run = None
-    train_ds = TCGATileDataset(cfg, cfg["data"]["train_split"])
+    train_ds = TCGATileDataset(cfg)
     probe_state = prepare_probe_state(cfg, output_dir) if rank == 0 and probe_enabled(cfg) else None
 
     sampler = DistributedSampler(train_ds, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True) if distributed else None

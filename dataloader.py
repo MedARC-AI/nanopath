@@ -6,16 +6,15 @@
 # shard with PARQUET_ROW_GROUP_SIZE=64 rows/group so reading one row group is
 # ~2 MB and __getitem__ is ~2-3 ms incl. JPEG decode.
 #
-# Patients (not tiles) are split train/val by hashing the TCGA barcode parsed
-# from the path.
+# Patients (not tiles) are hashed by TCGA barcode and the bottom `val_fraction`
+# of the hash space is held out from training; train.py only ever instantiates
+# the train side, so a fraction of slides stays cleanly out-of-distribution
+# for any future evaluator that wants to use them.
 #
 # Augmentation per tile: optional HEDJitter (stain-space color perturbation),
 # then train.global_views global crops + train.local_views local crops, each
 # chained as RandomResizedCrop -> horizontal flip -> vertical flip ->
-# ColorJitter -> Normalize. During validation, we deterministically seed the
-# augmentation RNG with the tile's index so every val pass produces the same
-# augmented views — that way the val loss curve reflects model changes rather
-# than augmentation randomness from one eval to the next.
+# ColorJitter -> Normalize.
 #
 # This file is the *pretraining* input pipeline only. The downstream probes
 # (probe.py) do not import anything from here.
@@ -88,11 +87,10 @@ class HEDJitter(nn.Module):
 
 # Map-style TCGA tile dataset that emits global/local multi-view stacks for train.py.
 class TCGATileDataset(Dataset):
-    # Glob shards, build a per-split (shard_idx, row_in_shard) index, and configure the two augmentation views.
-    def __init__(self, cfg, split):
+    # Glob shards, build a (shard_idx, row_in_shard) index over training tiles, and configure augmentations.
+    def __init__(self, cfg):
         data = cfg["data"]
         train = cfg["train"]
-        self.is_train = split == data["train_split"]
         dataset_dir = Path(data["dataset_dir"])
         self.shards = sorted(dataset_dir.glob("shard-*.parquet"))
         if not self.shards:
@@ -106,18 +104,18 @@ class TCGATileDataset(Dataset):
         # Lazy ParquetFile handles, opened on first __getitem__ in each worker
         # so fork-children own their own file positions.
         self._readers = [None] * len(self.shards)
-        # Pull just the path column from each shard once to build the per-split
-        # index; the JPEG bytes column stays on disk until __getitem__.
+        # Pull just the path column from each shard once to build the train index;
+        # the JPEG bytes column stays on disk until __getitem__.
         in_split_shard = []
         in_split_row = []
         for shard_idx, shard_path in enumerate(self.shards):
             paths = pq.read_table(str(shard_path), columns=["path"], memory_map=True)["path"].to_pylist()
             for row_idx, p in enumerate(paths):
-                if patient_in_val(patient_id_from_relpath(p), data["split_seed"], data["val_fraction"]) != self.is_train:
+                if not patient_in_val(patient_id_from_relpath(p), data["split_seed"], data["val_fraction"]):
                     in_split_shard.append(shard_idx)
                     in_split_row.append(row_idx)
         if not in_split_shard:
-            raise ValueError(f"split '{split}' has zero tiles in {dataset_dir}; check val_fraction={data['val_fraction']}")
+            raise ValueError(f"no training tiles found in {dataset_dir}; check val_fraction={data['val_fraction']}")
         # Two parallel int32 arrays (~32 MB total for 4M tiles) shared COW across DataLoader fork-workers.
         self.shard_of = np.asarray(in_split_shard, dtype=np.int32)
         self.row_of = np.asarray(in_split_row, dtype=np.int32)
@@ -126,7 +124,7 @@ class TCGATileDataset(Dataset):
         self.local_views = int(train["local_views"])
         self.to_tensor = v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])
         self.hed_jitter = HEDJitter(data["hed_jitter"]) if data["hed_jitter"] > 0 else None
-        # Global crops carry the high-context view used by the JEPA consistency objective.
+        # Global crops carry the high-context view used by the DINO/iBOT objectives.
         self.global_aug = v2.Compose(
             [
                 v2.RandomResizedCrop(train["global_size"], scale=tuple(data["global_crop_scale"]), antialias=True),
@@ -147,7 +145,7 @@ class TCGATileDataset(Dataset):
             ]
         )
 
-    # Dataset length is the number of tiles assigned to this split.
+    # Dataset length is the number of tiles assigned to the training split.
     def __len__(self):
         return int(self.shard_of.shape[0])
 
@@ -173,18 +171,10 @@ class TCGATileDataset(Dataset):
         patient_id = "-".join(slide_stem.split("-")[:3])
         slide_key = int.from_bytes(hashlib.blake2b(slide_stem.encode(), digest_size=8).digest(), "big") & 0x7FFFFFFFFFFFFFFF
         patient_key = int.from_bytes(hashlib.blake2b(patient_id.encode(), digest_size=8).digest(), "big") & 0x7FFFFFFFFFFFFFFF
-        if self.is_train:
-            # Train augmentations intentionally remain stochastic; reproducibility comes from worker seeds.
-            context_tile = self.hed_jitter(tile) if self.hed_jitter is not None else tile
-            global_views = torch.stack([self.global_aug(context_tile) for _ in range(self.global_views)])
-            local_views = torch.stack([self.local_aug(context_tile) for _ in range(self.local_views)])
-        else:
-            # Validation uses deterministic augmentations per index so curves reflect model changes.
-            with torch.random.fork_rng(devices=[]):
-                torch.manual_seed(((idx + 1) * 1103515245 + 12345) & 0x7FFFFFFF)
-                context_tile = self.hed_jitter(tile) if self.hed_jitter is not None else tile
-                global_views = torch.stack([self.global_aug(context_tile) for _ in range(self.global_views)])
-                local_views = torch.stack([self.local_aug(context_tile) for _ in range(self.local_views)])
+        # Augmentations are stochastic; reproducibility comes from worker seeds.
+        context_tile = self.hed_jitter(tile) if self.hed_jitter is not None else tile
+        global_views = torch.stack([self.global_aug(context_tile) for _ in range(self.global_views)])
+        local_views = torch.stack([self.local_aug(context_tile) for _ in range(self.local_views)])
         return {
             "global_views": global_views,
             "local_views": local_views,
