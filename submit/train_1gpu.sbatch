@@ -3,12 +3,13 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-task=1
-#SBATCH --time=08:00:00
+#SBATCH --time=01:00:00
 #SBATCH --output=slurm/%j.out
 #SBATCH --error=slurm/%j.err
 #SBATCH --partition=n
 #SBATCH --account=sophont
 #SBATCH --qos=normal # low | normal | top
+#SBATCH --signal=USR1@900
 #SBATCH --requeue
 
 set -euo pipefail

@@ -2,7 +2,7 @@ project:
   name: nanopath-leader-dinov2
   family: leader
   recipe_id: dinov2-vits14-reg-kde
-  output_dir: /data/$USER/nanopath/leader/dinov2-leader
+  output_dir: /data/$USER/nanopath/leader/leader
   wandb_dir: /data/$USER/nanopath/wandb
 
 data:
@@ -21,7 +21,6 @@ data:
 
 model:
   type: dinov2_vits14_reg
-  patch_size: 14
 
 train:
   seed: 1337
@@ -31,9 +30,13 @@ train:
   num_workers: 8
   prefetch_factor: 4
   persistent_workers: true
-  max_train_flops: 100000000000000000 # 1.0e17, the leaderboard FLOP budget
+  max_train_flops: 1000000000000000000 # 1.0e18, the leaderboard FLOP budget
   log_every: 20
   save_every: 1000
+  # Validation pass every `eval_every` steps over `val_batches` held-out batches
+  # (the bottom data.val_fraction of patient ids by hash). Cheap diagnostic, not used for selection.
+  eval_every: 200
+  val_batches: 16
   global_views: 2
   local_views: 8
   global_size: 224

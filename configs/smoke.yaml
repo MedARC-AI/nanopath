@@ -21,7 +21,6 @@ data:
 
 model:
   type: dinov2_vits14_reg
-  patch_size: 14
 
 train:
   seed: 1337
@@ -35,6 +34,8 @@ train:
   log_every: 5
   # Smoke leaves no persistent checkpoints; final probes still use a temporary checkpoint.
   save_every: null
+  eval_every: 50
+  val_batches: 4
   global_views: 2
   local_views: 8
   global_size: 224

@@ -2,7 +2,7 @@
 # checks every path train.py will read:
 #   - data.dataset_dir/shard-NNNNN.parquet   (the 4M-tile dataset, sharded)
 #   - probe.dataset_roots[name] for each of the six probe datasets
-#   - Meta's `dinov2_vits14_reg` pretrained weights (torch.hub cache)
+#   - Meta's DINOv2 pretrained weights for cfg["model"]["type"] (torch.hub cache)
 # Defaults to HF for the tile dataset (medarc/nanopath), each probe's public
 # source, and dl.fbaipublicfiles.com for the DINOv2 backbone weights.
 # download_TCGA.sh and prepare_tiles / pack_from_jpeg_dir are only relevant if
@@ -406,26 +406,28 @@ def main():
         )
         raise SystemExit("\n".join(lines))
 
-    # Stage 3 — Meta's `dinov2_vits14_reg` pretrained weights (~84 MB) live in
+    # Stage 3 — Meta's pretrained weights for the model variant in cfg
+    # (dinov2_vits14_reg ~84 MB, dinov2_vitb14_reg ~330 MB) live in
     # ~/.cache/torch/hub/checkpoints. model.py:load_dinov2_pretrained streams
     # them on the first forward pass, but pulling them at prep time means
     # train.py never blocks on the network.
-    from model import PRETRAIN_URL
+    from model import DINOV2_VARIANTS
     import torch
+    *_, pretrain_url = DINOV2_VARIANTS[cfg["model"]["type"]]
     weights_dir = Path(torch.hub.get_dir()) / "checkpoints"
-    weights_path = weights_dir / Path(PRETRAIN_URL).name
+    weights_path = weights_dir / Path(pretrain_url).name
     if weights_path.is_file():
         print(f"[skip] dinov2 weights: {weights_path}", flush=True)
     elif not download:
         raise SystemExit(
-            f"Meta dinov2_vits14_reg pretrained weights missing at {weights_path}.\n"
+            f"Meta {cfg['model']['type']} pretrained weights missing at {weights_path}.\n"
             f"Rerun: python prepare.py {config_path} download=True"
         )
     else:
         weights_dir.mkdir(parents=True, exist_ok=True)
         print(f"[fetch] dinov2 weights -> {weights_path}", flush=True)
-        torch.hub.load_state_dict_from_url(PRETRAIN_URL, model_dir=str(weights_dir), progress=True)
-        print(f"[done] dinov2 weights", flush=True)
+        torch.hub.load_state_dict_from_url(pretrain_url, model_dir=str(weights_dir), progress=True)
+        print("[done] dinov2 weights", flush=True)
 
     # Reaching here means tiles + all six probe datasets + DINOv2 weights are
     # in place. Tell the user explicitly so they don't have to read between
@@ -433,7 +435,7 @@ def main():
     n_shards = sum(1 for _ in dataset_dir.glob("shard-*.parquet"))
     print(
         f"\nAll data ready: {n_shards} parquet shards at {dataset_dir}, 6 probe datasets "
-        f"({', '.join(cfg['probe']['dataset_roots'])}), and dinov2_vits14_reg weights at "
+        f"({', '.join(cfg['probe']['dataset_roots'])}), and {cfg['model']['type']} weights at "
         f"{weights_path}. Launch training with `python train.py {config_path}` or "
         f"`sbatch submit/train_1gpu.sbatch {config_path}`.",
         flush=True,
