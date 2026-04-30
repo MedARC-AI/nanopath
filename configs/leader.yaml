@@ -1,8 +1,8 @@
 project:
-  name: nanopath-leader
+  name: nanopath-leader-dinov2
   family: leader
-  recipe_id: jepa-samplelist30
-  output_dir: /data/$USER/nanopath/leader/leader
+  recipe_id: dinov2-vits14-reg-kde
+  output_dir: /data/$USER/nanopath/leader/dinov2-leader
   wandb_dir: /data/$USER/nanopath/wandb
 
 data:
@@ -17,49 +17,38 @@ data:
   std: [0.229, 0.224, 0.225]
   global_crop_scale: [0.32, 1.0]
   local_crop_scale: [0.05, 0.32]
-  color_jitter: 0.15
-  hed_jitter: 0.02
+  color_jitter: 0.2
+  color_jitter_saturation: 0.2
+  hed_jitter: 0.05
 
 model:
-  dim: 768
-  depth: 20
-  heads: 12
-  patch_size: 16
-  mlp_ratio: 4.0
-  rope_base: 10000
-  registers: 4
-  qk_norm: true
-  qkv_bias: false
-  projector_dim: 768
+  type: dinov2_vits14_reg
+  patch_size: 14
 
 train:
   seed: 1337
   bf16: true
   activation_checkpointing: false
-  # train.py derives per-rank batch_size as global_batch_size // world_size
   global_batch_size: 128
   num_workers: 8
   prefetch_factor: 4
   persistent_workers: true
-  max_train_flops: 1000000000000000000 # 1.0e18
-  warmup_flop_fraction: 0.0035
-  warmdown_flop_fraction: 0.65
-  final_lr_frac: 0.05
-  eval_every: 500
-  val_batches: 32
+  max_train_flops: 100000000000000000 # 1.0e17 = Tanishq's 0.1e18 short-recipe budget
   log_every: 20
   save_every: 1000
   global_views: 2
-  local_views: 4
+  local_views: 8
   global_size: 224
-  local_size: 96
-  lambda_jepa_pred: 1.0
-  lambda_sig: 0.05
-  lr_ref: 1.5e-4
-  weight_decay: 0.05
-  grad_clip: 1.0
-  ema_decay: 0.999
+  local_size: 98
   resume: null
+
+dino:
+  # The three knobs we actively tune; everything else is hard-coded in train.py
+  # at the values from Tanishq's 3-seed-confirmed `kde_vmf_xgpu` recipe
+  # (mean_probe_score 0.638 across seeds 1337/2027/4242).
+  lr: 1.0e-4
+  kde_loss_weight: 0.002
+  kde_concentration: 10.0
 
 probe:
   enabled: true
