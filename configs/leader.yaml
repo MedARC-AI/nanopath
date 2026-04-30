@@ -36,8 +36,7 @@ train:
   seed: 1337
   bf16: true
   activation_checkpointing: false
-  # SIGReg + JEPA all-gather depend on the global batch, so this is part of the recipe and stays fixed across hardware.
-  # train.py derives per-rank batch_size as global_batch_size // world_size; mismatch errors out.
+  # train.py derives per-rank batch_size as global_batch_size // world_size
   global_batch_size: 128
   num_workers: 8
   prefetch_factor: 4
@@ -46,7 +45,6 @@ train:
   warmup_flop_fraction: 0.0035
   warmdown_flop_fraction: 0.65
   final_lr_frac: 0.05
-  # Validation curves are required for debugging optimization; rank changes by final probe.
   eval_every: 500
   val_batches: 32
   log_every: 20

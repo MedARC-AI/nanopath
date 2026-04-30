@@ -65,7 +65,7 @@ train:
 probe:
   enabled: true
   model_weights: ema
-  count: 1
+  count: 1 # 4 means probing at 25%, 50%, 75%, and 100% of the training FLOP budget. 1 means probing just at the end.
   datasets:
     - bach
     - bracs

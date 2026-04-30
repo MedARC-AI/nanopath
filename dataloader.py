@@ -7,12 +7,18 @@
 # ~2 MB and __getitem__ is ~2-3 ms incl. JPEG decode.
 #
 # Patients (not tiles) are split train/val by hashing the TCGA barcode parsed
-# from the path, identical to the prior JPEG-on-disk layout.
+# from the path.
 #
-# data.dataset_dir holds the shards. Both the cluster-shared
-# /data/nanopath_parquet and the medarc/nanopath HF mirror use this layout.
-# Hack here for crop/color/HED augmentation tweaks; storage-layer changes
-# (shard count, schema, decoding) belong in prepare.py.
+# Augmentation per tile: optional HEDJitter (stain-space color perturbation),
+# then train.global_views global crops + train.local_views local crops, each
+# chained as RandomResizedCrop -> horizontal flip -> vertical flip ->
+# ColorJitter -> Normalize. During validation, we deterministically seed the
+# augmentation RNG with the tile's index so every val pass produces the same
+# augmented views — that way the val loss curve reflects model changes rather
+# than augmentation randomness from one eval to the next.
+#
+# This file is the *pretraining* input pipeline only. The downstream probes
+# (probe.py) do not import anything from here.
 
 import hashlib
 import io
