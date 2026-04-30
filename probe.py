@@ -1,7 +1,7 @@
 # Inline downstream probes. mean_probe_score = unweighted mean of four
 # aggregates: linear, KNN, and SimpleShot few-shot F1 over bach/bracs/
-# break_his/mhist/pcam, plus PanNuke macro Jaccard from a MaskTransformer head
-# (seg_head.py) trained with multiclass dice loss.
+# break_his/mhist/pcam, plus PanNuke macro Jaccard from the MaskTransformer
+# head defined below trained with multiclass dice loss.
 #
 # train.py rank 0 snapshots a probe checkpoint at each FLOP milestone and runs
 # this file as a subprocess (`python probe.py req.json`); training pauses, the
@@ -38,6 +38,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 
 PROBE_DATA_SPLITS = Path(__file__).resolve().parent / "probe_data_splits"
@@ -63,8 +65,8 @@ KNN_CHUNK_SIZE = 4096
 CLASSIFICATION_DATASETS = ["bach", "bracs", "break_his", "mhist", "pcam"]
 SEGMENTATION_DATASETS = ["pannuke"]
 # Module-level so ClassificationDataset / inline_pannuke_jaccard can read it without threading
-# cfg through every call. Populated from cfg.probe.dataset_roots by prepare_probe_state() (main
-# process) and run_probe_job() (subprocess); also by prepare.py at fetch time.
+# cfg through every call. Populated from cfg.probe.dataset_roots by prepare_probe_state()
+# (train.py main process) and run_probe_job() (probe subprocess).
 DATASET_ROOTS = {}
 
 
@@ -242,6 +244,82 @@ def embed_classification_dataset(model, mean, std, dataset, split, device, trans
     return np.concatenate(embs, axis=0).astype(np.float32), np.concatenate(labels, axis=0).astype(np.int64)
 
 
+# Multiclass dice loss for the PanNuke segmentation probe; mask gates invalid pixels.
+# Vendored from Thunder (thunder/src/thunder/utils/dice_loss.py).
+def multiclass_dice_loss(pred, label, mask, smooth=1.0):
+    pred = F.softmax(pred, dim=1)
+    num_classes = pred.shape[1]
+    target = label.clone()
+    target[~mask] = num_classes
+    target = F.one_hot(target, num_classes=num_classes + 1)[..., :-1].permute(0, 3, 1, 2)
+    mask = mask.unsqueeze(1)
+    intersection = (pred * target * mask).sum(dim=(0, 2, 3))
+    union = (pred * mask).sum(dim=(0, 2, 3)) + (target * mask).sum(dim=(0, 2, 3))
+    return 1.0 - ((2.0 * intersection + smooth) / (union + smooth)).mean()
+
+
+# Pre-LN transformer decoder block (qkv attention + MLP) used inside MaskTransformer.
+class _SegBlock(nn.Module):
+    def __init__(self, dim, heads, mlp_dim):
+        super().__init__()
+        self.heads = heads
+        self.norm1, self.norm2 = nn.LayerNorm(dim), nn.LayerNorm(dim)
+        self.qkv, self.proj = nn.Linear(dim, dim * 3), nn.Linear(dim, dim)
+        self.fc1, self.fc2 = nn.Linear(dim, mlp_dim), nn.Linear(mlp_dim, dim)
+
+    def forward(self, x):
+        b, n, c = x.shape
+        qkv = self.qkv(self.norm1(x)).reshape(b, n, 3, self.heads, c // self.heads).permute(2, 0, 3, 1, 4)
+        attn = F.scaled_dot_product_attention(qkv[0], qkv[1], qkv[2]).transpose(1, 2).reshape(b, n, c)
+        x = x + self.proj(attn)
+        return x + self.fc2(F.gelu(self.fc1(self.norm2(x))))
+
+
+# Trunc-normal Linear, zero-init bias, identity LayerNorm — Thunder's seg-head init.
+def _init_seg_weights(m):
+    if isinstance(m, nn.Linear):
+        nn.init.trunc_normal_(m.weight, std=0.02)
+        if m.bias is not None:
+            nn.init.constant_(m.bias, 0)
+    elif isinstance(m, nn.LayerNorm):
+        nn.init.constant_(m.bias, 0)
+        nn.init.constant_(m.weight, 1.0)
+
+
+# Segmentation decoder vendored from Thunder (thunder/src/thunder/models/task_specific_models.py).
+# Project frozen encoder patch tokens into d_model, append n_cls learnable class tokens, run a
+# few decoder blocks, then emit low-resolution class masks; inline_pannuke_jaccard upsamples to
+# PanNuke label resolution.
+class MaskTransformer(nn.Module):
+    def __init__(self, n_cls, d_encoder, n_layers=2, n_heads=8, d_model=768, d_ff=3072):
+        super().__init__()
+        self.n_cls = n_cls
+        scale = d_model ** -0.5
+        self.proj_dec = nn.Linear(d_encoder, d_model)
+        self.blocks = nn.ModuleList(_SegBlock(d_model, n_heads, d_ff) for _ in range(n_layers))
+        self.cls_emb = nn.Parameter(torch.randn(1, n_cls, d_model))
+        self.proj_patch = nn.Parameter(scale * torch.randn(d_model, d_model))
+        self.proj_classes = nn.Parameter(scale * torch.randn(d_model, d_model))
+        self.decoder_norm = nn.LayerNorm(d_model)
+        self.mask_norm = nn.LayerNorm(n_cls)
+        self.apply(_init_seg_weights)
+        nn.init.trunc_normal_(self.cls_emb, std=0.02)
+
+    def forward(self, x):
+        b, n, _ = x.shape
+        gs = int(n ** 0.5)
+        x = self.proj_dec(x)
+        x = torch.cat([x, self.cls_emb.expand(b, -1, -1)], dim=1)
+        for blk in self.blocks:
+            x = blk(x)
+        x = self.decoder_norm(x)
+        patches, cls_seg = x[:, : -self.n_cls] @ self.proj_patch, x[:, -self.n_cls :] @ self.proj_classes
+        patches = patches / patches.norm(dim=-1, keepdim=True)
+        cls_seg = cls_seg / cls_seg.norm(dim=-1, keepdim=True)
+        masks = self.mask_norm(patches @ cls_seg.transpose(1, 2))
+        return masks.reshape(b, gs, gs, self.n_cls).permute(0, 3, 1, 2)
+
+
 # Train a lightweight segmentation head on frozen PanNuke patch features and report Jaccard.
 def inline_pannuke_jaccard(model, mean, std, device):
     # Precompute spatial token features once with the supplied backbone, then train
@@ -250,7 +328,6 @@ def inline_pannuke_jaccard(model, mean, std, device):
     # weighting (no_bg_only_weight_test=16).
     import numpy as np
     from sklearn.metrics import jaccard_score
-    from seg_head import MaskTransformer, multiclass_dice_loss
 
     started_at = time.monotonic()
 
@@ -296,7 +373,7 @@ def inline_pannuke_jaccard(model, mean, std, device):
         for i in range(0, n, SEGMENTATION_BATCH_SIZE):
             idx = perm[i : i + SEGMENTATION_BATCH_SIZE]
             labels = train_labels_t[idx].to(device)
-            logits = torch.nn.functional.interpolate(head(train_feats[idx].to(device)), (256, 256), mode="bilinear")
+            logits = F.interpolate(head(train_feats[idx].to(device)), (256, 256), mode="bilinear")
             loss = multiclass_dice_loss(logits, labels, torch.ones_like(labels, dtype=torch.bool))
             opt.zero_grad()
             loss.backward()
@@ -306,7 +383,7 @@ def inline_pannuke_jaccard(model, mean, std, device):
         with torch.no_grad():
             for i in range(0, len(val_feats), SEGMENTATION_BATCH_SIZE):
                 labels = val_labels_t[i : i + SEGMENTATION_BATCH_SIZE].to(device)
-                logits = torch.nn.functional.interpolate(head(val_feats[i : i + SEGMENTATION_BATCH_SIZE].to(device)), (256, 256), mode="bilinear")
+                logits = F.interpolate(head(val_feats[i : i + SEGMENTATION_BATCH_SIZE].to(device)), (256, 256), mode="bilinear")
                 val_loss_sum += multiclass_dice_loss(logits, labels, torch.ones_like(labels, dtype=torch.bool)).item()
                 val_batches += 1
         val_loss = val_loss_sum / max(1, val_batches)
@@ -319,7 +396,7 @@ def inline_pannuke_jaccard(model, mean, std, device):
     # Report the Thunder-compatible per-image macro Jaccard with bg-only reweighting.
     with torch.no_grad():
         for i in range(0, len(val_feats), SEGMENTATION_BATCH_SIZE):
-            preds = torch.nn.functional.interpolate(head(val_feats[i : i + SEGMENTATION_BATCH_SIZE].to(device)), (256, 256), mode="bilinear").argmax(dim=1).cpu().numpy()
+            preds = F.interpolate(head(val_feats[i : i + SEGMENTATION_BATCH_SIZE].to(device)), (256, 256), mode="bilinear").argmax(dim=1).cpu().numpy()
             true_chunk = val_labels[i : i + SEGMENTATION_BATCH_SIZE]
             for k in range(preds.shape[0]):
                 t = true_chunk[k].reshape(-1)
@@ -409,13 +486,13 @@ def inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels):
     best_f1 = 0.0
     for lr in LINEAR_PROBE_LRS:
         # LR sweep keeps probe ranking less sensitive to a single classifier hyperparameter.
-        head = torch.nn.Linear(train_embs.shape[1], num_classes).to(device)
+        head = nn.Linear(train_embs.shape[1], num_classes).to(device)
         opt = torch.optim.AdamW(head.parameters(), lr=lr, weight_decay=LINEAR_PROBE_WEIGHT_DECAY)
         for _ in range(LINEAR_PROBE_EPOCHS):
             perm = torch.randperm(n, device=device)
             for i in range(0, n, LINEAR_PROBE_BATCH_SIZE):
                 idx = perm[i : i + LINEAR_PROBE_BATCH_SIZE]
-                loss = torch.nn.functional.cross_entropy(head(train_embs_t[idx]), train_labels_t[idx])
+                loss = F.cross_entropy(head(train_embs_t[idx]), train_labels_t[idx])
                 opt.zero_grad()
                 loss.backward()
                 opt.step()
@@ -448,7 +525,7 @@ def run_probe_job(request_path):
     model_state = checkpoint[state_key]
     del checkpoint
     device = torch.device("cuda")
-    model = DinoV2ViT().to(device).eval()
+    model = DinoV2ViT(variant=cfg["model"]["type"]).to(device).eval()
     model.load_state_dict(model_state, strict=True)
     for param in model.parameters():
         param.requires_grad = False

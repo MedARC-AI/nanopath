@@ -1,15 +1,16 @@
 # TCGA tile input pipeline backed by Parquet shards. Each shard is a parquet
 # file of `{path: string, jpeg: binary}` rows. We open the shards via pyarrow
 # directly (NOT `datasets.load_dataset`, which copies into ~/.cache) so the
-# 112 GB of shards are mmap'd in place with zero duplication. Random access is
-# resolved by per-shard ParquetFile.read_row_group; prepare.py packs each
+# ~120 GB of shards are mmap'd in place with zero duplication. Random access
+# is resolved by per-shard ParquetFile.read_row_group; prepare.py packs each
 # shard with PARQUET_ROW_GROUP_SIZE=64 rows/group so reading one row group is
 # ~2 MB and __getitem__ is ~2-3 ms incl. JPEG decode.
 #
 # Patients (not tiles) are hashed by TCGA barcode and the bottom `val_fraction`
-# of the hash space is held out from training; train.py only ever instantiates
-# the train side, so a fraction of slides stays cleanly out-of-distribution
-# for any future evaluator that wants to use them.
+# of the hash space is held out from training; train.py instantiates the dataset
+# twice (`is_train=True` for the training loop, `is_train=False` for the
+# lightweight DINO/iBOT/KDE validation pass), so the held-out patient slice
+# stays cleanly out-of-distribution from optimization.
 #
 # Augmentation per tile: optional HEDJitter (stain-space color perturbation),
 # then train.global_views global crops + train.local_views local crops, each
@@ -87,8 +88,10 @@ class HEDJitter(nn.Module):
 
 # Map-style TCGA tile dataset that emits global/local multi-view stacks for train.py.
 class TCGATileDataset(Dataset):
-    # Glob shards, build a (shard_idx, row_in_shard) index over training tiles, and configure augmentations.
-    def __init__(self, cfg):
+    # Glob shards, build a (shard_idx, row_in_shard) index over the requested patient
+    # split, and configure augmentations. `is_train=True` keeps the (1 - val_fraction)
+    # majority of patient ids; `is_train=False` keeps the held-out `val_fraction` slice.
+    def __init__(self, cfg, is_train=True):
         data = cfg["data"]
         train = cfg["train"]
         dataset_dir = Path(data["dataset_dir"])
@@ -111,11 +114,13 @@ class TCGATileDataset(Dataset):
         for shard_idx, shard_path in enumerate(self.shards):
             paths = pq.read_table(str(shard_path), columns=["path"], memory_map=True)["path"].to_pylist()
             for row_idx, p in enumerate(paths):
-                if not patient_in_val(patient_id_from_relpath(p), data["split_seed"], data["val_fraction"]):
+                # XOR with is_train: training keeps tiles where patient_in_val is False,
+                # validation keeps the complement.
+                if patient_in_val(patient_id_from_relpath(p), data["split_seed"], data["val_fraction"]) != is_train:
                     in_split_shard.append(shard_idx)
                     in_split_row.append(row_idx)
         if not in_split_shard:
-            raise ValueError(f"no training tiles found in {dataset_dir}; check val_fraction={data['val_fraction']}")
+            raise ValueError(f"no {'train' if is_train else 'val'} tiles found in {dataset_dir}; check val_fraction={data['val_fraction']}")
         # Two parallel int32 arrays (~32 MB total for 4M tiles) shared COW across DataLoader fork-workers.
         self.shard_of = np.asarray(in_split_shard, dtype=np.int32)
         self.row_of = np.asarray(in_split_row, dtype=np.int32)
@@ -145,7 +150,7 @@ class TCGATileDataset(Dataset):
             ]
         )
 
-    # Dataset length is the number of tiles assigned to the training split.
+    # Dataset length is the number of tiles in this train/val split.
     def __len__(self):
         return int(self.shard_of.shape[0])
 
