@@ -44,10 +44,20 @@ train:
   resume: null
 
 dino:
-  # The three knobs we actively tune (see LOG.md for the sweep that picked the
-  # current values); every other DINOv2 hyperparameter is a constant in train.py.
+  # DINOv2 recipe knobs. lr / kde_loss_weight / kde_concentration are the most-tuned
+  # (see LOG.md sweeps); other values are established DINOv2 defaults that train.py
+  # reads but we rarely change. Anything not listed here is hardcoded in train.py.
   lr: 1.0e-4
-  kde_loss_weight: 0.002
+  lr_min: 1.0e-6
+  warmup_flop_fraction: 0.0909
+  freeze_last_layer_fraction: 0.0091
+  layerwise_decay: 0.7
+  patch_embed_lr_mult: 0.2
+  drop_path_rate: 0.1
+  head_hidden_dim: 2048
+  head_bottleneck_dim: 384
+  clip_grad: 3.0
+  kde_loss_weight: 0.005
   kde_concentration: 10.0
 
 probe:

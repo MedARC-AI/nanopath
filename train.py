@@ -1,14 +1,9 @@
-# Pretraining entry point. Continual DINOv2 pretraining of the Meta
-# register-token student/teacher pair selected by `cfg["model"]["type"]`
-# on TCGA tiles. Three loss terms:
+# Continual DINOv2 pretraining on TCGA tiles. Three loss terms:
 # DINO CLS self-distillation (Sinkhorn-Knopp centred teacher targets),
 # iBOT masked-patch self-distillation, and a cross-rank KDE uniformity term
-# on the L2-normalised CLS tokens. YAML drives the few knobs we tune
-# (backbone variant, LR, KDE weight + concentration, FLOP budget, batch
-# shape); every other DINOv2 hyper is a module constant below — see LOG.md
-# for the sweeps that picked those values. Researchers changing objectives
-# should start at the loss block in main(); changing data preprocessing
-# starts in dataloader.py; changing downstream comparisons starts in probe.py.
+# on the L2-normalised CLS tokens. Researchers changing objectives should start at the
+# loss block in main(); changing data preprocessing starts in dataloader.py;
+# changing downstream comparisons starts in probe.py.
 
 import contextlib
 import json
@@ -46,33 +41,6 @@ from probe import (
 )
 
 
-# Recipe constants (Tanishq's 3-seed-confirmed `kde_vmf_xgpu` values).
-DROP_PATH_RATE = 0.1
-LAYERWISE_DECAY = 0.7
-PATCH_EMBED_LR_MULT = 0.2
-LR_MIN = 1e-6
-WEIGHT_DECAY = 0.04
-WEIGHT_DECAY_END = 0.2
-MOMENTUM_TEACHER = 0.994
-FINAL_MOMENTUM_TEACHER = 1.0
-TEACHER_TEMP = 0.07
-WARMUP_TEACHER_TEMP = 0.04
-TEACHER_TEMP_WARMUP_FRACTION = 0.2727
-STUDENT_TEMP = 0.1
-CLIP_GRAD = 3.0
-FREEZE_LAST_LAYER_FRACTION = 0.0091
-MASK_SAMPLE_PROBABILITY = 0.5
-MASK_RATIO_MIN_MAX = (0.1, 0.45)
-HEAD_N_PROTOTYPES = 131072
-HEAD_HIDDEN_DIM = 2048
-HEAD_BOTTLENECK_DIM = 384
-HEAD_NLAYERS = 3
-KDE_START_FRACTION = 0.1
-KDE_WARMUP_FRACTION = 0.4
-KDE_ALL_GATHER = True
-WARMUP_FLOP_FRACTION = 0.0909
-
-
 # Prefix every console line with wall time and job/process id so SLURM logs are easy to scan.
 def console_prefix(): return f"{time.strftime('%H:%M:%S')} {os.environ.get('SLURM_JOB_ID', str(os.getpid()))}"
 
@@ -80,10 +48,17 @@ def console_prefix(): return f"{time.strftime('%H:%M:%S')} {os.environ.get('SLUR
 # Read the YAML recipe and fail before any GPU work if the parquet tile dataset is absent.
 # expandvars is necessary to resolve `$USER` for checked-in configs.
 def load_config():
-    if len(sys.argv) != 2:
-        raise ValueError("usage: python train.py <config.yaml>")
+    if len(sys.argv) < 2:
+        raise ValueError("usage: python train.py <config.yaml> [output_dir=<path>]")
     cfg = yaml.safe_load(os.path.expandvars(Path(sys.argv[1]).read_text()))
     cfg["config_path"] = str(Path(sys.argv[1]).resolve())
+    # Optional `key=value` overrides after the config; only output_dir is supported,
+    # since it's the run identifier and routinely set per-submission from the CLI.
+    for arg in sys.argv[2:]:
+        key, _, value = arg.partition("=")
+        if key != "output_dir":
+            raise ValueError(f"unsupported override {arg!r}; only output_dir=<path> is supported")
+        cfg["project"]["output_dir"] = os.path.expandvars(value)
     dataset_dir = Path(cfg["data"]["dataset_dir"])
     if not any(dataset_dir.glob("shard-*.parquet")):
         raise FileNotFoundError(
@@ -118,16 +93,16 @@ def sinkhorn(x, temp, world_size):
     return (q * b).t()
 
 
-# Cross-entropy between teacher distribution and softmax(student / student_temp).
-def dino_ce(student, teacher, student_temp):
-    return -(teacher * F.log_softmax(student / student_temp, dim=-1)).sum(-1).mean()
+# Cross-entropy between teacher distribution and softmax(student / 0.1).
+def dino_ce(student, teacher):
+    return -(teacher * F.log_softmax(student / 0.1, dim=-1)).sum(-1).mean()
 
 
-# KDE uniformity loss on L2-normalised CLS tokens; cross-rank gather widens the kernel support
-# (the dominant signal in Tanishq's sweep). Detached gathers from other ranks keep gradients local.
+# KDE uniformity loss on L2-normalised CLS tokens; cross-rank gather widens the kernel support.
+# Detached gathers from other ranks keep gradients local.
 def kde_loss(x, concentration, world_size):
     x = F.normalize(x, p=2, dim=-1)
-    if KDE_ALL_GATHER and world_size > 1:
+    if world_size > 1:
         gathered = [torch.zeros_like(x) for _ in range(world_size)]
         dist.all_gather(gathered, x.detach())
         gathered[dist.get_rank()] = x
@@ -138,21 +113,21 @@ def kde_loss(x, concentration, world_size):
 
 
 # Sample iBOT masking pattern: per-image bernoulli on whether to mask, then random patch ratio.
-def make_masks(batch, patches, prob, ratio, device):
+def make_masks(batch, patches, device):
     masks = torch.zeros(batch, patches, dtype=torch.bool, device=device)
     for i in range(batch):
-        if random.random() < prob:
-            masks[i, torch.randperm(patches, device=device)[: int(patches * random.uniform(*ratio))]] = True
+        if random.random() < 0.5:
+            masks[i, torch.randperm(patches, device=device)[: int(patches * random.uniform(0.1, 0.45))]] = True
     idx = masks.flatten().nonzero().flatten()
     weights = (1 / masks.sum(-1).clamp(min=1)).unsqueeze(-1).expand_as(masks)[masks]
     return masks, idx, weights
 
 
-# AdamW parameter groups with layer-wise LR decay on the backbone (Tanishq's recipe):
-# block i gets lr * LAYERWISE_DECAY^(depth - 1 - i); patch_embed gets the deepest decay
-# multiplied by PATCH_EMBED_LR_MULT; biases and norms get no weight decay; the head's
-# final weight-norm last_layer parameters get an LR-freeze for the first FREEZE_LAST_LAYER_FRACTION.
-def build_param_groups(student_backbone, student_dino_head, student_ibot_head):
+# AdamW parameter groups with layer-wise LR decay on the backbone:
+# block i gets lr * layerwise_decay^(depth - 1 - i); patch_embed gets the deepest decay
+# multiplied by patch_embed_lr_mult; biases and norms get no weight decay; the head's
+# final weight-norm last_layer parameters get an LR-freeze for the first dino.freeze_last_layer_fraction.
+def build_param_groups(student_backbone, student_dino_head, student_ibot_head, layerwise_decay, patch_embed_lr_mult):
     depth = len(student_backbone.blocks)
     groups = []
     modules = ((student_backbone, "backbone"), (student_dino_head, "dino_head"), (student_ibot_head, "ibot_head"))
@@ -162,9 +137,9 @@ def build_param_groups(student_backbone, student_dino_head, student_ibot_head):
                 continue
             lr_mult = 1.0
             if kind == "backbone" and name.startswith("blocks."):
-                lr_mult = LAYERWISE_DECAY ** (depth - 1 - int(name.split(".")[1]))
+                lr_mult = layerwise_decay ** (depth - 1 - int(name.split(".")[1]))
             elif kind == "backbone" and name.startswith("patch_embed."):
-                lr_mult = (LAYERWISE_DECAY ** depth) * PATCH_EMBED_LR_MULT
+                lr_mult = (layerwise_decay ** depth) * patch_embed_lr_mult
             wd_mult = 0.0 if name.endswith("bias") or "norm" in name or p.ndim < 2 else 1.0
             groups.append({"params": [p], "lr_mult": lr_mult, "wd_mult": wd_mult, "last_layer": "last_layer" in name})
     return groups
@@ -218,13 +193,13 @@ def main():
         load_dinov2_pretrained(DinoV2ViT(variant=variant))
     if distributed:
         dist.barrier()
-    student_backbone = load_dinov2_pretrained(DinoV2ViT(variant=variant, drop_path_rate=DROP_PATH_RATE)).to(device)
+    student_backbone = load_dinov2_pretrained(DinoV2ViT(variant=variant, drop_path_rate=dino_cfg["drop_path_rate"])).to(device)
     teacher_backbone = deepcopy(student_backbone)
     teacher_backbone.train(False)
     for p in teacher_backbone.parameters():
         p.requires_grad = False
-    student_dino_head = DINOHead(student_backbone.embed_dim, HEAD_N_PROTOTYPES, HEAD_HIDDEN_DIM, HEAD_BOTTLENECK_DIM, HEAD_NLAYERS).to(device)
-    student_ibot_head = DINOHead(student_backbone.embed_dim, HEAD_N_PROTOTYPES, HEAD_HIDDEN_DIM, HEAD_BOTTLENECK_DIM, HEAD_NLAYERS).to(device)
+    student_dino_head = DINOHead(student_backbone.embed_dim, 131072, dino_cfg["head_hidden_dim"], dino_cfg["head_bottleneck_dim"], 3).to(device)
+    student_ibot_head = DINOHead(student_backbone.embed_dim, 131072, dino_cfg["head_hidden_dim"], dino_cfg["head_bottleneck_dim"], 3).to(device)
     teacher_dino_head = deepcopy(student_dino_head)
     teacher_ibot_head = deepcopy(student_ibot_head)
     for m in (teacher_dino_head, teacher_ibot_head):
@@ -232,7 +207,7 @@ def main():
             p.requires_grad = False
     backbone_activated_params = sum(p.numel() for p in student_backbone.parameters() if p.requires_grad)
     # AdamW param groups carry per-parameter LR/WD multipliers (LWD + patch_embed + biases-no-WD).
-    opt = torch.optim.AdamW(build_param_groups(student_backbone, student_dino_head, student_ibot_head), lr=1.0, betas=(0.9, 0.999))
+    opt = torch.optim.AdamW(build_param_groups(student_backbone, student_dino_head, student_ibot_head, dino_cfg["layerwise_decay"], dino_cfg["patch_embed_lr_mult"]), lr=1.0, betas=(0.9, 0.999))
     step = 0
     global_batch_size = int(train_cfg["global_batch_size"])
     if global_batch_size % world_size != 0:
@@ -302,10 +277,10 @@ def main():
         print(
             f"{console_prefix()} Run  start: {cfg['project']['name']}  "
             f"config: {cfg['config_path']}  batch_size: {batch_size}  max_train_flops: {train_cfg['max_train_flops']}  "
-            f"probe_count: {cfg['probe']['count']}  warmup_flop_fraction: {WARMUP_FLOP_FRACTION}  "
+            f"probe_count: {cfg['probe']['count']}  warmup_flop_fraction: {dino_cfg['warmup_flop_fraction']}  "
             f"lr: {dino_cfg['lr']}  kde_loss_weight: {dino_cfg['kde_loss_weight']}  "
-            f"kde_concentration: {dino_cfg['kde_concentration']}  drop_path: {DROP_PATH_RATE}  "
-            f"layerwise_decay: {LAYERWISE_DECAY}",
+            f"kde_concentration: {dino_cfg['kde_concentration']}  drop_path: {dino_cfg['drop_path_rate']}  "
+            f"layerwise_decay: {dino_cfg['layerwise_decay']}",
             flush=True,
         )
         source_artifact = wandb.Artifact(f"nanopath-source-{wandb_run.id}", type="code")
@@ -413,10 +388,10 @@ def main():
         sl = bb(lf, checkpoint=ckpt)
         sg_cls, sl_cls = dh(sg["x_norm_clstoken"]), dh(sl["x_norm_clstoken"])
         L = train_cfg["local_views"]
-        local_loss = sum(dino_ce(x, y, STUDENT_TEMP) for x in sl_cls.chunk(L) for y in t_prob) / (2 * L + 2)
-        global_loss = dino_ce(sg_cls, t_prob.flatten(0, 1), STUDENT_TEMP) * 2 / (2 * L + 2)
+        local_loss = sum(dino_ce(x, y) for x in sl_cls.chunk(L) for y in t_prob) / (2 * L + 2)
+        global_loss = dino_ce(sg_cls, t_prob.flatten(0, 1)) * 2 / (2 * L + 2)
         s_patch = ih(sg["x_norm_patchtokens"].flatten(0, 1)[mask_idx])
-        ibot_loss = -(t_patch_prob * F.log_softmax(s_patch / STUDENT_TEMP, dim=-1)).sum(-1).mul(mask_w).sum() / max(1, b * 2)
+        ibot_loss = -(t_patch_prob * F.log_softmax(s_patch / 0.1, dim=-1)).sum(-1).mul(mask_w).sum() / max(1, b * 2)
         kde = dino_cfg["kde_loss_weight"] * k_scale * sum(kde_loss(x, dino_cfg["kde_concentration"], world_size) for x in sg["x_norm_clstoken"].chunk(train_cfg["global_views"]))
         return local_loss + global_loss, ibot_loss, kde
 
@@ -438,7 +413,7 @@ def main():
             b = vg.shape[0]
             with torch.no_grad(), autocast:
                 gf, lf = vg.transpose(0, 1).flatten(0, 1), vl.transpose(0, 1).flatten(0, 1)
-                masks, mask_idx, mask_w = make_masks(b * train_cfg["global_views"], global_patches, MASK_SAMPLE_PROBABILITY, MASK_RATIO_MIN_MAX, device)
+                masks, mask_idx, mask_w = make_masks(b * train_cfg["global_views"], global_patches, device)
                 dino_l, ibot_l, kde_v = compute_losses(gf, lf, b, masks, mask_idx, mask_w, eval_teacher_temp, eval_kde_scale, root_backbone, root_dino_head, root_ibot_head)
             sums += torch.tensor([float(dino_l), float(ibot_l), float(kde_v), float(dino_l + ibot_l + kde_v)], device=device)
             n_batches += 1
@@ -478,7 +453,7 @@ def main():
     if distributed:
         dist.barrier()
     max_train_flops = int(train_cfg["max_train_flops"])
-    warmup_train_flops = math.ceil(max_train_flops * WARMUP_FLOP_FRACTION)
+    warmup_train_flops = math.ceil(max_train_flops * dino_cfg["warmup_flop_fraction"])
     # Probe targets are FLOP milestones, not step milestones, so comparisons survive batch-size changes.
     probe_count = int(cfg["probe"]["count"]) if probe_enabled(cfg) else 0
     probe_targets = [math.ceil(max_train_flops * (i + 1) / probe_count) for i in range(probe_count)]
@@ -523,23 +498,23 @@ def main():
             current_batch = global_views.shape[0]
             global_batch = current_batch * world_size
             visible_now = global_batch * (train_cfg["global_views"] * global_patches + train_cfg["local_views"] * local_patches)
-            # Linear warmup then cosine decay to LR_MIN, all keyed off train_flops not step count.
+            # Linear warmup then cosine decay to dino.lr_min, all keyed off train_flops not step count.
             frac = min(1.0, train_flops / max_train_flops)
             warmup = min(1.0, train_flops / max(1, warmup_train_flops))
             if warmup < 1.0:
                 lr = dino_cfg["lr"] * warmup
             else:
-                lr = cosine_schedule(dino_cfg["lr"], LR_MIN, (frac - WARMUP_FLOP_FRACTION) / max(1e-9, 1 - WARMUP_FLOP_FRACTION))
-            wd = cosine_schedule(WEIGHT_DECAY, WEIGHT_DECAY_END, frac)
-            teacher_temp = WARMUP_TEACHER_TEMP + min(1.0, frac / TEACHER_TEMP_WARMUP_FRACTION) * (TEACHER_TEMP - WARMUP_TEACHER_TEMP)
-            last_layer_lr = 0.0 if frac < FREEZE_LAST_LAYER_FRACTION else lr
+                lr = cosine_schedule(dino_cfg["lr"], dino_cfg["lr_min"], (frac - dino_cfg["warmup_flop_fraction"]) / max(1e-9, 1 - dino_cfg["warmup_flop_fraction"]))
+            wd = cosine_schedule(0.04, 0.2, frac)
+            teacher_temp = 0.04 + min(1.0, frac / 0.2727) * (0.07 - 0.04)
+            last_layer_lr = 0.0 if frac < dino_cfg["freeze_last_layer_fraction"] else lr
             for group in opt.param_groups:
                 base_lr = last_layer_lr if group["last_layer"] else lr
                 group["lr"] = base_lr * group["lr_mult"]
                 group["weight_decay"] = wd * group["wd_mult"]
             # iBOT mask sample is in the same per-rank order as the global tokens (b * 2 globals).
-            masks, mask_idx, mask_w = make_masks(current_batch * train_cfg["global_views"], global_patches, MASK_SAMPLE_PROBABILITY, MASK_RATIO_MIN_MAX, device)
-            kde_scale = min(1.0, max(0.0, (frac - KDE_START_FRACTION) / KDE_WARMUP_FRACTION))
+            masks, mask_idx, mask_w = make_masks(current_batch * train_cfg["global_views"], global_patches, device)
+            kde_scale = min(1.0, max(0.0, (frac - 0.1) / 0.4))
             # Wrap forward + backward + opt.step in FlopCounterMode on the first step only;
             # subsequent steps reuse measured_flops_per_step (fixed shapes => fixed cost).
             flop_ctx = FlopCounterMode(display=False) if measured_flops_per_step is None else contextlib.nullcontext()
@@ -559,7 +534,7 @@ def main():
                 total_loss.backward()
                 grad_norm = nn.utils.clip_grad_norm_(
                     [*root_backbone.parameters(), *root_dino_head.parameters(), *root_ibot_head.parameters()],
-                    CLIP_GRAD,
+                    dino_cfg["clip_grad"],
                 )
                 opt.step()
             if measured_flops_per_step is None:
@@ -574,7 +549,7 @@ def main():
                     print(f"{console_prefix()} measured_flops_per_step: {measured_flops_per_step:,}", flush=True)
             step_train_flops = measured_flops_per_step
             with torch.no_grad():
-                m = cosine_schedule(MOMENTUM_TEACHER, FINAL_MOMENTUM_TEACHER, frac)
+                m = cosine_schedule(0.994, 1.0, frac)
                 update_ema(root_backbone, teacher_backbone, m)
                 update_ema(root_dino_head, teacher_dino_head, m)
                 update_ema(root_ibot_head, teacher_ibot_head, m)
@@ -739,13 +714,13 @@ def main():
             # left the FLOP budget unspent (low flops/sec from a wallclock stop with slack).
             "flops_per_sec": train_flops / max(1.0, train_loop_wall_seconds),
             "visible_patches_per_sec": visible_patch_presentations / max(1.0, train_loop_wall_seconds),
-            "warmup_flop_fraction": WARMUP_FLOP_FRACTION,
+            "warmup_flop_fraction": dino_cfg["warmup_flop_fraction"],
             "warmup_train_flops": warmup_train_flops,
             "lr": dino_cfg["lr"],
             "kde_loss_weight": dino_cfg["kde_loss_weight"],
             "kde_concentration": dino_cfg["kde_concentration"],
-            "drop_path_rate": DROP_PATH_RATE,
-            "layerwise_decay": LAYERWISE_DECAY,
+            "drop_path_rate": dino_cfg["drop_path_rate"],
+            "layerwise_decay": dino_cfg["layerwise_decay"],
             "probe_target_flops": probe_targets,
             "probe_target_fractions": [None if max_train_flops == 0 else target / max_train_flops for target in probe_targets],
             **({} if probe_state is None else completed_probe_summary(output_dir)),
