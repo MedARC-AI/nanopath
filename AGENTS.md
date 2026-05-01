@@ -31,8 +31,7 @@ Experiment and benchmark discipline:
 Cluster and storage:
 - The login node has no GPU access, and has a different /tmp folder than the compute nodes. For full training runs (or anything that would take more than a few minutes) you should submit SLURM jobs to H100 nodes (`n-#`) or CPU nodes (`c-1`). If it's a quick single-GPU assessment you can use `ssh n-#` directly (but only when an idle GPU is available!).
 - Store large files, checkpoints, embeddings, caches, and pretrained models under `/data/$USER/nanopath` (configs use literal `$USER`, expanded by `train.py` at load time), not the repo.
-- Treat SLURM wall-clock expiry as a clean finished run: save `latest.pt`, run downstream probes, write `summary.json`, and exit. Other kills/preemptions should keep using checkpoint auto-resume.
-- Before launching a fresh run, delete any existing `project.output_dir` or choose a new one; otherwise `train.py` will auto-resume from `latest.pt` there, which is a problem unless resume was intended.
+- Fresh launches should overwrite any existing `project.output_dir` unless `train.resume` is set.
 - Do not define `#SBATCH --cpus-per-task` in sbatch scripts and do not add unnecessary lines like `OMP_NUM_THREADS` or `MKL_NUM_THREADS` exports.
 
 Workflow:

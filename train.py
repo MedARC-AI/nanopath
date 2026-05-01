@@ -189,16 +189,8 @@ def main():
     wandb_dir = Path(cfg["project"]["wandb_dir"])
     slurm_job_id = os.environ.get("SLURM_JOB_ID")
     latest_checkpoint_path = output_dir / "latest.pt"
-    # Pick a resume source. Priority: explicit train.resume override, then any
-    # latest.pt already in output_dir (so a SLURM auto-requeue picks up where
-    # the previous job was killed). With no resume source we treat this as a
-    # fresh launch and wipe output_dir to avoid mixing stale artifacts.
-    if train_cfg["resume"]:
-        resume_path = Path(train_cfg["resume"])
-    elif latest_checkpoint_path.exists():
-        resume_path = latest_checkpoint_path
-    else:
-        resume_path = None
+    # Fresh launches always start from scratch and wipe output_dir. 
+    resume_path = Path(train_cfg["resume"]) if train_cfg["resume"] else None
     if resume_path is None and output_dir.exists():
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -281,8 +273,8 @@ def main():
     # cpu_state(m) materializes an on-CPU copy of a module's state_dict for torch.save.
     def cpu_state(m): return {k: v.detach().cpu().clone() for k, v in m.state_dict().items()}
 
-    # Full checkpoint (latest.pt) covers everything needed to resume; probe checkpoint is a slim
-    # weights-only payload since probe.py never reads the optimizer or the projection heads.
+    # Full checkpoint (latest.pt) covers explicit train.resume whereas probe checkpoint is a slim
+    # weights-only ckpt, given probe.py does not need optimizer or projection heads.
     def checkpoint_payload(next_step, full):
         payload = {"model": cpu_state(student_backbone), "model_ema": cpu_state(teacher_backbone), "step": next_step, "config": cfg}
         if not full:
@@ -400,7 +392,7 @@ def main():
     train_loop_started_at = time.monotonic()
     if train_flops >= max_train_flops:
         stop_requested = True
-    last_saved_step = step if resume_path is not None else 0
+    last_saved_step = step
     last_console_step = step
     last_console_monotonic = time.monotonic()
     data_wait_started_at = time.monotonic()
@@ -408,7 +400,7 @@ def main():
     # Per-step FLOPs are measured once via FlopCounterMode on the first wrapped step (forward +
     # backward + opt.step) and reused for every subsequent step since the shapes don't change.
     # Counts the EMA teacher forward + DINO/iBOT projection heads, not just the backbone, so the
-    # 1e18 leaderboard cap reflects real GPU work. Resumed runs re-measure on their first step.
+    # 1e18 leaderboard cap reflects real GPU work. 
     measured_flops_per_step = None
 
     while not stop_requested:
@@ -552,9 +544,8 @@ def main():
                 log_probe_results()
                 torch.cuda.reset_peak_memory_stats(device)
             if save_checkpoints and completed_step % save_every == 0:
-                # Atomic rename: a SLURM kill or scontrol requeue mid-save
-                # leaves the previous good latest.pt intact rather than a
-                # half-written file the requeued job would refuse to load.
+                # Atomic rename keeps the previous good latest.pt intact if a
+                # kill lands mid-save.
                 save_latest_checkpoint(completed_step)
             # Probe at intermediate FLOP milestones (probe.count > 1); the final probe
             # always runs after the loop exits, regardless of milestones.

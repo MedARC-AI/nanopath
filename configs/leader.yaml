@@ -41,7 +41,7 @@ train:
   local_views: 8
   global_size: 224
   local_size: 98
-  resume: null
+  resume: null # optional explicit checkpoint path; null means always start fresh and wipe output_dir
 
 dino:
   # DINOv2 recipe knobs. lr / kde_loss_weight / kde_concentration are the most-tuned

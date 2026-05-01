@@ -10,8 +10,6 @@
 #SBATCH --account=sophont
 #SBATCH --qos=normal # low | normal | top
 #SBATCH --signal=B:USR1@900
-#SBATCH --requeue
-
 set -euo pipefail
 
 # Single-GPU SLURM launcher. Optional first arg overrides the YAML config
