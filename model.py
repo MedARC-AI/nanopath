@@ -124,7 +124,7 @@ class DinoV2ViT(nn.Module):
 
     # Returns the dict shape Meta's `forward_features` returns; used by train.py and probe.py.
     # `checkpoint=True` re-runs each block under torch.utils.checkpoint to trade compute for memory;
-    # the 1-GPU recipe flips this on so a per-rank batch of 128 (2 globals + 8 locals) fits in 80 GB.
+    # useful when the 1-GPU batch of 128 (2 globals + 8 locals) does not fit in 80 GB.
     def forward(self, x, masks=None, checkpoint=False):
         x = self._prepare_tokens(x, masks)
         for blk in self.blocks:

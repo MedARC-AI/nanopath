@@ -14,7 +14,6 @@ dependencies = [
   "openslide-bin>=4.0.0",
   "pyarrow>=19.0.0",
   "huggingface-hub>=0.30.0",
-  "nvidia-ml-py>=12.0.0",
   "wandb>=0.20.0",
 ]
 

@@ -2,7 +2,7 @@
 
 ![nanopath logo](imgs/nanopath_logo.png)
 
-`nanopath` is a super lean experimental harness for training tile-level computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). It runs on a single GPU (can also be run multi-gpu if you want faster, identical results), the code is minimal/hackable, and covers the full pretraining pipeline using the public TCGA dataset (12k WSIs) and built-in probe evals from the [Thunder benchmark](https://mics-lab.github.io/thunder/).
+`nanopath` is a super lean experimental harness for training tile-level computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). It runs on a single GPU, the code is minimal/hackable, and covers the full pretraining pipeline using the public TCGA dataset (12k WSIs) and built-in probe evals from the [Thunder benchmark](https://mics-lab.github.io/thunder/).
 
 This repository is intentionally made to be compatible with [autoresearch](https://github.com/karpathy/autoresearch)-style pursuits. We will continuously update our codebase and [Leaderboard](#leaderboard) to reflect the best performing model. The current leaderboard winner (`configs/leader.yaml`) takes ~1 hour on one H100 GPU (this includes the six downstream probes evaluated at the end of the same job).
 
@@ -92,7 +92,7 @@ You can initialize the model using DINOv2 checkpoint (trained on natural images)
 - `AGENTS.md` — guidelines for AI assistants and human contributors: design philosophy (minimal/hackable, nanochat-flavored), coding rules, experiment discipline, and cluster/storage conventions. Note some language is specific to the MedARC cluster.
 - `prepare.py` — data prep: verify or download HF tile mirror + probe datasets + any pretrained weights.
 - `probe.py` — downstream probes (KNN, few-shot, linear, segmentation).
-- `submit/{train_1gpu,train_4gpu}.sbatch` — SLURM launchers for single-node 1-GPU and 4-GPU training.
+- `submit/train_1gpu.sbatch` — SLURM launcher for single-GPU training.
 - `probe_data_splits/` — checked-in classification splits for probes.
 - `download_TCGA.sh` — manual utility, run by hand if you want the full 12K TCGA open-access SVS slide set (~13 TB) for forking the tile-extraction recipe. Not invoked by `prepare.py` and not needed for any standard training workflow.
 - `LOG.md` — running notes on what has been tried, including negative results.
@@ -167,12 +167,9 @@ Leader (full train+probe for the first place recipe in our Leaderboard)
 ```bash
 sbatch submit/train_1gpu.sbatch configs/leader.yaml
 # or directly: `python train.py configs/leader.yaml`
-# can alternatively do `submit/train_4gpu.sbatch` for faster training
-# override the run's output_dir without editing the YAML:
-#   sbatch submit/train_1gpu.sbatch configs/leader.yaml output_dir=/data/$USER/nanopath/leader/myrun
 ```
 
-`configs/leader.yaml` is sized for an 80 GB H100 at `train.global_batch_size: 128`. On smaller cards you can set `train.activation_checkpointing: true` if you OOM. Smoke fits comfortably on any 24 GB+ GPU.
+`configs/leader.yaml` is sized for an 80 GB H100 at `train.batch_size: 128`. On smaller cards you can set `train.activation_checkpointing: true` if you OOM. Smoke fits comfortably on any 24 GB+ GPU.
 
 ## Outputs
 
@@ -186,9 +183,9 @@ sbatch submit/train_1gpu.sbatch configs/leader.yaml
 
 ### Auto-resume and wall-clock stops
 
-`submit/train_*.sbatch` set `--signal=USR1@900`, so wall-clock expiry gets a 15-minute clean-finish window: `train.py`'s SIGUSR1 handler flips `stop_requested`, the train loop exits, the final checkpoint is saved (when `save_every` is set), downstream probes run, `summary.json` is written, and the job exits without auto-resume. Other kills/preemptions still use `--requeue`; the requeued job sees an existing `output_dir/latest.pt` and resumes from that checkpoint, same wandb run id, same step counter, same optimizer + EMA state, no `train.resume` config edit. You'll lose at most `train.save_every` steps of progress.
+`submit/train_1gpu.sbatch` sets `--signal=USR1@900`, so wall-clock expiry gets a 15-minute clean-finish window: `train.py`'s SIGUSR1 handler flips `stop_requested`, the train loop exits, the final checkpoint is saved (when `save_every` is set), downstream probes run, `summary.json` is written, and the job exits without auto-resume. Other kills/preemptions still use `--requeue`; the requeued job sees an existing `output_dir/latest.pt` and resumes from that checkpoint, same wandb run id, same step counter, same optimizer + EMA state, no `train.resume` config edit. You'll lose at most `train.save_every` steps of progress.
 
-To start a run completely fresh, either delete the run's `project.output_dir`, change `project.output_dir` in the YAML, or pass `output_dir=<path>` after the config on the `train.py` / sbatch command line to point the run at a fresh location without editing the YAML. The `train.resume` config field still works as an explicit override (e.g. resuming from a different run's checkpoint) and takes priority over the auto-detect.
+To start a run completely fresh, either delete the run's `project.output_dir`, change `project.output_dir` in the YAML, or pass `output_dir=<path>` after the config on the `train.py` / sbatch command line to point the run at a fresh location. `train.resume` works as an explicit override (e.g. resuming from a different run's checkpoint) and takes priority over the auto-detect.
 
 ## Experiment log
 
