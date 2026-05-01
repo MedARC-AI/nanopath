@@ -14,15 +14,14 @@
 
 set -euo pipefail
 
-# Single-GPU SLURM launcher: torchrun with NPROC_PER_NODE=1, optional first
-# arg overrides the YAML config (defaults to configs/leader.yaml). Any extra
-# args after that are forwarded to train.py as overrides, e.g.
+# Single-GPU SLURM launcher. Optional first arg overrides the YAML config
+# (defaults to configs/leader.yaml). Any extra args after that are forwarded
+# to train.py as overrides, e.g.
 #   sbatch submit/train_1gpu.sbatch configs/leader.yaml output_dir=/data/$USER/nanopath/leader/myrun
 # Logs land in repo-local slurm/<jobid>.{out,err}.
 REPO_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 CONFIG_FILE="${1:-${REPO_DIR}/configs/leader.yaml}"
 [[ $# -gt 0 ]] && shift
-NPROC_PER_NODE=1
 
 cd "${REPO_DIR}"
 # Worktrees share the venv from the main checkout at /admin/home/$USER/nanopath.
@@ -33,18 +32,16 @@ fi
 source "${VENV_DIR}/bin/activate"
 
 echo "CONFIG_FILE=${CONFIG_FILE}"
-echo "NPROC_PER_NODE=${NPROC_PER_NODE}"
 echo "SLURM_JOB_ID=${SLURM_JOB_ID:-local}"
 echo "SLURMD_NODENAME=${SLURMD_NODENAME:-local}"
 
-# SLURM sends USR1 to this batch shell; forward it to torchrun workers so
+# SLURM sends USR1 to this batch shell; forward it to the python child so
 # train.py saves, probes, and exits cleanly before wall-clock expiry.
-torchrun \
-  --standalone \
-  --nproc_per_node "${NPROC_PER_NODE}" \
-  train.py \
-  "${CONFIG_FILE}" "$@" &
-TR_PID=$!
-trap 'pkill -USR1 -P "$TR_PID"' USR1
-while kill -0 "$TR_PID" 2>/dev/null; do wait "$TR_PID" || true; done
-wait "$TR_PID"
+python train.py "${CONFIG_FILE}" "$@" &
+PY_PID=$!
+trap 'kill -USR1 "$PY_PID" 2>/dev/null || true' USR1
+while true; do
+  wait "$PY_PID" && break
+  status=$?
+  kill -0 "$PY_PID" 2>/dev/null || exit "$status"
+done

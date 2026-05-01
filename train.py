@@ -1,9 +1,13 @@
-# Continual DINOv2 pretraining on TCGA tiles. Three loss terms:
+# Continual DINOv2 pretraining on TCGA tiles (single-GPU). Three loss terms:
 # DINO CLS self-distillation (Sinkhorn-Knopp centred teacher targets),
-# iBOT masked-patch self-distillation, and a cross-rank KDE uniformity term
-# on the L2-normalised CLS tokens. Researchers changing objectives should start at the
-# loss block in main(); changing data preprocessing starts in dataloader.py;
-# changing downstream comparisons starts in probe.py.
+# iBOT masked-patch self-distillation, and a KDE uniformity term on the
+# L2-normalised CLS tokens. YAML drives the tunable knobs (backbone variant,
+# LR + LR scheduler, drop path, layerwise decay, KDE weight + concentration,
+# FLOP budget, batch size); other DINOv2 hyperparameters are hardcoded inline
+# at their use sites — see LOG.md for the sweeps that picked those values.
+# Researchers changing objectives should start at the loss block in main();
+# changing data preprocessing starts in dataloader.py; changing downstream
+# comparisons starts in probe.py.
 
 import contextlib
 import json
@@ -15,19 +19,15 @@ import signal
 import sys
 import time
 from copy import deepcopy
-from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
-import pynvml
 import torch
-import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 import wandb
 import yaml
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader
 from torch.utils.flop_counter import FlopCounterMode
 
 from dataloader import TCGATileDataset, TILE_SIZE
@@ -75,20 +75,14 @@ def cosine_schedule(start, end, frac):
     return end + 0.5 * (start - end) * (1 + math.cos(math.pi * min(1.0, max(0.0, frac))))
 
 
-# Sinkhorn-Knopp centring across global batch (and ranks) used as DINO/iBOT teacher targets.
-def sinkhorn(x, temp, world_size):
+# Sinkhorn-Knopp centring across this batch, used as DINO/iBOT teacher targets.
+def sinkhorn(x, temp):
     q = torch.exp(x.float() / temp).t()
-    b = q.shape[1] * world_size
+    b = q.shape[1]
     k = q.shape[0]
-    s = q.sum()
-    if world_size > 1:
-        dist.all_reduce(s)
-    q /= s
+    q /= q.sum()
     for _ in range(3):
-        rows = q.sum(1, keepdim=True)
-        if world_size > 1:
-            dist.all_reduce(rows)
-        q /= rows * k
+        q /= q.sum(1, keepdim=True) * k
         q /= q.sum(0, keepdim=True) * b
     return (q * b).t()
 
@@ -98,15 +92,9 @@ def dino_ce(student, teacher):
     return -(teacher * F.log_softmax(student / 0.1, dim=-1)).sum(-1).mean()
 
 
-# KDE uniformity loss on L2-normalised CLS tokens; cross-rank gather widens the kernel support.
-# Detached gathers from other ranks keep gradients local.
-def kde_loss(x, concentration, world_size):
+# KDE uniformity loss on L2-normalised CLS tokens.
+def kde_loss(x, concentration):
     x = F.normalize(x, p=2, dim=-1)
-    if world_size > 1:
-        gathered = [torch.zeros_like(x) for _ in range(world_size)]
-        dist.all_gather(gathered, x.detach())
-        gathered[dist.get_rank()] = x
-        x = torch.cat(gathered)
     sim = concentration * (x @ x.T)
     sim.fill_diagonal_(-float("inf"))
     return torch.logsumexp(sim, dim=1).mean() - math.log(max(1, sim.shape[1] - 1))
@@ -160,39 +148,23 @@ def main():
     dino_cfg = cfg["dino"]
     save_every = train_cfg["save_every"]
     save_checkpoints = save_every is not None
-    # torchrun sets WORLD_SIZE/RANK/LOCAL_RANK; absence of those variables means local single-process.
-    world_size = int(os.environ.get("WORLD_SIZE", "1"))
-    rank = int(os.environ.get("RANK", "0"))
-    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    distributed = world_size > 1
     # `stop_requested` flips True when SLURM signals SIGUSR1 (wallclock approaching) or when
-    # train_flops crosses max_train_flops; both paths then exit the loop and run final save + probes.
+    # train_flops crosses max_train_flops; both paths exit the loop and run final save + probes.
     stop_requested = False
 
     def request_stop(signum, frame):
         nonlocal stop_requested
         stop_requested = True
 
-    torch.cuda.set_device(local_rank)
-    device = torch.device("cuda", local_rank)
+    device = torch.device("cuda")
     signal.signal(signal.SIGUSR1, request_stop)
-    if distributed:
-        dist.init_process_group(backend="nccl", timeout=timedelta(minutes=45), device_id=device)
-    # Rank-offset seeds keep DDP workers from sampling identical augmentation streams.
-    random.seed(train_cfg["seed"] + rank)
-    np.random.seed(train_cfg["seed"] + rank)
-    torch.manual_seed(train_cfg["seed"] + rank)
+    random.seed(train_cfg["seed"])
+    np.random.seed(train_cfg["seed"])
+    torch.manual_seed(train_cfg["seed"])
     torch.set_float32_matmul_precision("high")
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
-    pynvml.nvmlInit()
-    nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(torch.cuda.current_device())
-    # Build student/teacher backbones; rank 0 downloads pretrained weights once (others read the cache).
     variant = cfg["model"]["type"]
-    if rank == 0:
-        load_dinov2_pretrained(DinoV2ViT(variant=variant))
-    if distributed:
-        dist.barrier()
     student_backbone = load_dinov2_pretrained(DinoV2ViT(variant=variant, drop_path_rate=dino_cfg["drop_path_rate"])).to(device)
     teacher_backbone = deepcopy(student_backbone)
     teacher_backbone.train(False)
@@ -209,10 +181,7 @@ def main():
     # AdamW param groups carry per-parameter LR/WD multipliers (LWD + patch_embed + biases-no-WD).
     opt = torch.optim.AdamW(build_param_groups(student_backbone, student_dino_head, student_ibot_head, dino_cfg["layerwise_decay"], dino_cfg["patch_embed_lr_mult"]), lr=1.0, betas=(0.9, 0.999))
     step = 0
-    global_batch_size = int(train_cfg["global_batch_size"])
-    if global_batch_size % world_size != 0:
-        raise ValueError(f"global_batch_size={global_batch_size} not divisible by world_size={world_size}")
-    batch_size = global_batch_size // world_size
+    batch_size = int(train_cfg["batch_size"])
     examples_seen = 0
     visible_patch_presentations = 0
     train_flops = 0
@@ -230,19 +199,15 @@ def main():
         resume_path = latest_checkpoint_path
     else:
         resume_path = None
-    if resume_path is None:
-        if rank == 0 and output_dir.exists():
-            shutil.rmtree(output_dir)
-        if distributed:
-            dist.barrier()
+    if resume_path is None and output_dir.exists():
+        shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     wandb_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = output_dir / "metrics.jsonl"
     summary_path = output_dir / "summary.json"
     wandb_meta = None
     if resume_path is not None:
-        if rank == 0:
-            print(f"{console_prefix()} Resume  loading checkpoint: {resume_path}", flush=True)
+        print(f"{console_prefix()} Resume  loading checkpoint: {resume_path}", flush=True)
         # Resume restores training progress, optimizer state, and wandb identity.
         checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
         student_backbone.load_state_dict(checkpoint["model"])
@@ -257,73 +222,59 @@ def main():
         visible_patch_presentations = int(checkpoint["visible_patch_presentations"])
         train_flops = int(checkpoint["train_flops"])
         wandb_meta = dict(checkpoint["wandb"])
-    if rank == 0:
-        wandb_init = {
-            "project": "nanopath",
-            "name": cfg["project"]["name"],
-            "dir": str(wandb_dir),
-            "config": cfg,
-            "settings": wandb.Settings(
-                console="wrap",
-                x_file_stream_transmit_interval=5,
-            ),
-        }
-        if wandb_meta is not None:
-            wandb_init["id"] = wandb_meta["id"]
-            wandb_init["resume"] = "must"
-        wandb_run = wandb.init(**wandb_init)
-        for key in ("probe/target_flops", "probe/wall_seconds"):
-            wandb_run.define_metric(key, hidden=True, overwrite=True)
-        print(
-            f"{console_prefix()} Run  start: {cfg['project']['name']}  "
-            f"config: {cfg['config_path']}  batch_size: {batch_size}  max_train_flops: {train_cfg['max_train_flops']}  "
-            f"probe_count: {cfg['probe']['count']}  warmup_flop_fraction: {dino_cfg['warmup_flop_fraction']}  "
-            f"lr: {dino_cfg['lr']}  kde_loss_weight: {dino_cfg['kde_loss_weight']}  "
-            f"kde_concentration: {dino_cfg['kde_concentration']}  drop_path: {dino_cfg['drop_path_rate']}  "
-            f"layerwise_decay: {dino_cfg['layerwise_decay']}",
-            flush=True,
-        )
-        source_artifact = wandb.Artifact(f"nanopath-source-{wandb_run.id}", type="code")
-        repo_dir = Path(__file__).resolve().parent
-        for root, dirs, files in os.walk(repo_dir):
-            dirs[:] = sorted(d for d in dirs if d not in {".git", ".venv", "__pycache__", ".claude"})
-            for name in sorted(files):
-                path = Path(root) / name
-                source_artifact.add_file(str(path), name=str(path.relative_to(repo_dir)))
-        wandb_run.log_artifact(source_artifact)
-        wandb_meta = {"project": "nanopath", "id": wandb_run.id, "name": cfg["project"]["name"]}
-    else:
-        wandb_run = None
+    wandb_init = {
+        "project": "nanopath",
+        "name": cfg["project"]["name"],
+        "dir": str(wandb_dir),
+        "config": cfg,
+        "settings": wandb.Settings(
+            console="wrap",
+            x_file_stream_transmit_interval=5,
+        ),
+    }
+    if wandb_meta is not None:
+        wandb_init["id"] = wandb_meta["id"]
+        wandb_init["resume"] = "must"
+    wandb_run = wandb.init(**wandb_init)
+    for key in ("probe/target_flops", "probe/wall_seconds"):
+        wandb_run.define_metric(key, hidden=True, overwrite=True)
+    print(
+        f"{console_prefix()} Run  start: {cfg['project']['name']}  "
+        f"config: {cfg['config_path']}  batch_size: {batch_size}  max_train_flops: {train_cfg['max_train_flops']}  "
+        f"probe_count: {cfg['probe']['count']}  warmup_flop_fraction: {dino_cfg['warmup_flop_fraction']}  "
+        f"lr: {dino_cfg['lr']}  kde_loss_weight: {dino_cfg['kde_loss_weight']}  "
+        f"kde_concentration: {dino_cfg['kde_concentration']}  drop_path: {dino_cfg['drop_path_rate']}  "
+        f"layerwise_decay: {dino_cfg['layerwise_decay']}",
+        flush=True,
+    )
+    source_artifact = wandb.Artifact(f"nanopath-source-{wandb_run.id}", type="code")
+    repo_dir = Path(__file__).resolve().parent
+    for root, dirs, files in os.walk(repo_dir):
+        dirs[:] = sorted(d for d in dirs if d not in {".git", ".venv", "__pycache__", ".claude"})
+        for name in sorted(files):
+            path = Path(root) / name
+            source_artifact.add_file(str(path), name=str(path.relative_to(repo_dir)))
+    wandb_run.log_artifact(source_artifact)
+    wandb_meta = {"project": "nanopath", "id": wandb_run.id, "name": cfg["project"]["name"]}
     train_ds = TCGATileDataset(cfg, is_train=True)
     val_ds = TCGATileDataset(cfg, is_train=False)
-    probe_state = prepare_probe_state(cfg, output_dir) if rank == 0 and probe_enabled(cfg) else None
+    probe_state = prepare_probe_state(cfg, output_dir) if probe_enabled(cfg) else None
 
-    # Train shuffles + drops last partial batch. Val is sequential and `drop_last=True` so every rank
-    # processes the same number of batches per evaluate() call (required for the all_reduce inside).
-    sampler = DistributedSampler(train_ds, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True) if distributed else None
-    val_sampler = DistributedSampler(val_ds, num_replicas=world_size, rank=rank, shuffle=False, drop_last=True) if distributed else None
+    # Train shuffles + drops last partial batch. Val is sequential and `drop_last=True`.
     loader_kwargs = dict(batch_size=batch_size, drop_last=True, num_workers=train_cfg["num_workers"], pin_memory=True,
                          prefetch_factor=train_cfg["prefetch_factor"] if train_cfg["num_workers"] > 0 else None,
                          persistent_workers=train_cfg["persistent_workers"] and train_cfg["num_workers"] > 0)
-    train_loader = DataLoader(train_ds, shuffle=sampler is None, sampler=sampler, **loader_kwargs)
-    val_loader = DataLoader(val_ds, shuffle=False, sampler=val_sampler, **loader_kwargs)
-
-    if distributed:
-        student_backbone = DDP(student_backbone, device_ids=[local_rank], find_unused_parameters=False)
-        student_dino_head = DDP(student_dino_head, device_ids=[local_rank], find_unused_parameters=False)
-        student_ibot_head = DDP(student_ibot_head, device_ids=[local_rank], find_unused_parameters=False)
-    root_backbone = student_backbone.module if distributed else student_backbone
-    root_dino_head = student_dino_head.module if distributed else student_dino_head
-    root_ibot_head = student_ibot_head.module if distributed else student_ibot_head
+    train_loader = DataLoader(train_ds, shuffle=True, **loader_kwargs)
+    val_loader = DataLoader(val_ds, shuffle=False, **loader_kwargs)
 
     activation_checkpointing = bool(train_cfg["activation_checkpointing"])
-    global_patches = (train_cfg["global_size"] // root_backbone.patch_size) ** 2
-    local_patches = (train_cfg["local_size"] // root_backbone.patch_size) ** 2
+    global_patches = (train_cfg["global_size"] // student_backbone.patch_size) ** 2
+    local_patches = (train_cfg["local_size"] // student_backbone.patch_size) ** 2
     last_time = time.time()
     last_examples = examples_seen
     last_visible_patch_presentations = visible_patch_presentations
     last_train_flops = train_flops
-    unique_tile_patch_count = (TILE_SIZE // root_backbone.patch_size) ** 2
+    unique_tile_patch_count = (TILE_SIZE // student_backbone.patch_size) ** 2
     seen_ids = {"sample": set(), "slide": set(), "patient": set()}
     pending_ids = {key: set() for key in seen_ids}
 
@@ -333,10 +284,10 @@ def main():
     # Full checkpoint (latest.pt) covers everything needed to resume; probe checkpoint is a slim
     # weights-only payload since probe.py never reads the optimizer or the projection heads.
     def checkpoint_payload(next_step, full):
-        payload = {"model": cpu_state(root_backbone), "model_ema": cpu_state(teacher_backbone), "step": next_step, "config": cfg}
+        payload = {"model": cpu_state(student_backbone), "model_ema": cpu_state(teacher_backbone), "step": next_step, "config": cfg}
         if not full:
             return payload
-        return {**payload, "dino_head": cpu_state(root_dino_head), "ibot_head": cpu_state(root_ibot_head),
+        return {**payload, "dino_head": cpu_state(student_dino_head), "ibot_head": cpu_state(student_ibot_head),
                 "dino_head_ema": cpu_state(teacher_dino_head), "ibot_head_ema": cpu_state(teacher_ibot_head),
                 "opt": opt.state_dict(), "examples_seen": examples_seen,
                 "visible_patch_presentations": visible_patch_presentations, "train_flops": train_flops, "wandb": wandb_meta}
@@ -351,48 +302,36 @@ def main():
             stale_checkpoint_path.unlink()
         last_saved_step = checkpoint_step
 
-    # Count unique tiles/slides/patients across ranks for data-coverage diagnostics.
+    # Count unique tiles/slides/patients for data-coverage diagnostics.
     def flush_unique_counts():
-        payload = {key: list(values) for key, values in pending_ids.items()}
-        if distributed:
-            gathered = [None] * world_size
-            dist.all_gather_object(gathered, payload)
-        else:
-            gathered = [payload]
-        if rank == 0:
-            for entry in gathered:
-                for key in seen_ids:
-                    seen_ids[key].update(entry[key])
-        for values in pending_ids.values():
-            values.clear()
-        if rank == 0:
-            unique_tiles_seen = len(seen_ids["sample"])
-            return {
-                "unique_slides_seen": len(seen_ids["slide"]),
-                "unique_patients_seen": len(seen_ids["patient"]),
-                "unique_tiles_seen": unique_tiles_seen,
-                "unique_patches_seen": unique_tiles_seen * unique_tile_patch_count,
-            }
-        return None
+        for key in seen_ids:
+            seen_ids[key].update(pending_ids[key])
+            pending_ids[key].clear()
+        unique_tiles_seen = len(seen_ids["sample"])
+        return {
+            "unique_slides_seen": len(seen_ids["slide"]),
+            "unique_patients_seen": len(seen_ids["patient"]),
+            "unique_tiles_seen": unique_tiles_seen,
+            "unique_patches_seen": unique_tiles_seen * unique_tile_patch_count,
+        }
 
     # Compute (dino_loss, ibot_loss, kde) for one batch of (gf, lf) crops with the given masks +
-    # schedule values. Used by both the train step (DDP-wrapped student modules) and evaluate()
-    # (bare modules, no_grad). `bb`/`dh`/`ih` is the student trio; teacher_* are always the bare EMA copies.
-    def compute_losses(gf, lf, b, masks, mask_idx, mask_w, t_temp, k_scale, bb, dh, ih, ckpt=False):
+    # schedule values. Used by both the train step and evaluate() (no_grad).
+    def compute_losses(gf, lf, b, masks, mask_idx, mask_w, t_temp, k_scale, ckpt=False):
         with torch.no_grad():
             t = teacher_backbone(gf)
             t_cls = teacher_dino_head(t["x_norm_clstoken"]).chunk(train_cfg["global_views"])
-            t_prob = sinkhorn(torch.cat((t_cls[1], t_cls[0])), t_temp, world_size).view(2, b, -1)
-            t_patch_prob = sinkhorn(teacher_ibot_head(t["x_norm_patchtokens"].flatten(0, 1)[mask_idx]), t_temp, world_size)
-        sg = bb(gf, masks=masks, checkpoint=ckpt)
-        sl = bb(lf, checkpoint=ckpt)
-        sg_cls, sl_cls = dh(sg["x_norm_clstoken"]), dh(sl["x_norm_clstoken"])
+            t_prob = sinkhorn(torch.cat((t_cls[1], t_cls[0])), t_temp).view(2, b, -1)
+            t_patch_prob = sinkhorn(teacher_ibot_head(t["x_norm_patchtokens"].flatten(0, 1)[mask_idx]), t_temp)
+        sg = student_backbone(gf, masks=masks, checkpoint=ckpt)
+        sl = student_backbone(lf, checkpoint=ckpt)
+        sg_cls, sl_cls = student_dino_head(sg["x_norm_clstoken"]), student_dino_head(sl["x_norm_clstoken"])
         L = train_cfg["local_views"]
         local_loss = sum(dino_ce(x, y) for x in sl_cls.chunk(L) for y in t_prob) / (2 * L + 2)
         global_loss = dino_ce(sg_cls, t_prob.flatten(0, 1)) * 2 / (2 * L + 2)
-        s_patch = ih(sg["x_norm_patchtokens"].flatten(0, 1)[mask_idx])
+        s_patch = student_ibot_head(sg["x_norm_patchtokens"].flatten(0, 1)[mask_idx])
         ibot_loss = -(t_patch_prob * F.log_softmax(s_patch / 0.1, dim=-1)).sum(-1).mul(mask_w).sum() / max(1, b * 2)
-        kde = dino_cfg["kde_loss_weight"] * k_scale * sum(kde_loss(x, dino_cfg["kde_concentration"], world_size) for x in sg["x_norm_clstoken"].chunk(train_cfg["global_views"]))
+        kde = dino_cfg["kde_loss_weight"] * k_scale * sum(kde_loss(x, dino_cfg["kde_concentration"]) for x in sg["x_norm_clstoken"].chunk(train_cfg["global_views"]))
         return local_loss + global_loss, ibot_loss, kde
 
     # Held-out validation pass: same DINO + iBOT + KDE losses on `val_batches` of the val split.
@@ -403,7 +342,7 @@ def main():
             m.eval()
         py_rng, cpu_rng, cuda_rng = random.getstate(), torch.random.get_rng_state(), torch.cuda.get_rng_state(device)
         random.seed(train_cfg["seed"] + eval_step)
-        torch.manual_seed(train_cfg["seed"] + eval_step + rank)
+        torch.manual_seed(train_cfg["seed"] + eval_step)
         sums = torch.zeros(4, device=device)
         n_batches = 0
         for vb_idx, vbatch in enumerate(val_loader):
@@ -414,15 +353,12 @@ def main():
             with torch.no_grad(), autocast:
                 gf, lf = vg.transpose(0, 1).flatten(0, 1), vl.transpose(0, 1).flatten(0, 1)
                 masks, mask_idx, mask_w = make_masks(b * train_cfg["global_views"], global_patches, device)
-                dino_l, ibot_l, kde_v = compute_losses(gf, lf, b, masks, mask_idx, mask_w, eval_teacher_temp, eval_kde_scale, root_backbone, root_dino_head, root_ibot_head)
+                dino_l, ibot_l, kde_v = compute_losses(gf, lf, b, masks, mask_idx, mask_w, eval_teacher_temp, eval_kde_scale)
             sums += torch.tensor([float(dino_l), float(ibot_l), float(kde_v), float(dino_l + ibot_l + kde_v)], device=device)
             n_batches += 1
         random.setstate(py_rng)
         torch.random.set_rng_state(cpu_rng)
         torch.cuda.set_rng_state(cuda_rng, device)
-        if distributed:
-            dist.all_reduce(sums, op=dist.ReduceOp.SUM)
-            sums = sums / world_size
         return dict(zip(("dino", "ibot", "kde", "total"), (sums / max(1, n_batches)).tolist()))
 
     # Ingest completed probe result JSONs into metrics.jsonl and wandb.
@@ -448,10 +384,7 @@ def main():
         run_probe_at(checkpoint_step, probe_targets[next_probe_idx])
         next_probe_idx += 1
 
-    if rank == 0:
-        log_probe_results()
-    if distributed:
-        dist.barrier()
+    log_probe_results()
     max_train_flops = int(train_cfg["max_train_flops"])
     warmup_train_flops = math.ceil(max_train_flops * dino_cfg["warmup_flop_fraction"])
     # Probe targets are FLOP milestones, not step milestones, so comparisons survive batch-size changes.
@@ -479,8 +412,6 @@ def main():
     measured_flops_per_step = None
 
     while not stop_requested:
-        if distributed:
-            train_loader.sampler.set_epoch(step + train_cfg["seed"])
         for batch in train_loader:
             if stop_requested:
                 break
@@ -495,9 +426,7 @@ def main():
             for key, batch_key in (("sample", "sample_idx"), ("slide", "slide_id"), ("patient", "patient_id")):
                 pending_ids[key].update(int(x) for x in batch[batch_key].tolist())
             global_views, local_views = [batch[key].to(device, non_blocking=True) for key in ("global_views", "local_views")]
-            current_batch = global_views.shape[0]
-            global_batch = current_batch * world_size
-            visible_now = global_batch * (train_cfg["global_views"] * global_patches + train_cfg["local_views"] * local_patches)
+            visible_now = batch_size * (train_cfg["global_views"] * global_patches + train_cfg["local_views"] * local_patches)
             # Linear warmup then cosine decay to dino.lr_min, all keyed off train_flops not step count.
             frac = min(1.0, train_flops / max_train_flops)
             warmup = min(1.0, train_flops / max(1, warmup_train_flops))
@@ -512,8 +441,7 @@ def main():
                 base_lr = last_layer_lr if group["last_layer"] else lr
                 group["lr"] = base_lr * group["lr_mult"]
                 group["weight_decay"] = wd * group["wd_mult"]
-            # iBOT mask sample is in the same per-rank order as the global tokens (b * 2 globals).
-            masks, mask_idx, mask_w = make_masks(current_batch * train_cfg["global_views"], global_patches, device)
+            masks, mask_idx, mask_w = make_masks(batch_size * train_cfg["global_views"], global_patches, device)
             kde_scale = min(1.0, max(0.0, (frac - 0.1) / 0.4))
             # Wrap forward + backward + opt.step in FlopCounterMode on the first step only;
             # subsequent steps reuse measured_flops_per_step (fixed shapes => fixed cost).
@@ -524,59 +452,39 @@ def main():
                     # so [crop0_img0, crop0_img1, ..., crop1_img0, ...] for clean teacher/student alignment.
                     gf = global_views.transpose(0, 1).flatten(0, 1)
                     lf = local_views.transpose(0, 1).flatten(0, 1)
-                    # Pass DDP-wrapped student modules so backward hooks fire and grads sync across ranks.
                     dino_loss_value, ibot_loss, kde = compute_losses(
-                        gf, lf, current_batch, masks, mask_idx, mask_w, teacher_temp, kde_scale,
-                        student_backbone, student_dino_head, student_ibot_head, ckpt=activation_checkpointing,
+                        gf, lf, batch_size, masks, mask_idx, mask_w, teacher_temp, kde_scale,
+                        ckpt=activation_checkpointing,
                     )
                     total_loss = dino_loss_value + ibot_loss + kde
                 opt.zero_grad(set_to_none=True)
                 total_loss.backward()
                 grad_norm = nn.utils.clip_grad_norm_(
-                    [*root_backbone.parameters(), *root_dino_head.parameters(), *root_ibot_head.parameters()],
+                    [*student_backbone.parameters(), *student_dino_head.parameters(), *student_ibot_head.parameters()],
                     dino_cfg["clip_grad"],
                 )
                 opt.step()
             if measured_flops_per_step is None:
-                measured_flops_per_step = int(flop_ctx.get_total_flops()) * world_size
-                # prevent ranks disagreeing on `train_flops >= max_train_flops`, where one rank enters
-                # the eval pass while others don't — leading to NCCL collectives that never match.
-                if distributed:
-                    t = torch.tensor([measured_flops_per_step], device=device)
-                    dist.broadcast(t, src=0)
-                    measured_flops_per_step = int(t.item())
-                if rank == 0:
-                    print(f"{console_prefix()} measured_flops_per_step: {measured_flops_per_step:,}", flush=True)
+                measured_flops_per_step = int(flop_ctx.get_total_flops())
+                print(f"{console_prefix()} measured_flops_per_step: {measured_flops_per_step:,}", flush=True)
             step_train_flops = measured_flops_per_step
             with torch.no_grad():
                 m = cosine_schedule(0.994, 1.0, frac)
-                update_ema(root_backbone, teacher_backbone, m)
-                update_ema(root_dino_head, teacher_dino_head, m)
-                update_ema(root_ibot_head, teacher_ibot_head, m)
+                update_ema(student_backbone, teacher_backbone, m)
+                update_ema(student_dino_head, teacher_dino_head, m)
+                update_ema(student_ibot_head, teacher_ibot_head, m)
             step_seconds = time.monotonic() - batch_started_at
-            examples_seen += global_batch
+            examples_seen += batch_size
             visible_patch_presentations += visible_now
             train_flops += step_train_flops
-            reduced = None
             if should_log:
-                # Average scalar training losses across ranks so rank 0 logs global batch behavior.
-                if distributed:
-                    reduced = torch.tensor(
-                        [
-                            float(dino_loss_value.detach()),
-                            float(ibot_loss.detach()),
-                            float(kde.detach()),
-                            float(total_loss.detach()),
-                        ],
-                        device=device,
-                    )
-                    dist.all_reduce(reduced, op=dist.ReduceOp.SUM)
-                    reduced = (reduced / world_size).tolist()
-                else:
-                    reduced = [float(dino_loss_value.detach()), float(ibot_loss.detach()), float(kde.detach()), float(total_loss.detach())]
-                reduced = dict(zip(("dino", "ibot", "kde", "total"), reduced))
-            unique_counts = flush_unique_counts() if should_log else None
-            if rank == 0 and should_log:
+                reduced = {
+                    "dino": float(dino_loss_value.detach()),
+                    "ibot": float(ibot_loss.detach()),
+                    "kde": float(kde.detach()),
+                    "total": float(total_loss.detach()),
+                }
+                unique_counts = flush_unique_counts()
                 now = time.time()
                 elapsed = max(1e-6, now - last_time)
                 items_per_sec = (examples_seen - last_examples) / elapsed
@@ -587,7 +495,6 @@ def main():
                 last_examples = examples_seen
                 last_visible_patch_presentations = visible_patch_presentations
                 last_train_flops = train_flops
-                gpu_util_pct = float(pynvml.nvmlDeviceGetUtilizationRates(nvml_handle).gpu)
                 gpu_mem_gb = torch.cuda.memory_allocated(device) / (1024**3)
                 gpu_peak_mem_gb = torch.cuda.max_memory_allocated(device) / (1024**3)
                 console_now = time.monotonic()
@@ -616,11 +523,9 @@ def main():
                     "teacher_momentum": m,
                     "kde_scale": kde_scale,
                     "batch_size": batch_size,
-                    "global_batch_size": global_batch,
                     "examples_seen": examples_seen,
                     "visible_patch_presentations": visible_patch_presentations,
                     "train_flops": train_flops,
-                    "gpu_util_pct": gpu_util_pct,
                     "gpu_mem_gb": gpu_mem_gb,
                     "gpu_peak_mem_gb": gpu_peak_mem_gb,
                     "grad_norm": float(grad_norm.detach()),
@@ -631,7 +536,7 @@ def main():
                     f"[{completed_step}/{total_steps_estimate}]  eta: {eta_string}  gap: {console_gap_ms:.2f} ms  "
                     f"lr: {current_lr:.6f}  total: {reduced['total']:.4f}  "
                     f"dino: {reduced['dino']:.4f}  ibot: {reduced['ibot']:.4f}  kde: {reduced['kde']:.4f}  "
-                    f"grad_norm: {train_log['grad_norm']:.4f}  flops/s: {flops_per_sec:.3e}  gpu: {gpu_util_pct:.0f}  "
+                    f"grad_norm: {train_log['grad_norm']:.4f}  flops/s: {flops_per_sec:.3e}  "
                     f"time: {step_seconds:.6f}  data: {data_seconds:.6f}  "
                     f"max mem: {int(gpu_peak_mem_gb * 1024)}",
                     flush=True,
@@ -646,23 +551,21 @@ def main():
                 )
                 log_probe_results()
                 torch.cuda.reset_peak_memory_stats(device)
-            if rank == 0 and save_checkpoints and completed_step % save_every == 0:
+            if save_checkpoints and completed_step % save_every == 0:
                 # Atomic rename: a SLURM kill or scontrol requeue mid-save
                 # leaves the previous good latest.pt intact rather than a
                 # half-written file the requeued job would refuse to load.
                 save_latest_checkpoint(completed_step)
-            if rank == 0:
-                # Probe at intermediate FLOP milestones (probe.count > 1); the final probe
-                # always runs after the loop exits, regardless of milestones.
-                maybe_run_probe(completed_step)
+            # Probe at intermediate FLOP milestones (probe.count > 1); the final probe
+            # always runs after the loop exits, regardless of milestones.
+            maybe_run_probe(completed_step)
             if completed_step % int(train_cfg["eval_every"]) == 0 or train_flops >= max_train_flops:
                 val = evaluate(completed_step, teacher_temp, kde_scale)
-                if rank == 0:
-                    val_log = {"step": completed_step, **{f"val_{k}": v for k, v in val.items()}}
-                    with metrics_path.open("a") as handle:
-                        handle.write(json.dumps(val_log) + "\n")
-                    wandb_run.log({f"val/{k}": v for k, v in val.items()}, step=completed_step)
-                    print(f"{console_prefix()} Validation  [{completed_step}]  total: {val['total']:.4f}  dino: {val['dino']:.4f}  ibot: {val['ibot']:.4f}  kde: {val['kde']:.4f}", flush=True)
+                val_log = {"step": completed_step, **{f"val_{k}": v for k, v in val.items()}}
+                with metrics_path.open("a") as handle:
+                    handle.write(json.dumps(val_log) + "\n")
+                wandb_run.log({f"val/{k}": v for k, v in val.items()}, step=completed_step)
+                print(f"{console_prefix()} Validation  [{completed_step}]  total: {val['total']:.4f}  dino: {val['dino']:.4f}  ibot: {val['ibot']:.4f}  kde: {val['kde']:.4f}", flush=True)
             step = completed_step
             data_wait_started_at = time.monotonic()
             if train_flops >= max_train_flops:
@@ -672,73 +575,63 @@ def main():
     train_loop_wall_seconds = time.monotonic() - train_loop_started_at
     stop_reason = "max_train_flops" if train_flops >= max_train_flops else "wallclock"
     final_unique_counts = flush_unique_counts()
-    if distributed:
-        dist.barrier()
     if step > 0:
         # Final probes have their own readers; close pretraining workers before they compete for CPU/IO.
         if train_cfg["num_workers"] > 0:
             if train_loader._iterator is not None:
                 train_loader._iterator._shutdown_workers()
                 train_loader._iterator = None
-        if rank == 0:
-            # Probes get their own short-lived checkpoint via run_probe_at; only persist latest.pt
-            # at end-of-run when periodic saving is on (save_every set) so smoke runs leave nothing.
-            if save_checkpoints and step != last_saved_step:
-                save_latest_checkpoint(step)
-            run_probe_at(step, train_flops)
-        if distributed:
-            dist.barrier()
-    if rank == 0:
-        log_probe_results()
-        # Summary is the small, stable artifact downstream scripts and humans compare across runs.
-        summary = {
-            "project": cfg["project"]["name"],
-            "family": cfg["project"]["family"],
-            "recipe_id": cfg["project"]["recipe_id"],
-            "config_path": cfg["config_path"],
-            "slurm_job_id": slurm_job_id,
-            "backbone_activated_params": backbone_activated_params,
-            "world_size": world_size,
-            "batch_size_per_rank": batch_size,
-            "global_batch_size": batch_size * world_size,
-            "max_train_flops": max_train_flops,
-            "train_loop_wall_seconds": train_loop_wall_seconds,
-            "stop_reason": stop_reason,
-            "steps_completed": step,
-            "tile_presentations": examples_seen,
-            "visible_patch_presentations": visible_patch_presentations,
-            **final_unique_counts,
-            "train_flops": train_flops,
-            "flop_fraction": min(1.0, float(train_flops) / float(max_train_flops)),
-            # Average throughput over the whole train loop; useful for spotting submissions that
-            # left the FLOP budget unspent (low flops/sec from a wallclock stop with slack).
-            "flops_per_sec": train_flops / max(1.0, train_loop_wall_seconds),
-            "visible_patches_per_sec": visible_patch_presentations / max(1.0, train_loop_wall_seconds),
-            "warmup_flop_fraction": dino_cfg["warmup_flop_fraction"],
-            "warmup_train_flops": warmup_train_flops,
-            "lr": dino_cfg["lr"],
-            "kde_loss_weight": dino_cfg["kde_loss_weight"],
-            "kde_concentration": dino_cfg["kde_concentration"],
-            "drop_path_rate": dino_cfg["drop_path_rate"],
-            "layerwise_decay": dino_cfg["layerwise_decay"],
-            "probe_target_flops": probe_targets,
-            "probe_target_fractions": [None if max_train_flops == 0 else target / max_train_flops for target in probe_targets],
-            **({} if probe_state is None else completed_probe_summary(output_dir)),
-        }
-        if probe_state is not None and "final_probe_score" not in summary:
-            raise ValueError("probe.enabled is true but final_probe_score is missing; check probe.count, probe failures, and final checkpoint scheduling")
-        summary_path.write_text(json.dumps(summary, indent=2) + "\n")
-        print(
-            f"{console_prefix()} Summary  "
-            f"steps: {step}  train_wall: {train_loop_wall_seconds:.2f}s  "
-            f"final_probe_score: {summary.get('final_probe_score')}",
-            flush=True,
-        )
-        for key in summary.keys():
-            wandb_run.summary[key] = summary[key]
-        wandb_run.finish()
-    if distributed:
-        dist.destroy_process_group()
+        # Probes get their own short-lived checkpoint via run_probe_at; only persist latest.pt
+        # at end-of-run when periodic saving is on (save_every set) so smoke runs leave nothing.
+        if save_checkpoints and step != last_saved_step:
+            save_latest_checkpoint(step)
+        run_probe_at(step, train_flops)
+    log_probe_results()
+    # Summary is the small, stable artifact downstream scripts and humans compare across runs.
+    summary = {
+        "project": cfg["project"]["name"],
+        "family": cfg["project"]["family"],
+        "recipe_id": cfg["project"]["recipe_id"],
+        "config_path": cfg["config_path"],
+        "slurm_job_id": slurm_job_id,
+        "backbone_activated_params": backbone_activated_params,
+        "batch_size": batch_size,
+        "max_train_flops": max_train_flops,
+        "train_loop_wall_seconds": train_loop_wall_seconds,
+        "stop_reason": stop_reason,
+        "steps_completed": step,
+        "tile_presentations": examples_seen,
+        "visible_patch_presentations": visible_patch_presentations,
+        **final_unique_counts,
+        "train_flops": train_flops,
+        "flop_fraction": min(1.0, float(train_flops) / float(max_train_flops)),
+        # Average throughput over the whole train loop; useful for spotting submissions that
+        # left the FLOP budget unspent (low flops/sec from a wallclock stop with slack).
+        "flops_per_sec": train_flops / max(1.0, train_loop_wall_seconds),
+        "visible_patches_per_sec": visible_patch_presentations / max(1.0, train_loop_wall_seconds),
+        "warmup_flop_fraction": dino_cfg["warmup_flop_fraction"],
+        "warmup_train_flops": warmup_train_flops,
+        "lr": dino_cfg["lr"],
+        "kde_loss_weight": dino_cfg["kde_loss_weight"],
+        "kde_concentration": dino_cfg["kde_concentration"],
+        "drop_path_rate": dino_cfg["drop_path_rate"],
+        "layerwise_decay": dino_cfg["layerwise_decay"],
+        "probe_target_flops": probe_targets,
+        "probe_target_fractions": [None if max_train_flops == 0 else target / max_train_flops for target in probe_targets],
+        **({} if probe_state is None else completed_probe_summary(output_dir)),
+    }
+    if probe_state is not None and "final_probe_score" not in summary:
+        raise ValueError("probe.enabled is true but final_probe_score is missing; check probe.count, probe failures, and final checkpoint scheduling")
+    summary_path.write_text(json.dumps(summary, indent=2) + "\n")
+    print(
+        f"{console_prefix()} Summary  "
+        f"steps: {step}  train_wall: {train_loop_wall_seconds:.2f}s  "
+        f"final_probe_score: {summary.get('final_probe_score')}",
+        flush=True,
+    )
+    for key in summary.keys():
+        wandb_run.summary[key] = summary[key]
+    wandb_run.finish()
 
 
 if __name__ == "__main__":

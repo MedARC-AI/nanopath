@@ -4,6 +4,7 @@ Project goals:
 - Keep the codebase hackable and nanochat-like: flat organization, few files, few lines, and minimal abstractions.
 
 Before changing code:
+- If not already activated, source nanopath's .venv.
 - For broad or ambiguous tasks, read deeply enough into the current repo to understand the training/probing/data path before recommending changes. Look at every relevant source, config, script, and doc file rather than optimizing one file in isolation.
 - Make a concrete multi-step plan for nontrivial work, then keep going through implementation, validation, and any needed doc/comment updates.
 - Default to immediately implementing sensible recommendations and validating them rather than simply suggesting recommendations.
@@ -13,7 +14,7 @@ Coding guidelines:
 - Commenting is the exception to the line-count preference: add concise comments explaining "how and why" for functions and important (i.e., not plotting/logging) code blocks.
 - Do not add defensive `try`/`except` blocks or fallbacks. If something is wrong, it should fail loudly. Don't bother with ValueError raises or other code guards.
 - Prefer hard-coded constants over extra environment variables, modular options, or fallback paths, unless the value is meant to be frequently tuned.
-- Prefer native PyTorch over Accelerate, Lightning, etc. Multi-GPU should use PyTorch DDP.
+- Prefer native PyTorch over Accelerate, Lightning, etc. nanopath is single-GPU only — do not introduce DDP, FSDP, or any multi-GPU code path.
 - Do not use `argparse`. Meaningful tunables should live in YAML config files, e.g. `cfg.train.lr`; if YAML does not define a variable used by a training script, it is fine for that to error. Only put variables in YAML when they are actually meant to be tuned often; otherwise hard-code them.
 - Avoid tiny helper functions/classes that are only a handful of lines. Put the code directly where it is used.
 - Follow [nanochat](https://github.com/karpathy/nanochat) as the model for a clean minimalist codebase, especially `train.py` and `model.py`.

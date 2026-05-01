@@ -3,7 +3,7 @@
 # break_his/mhist/pcam, plus PanNuke macro Jaccard from the MaskTransformer
 # head defined below trained with multiclass dice loss.
 #
-# train.py rank 0 snapshots a probe checkpoint at each FLOP milestone and runs
+# train.py snapshots a probe checkpoint at each FLOP milestone and runs
 # this file as a subprocess (`python probe.py req.json`); training pauses, the
 # subprocess writes a result JSON, collect_probe_results ingests it back into
 # wandb + metrics.jsonl. Inside the subprocess, two threads share one GPU and
@@ -636,7 +636,7 @@ def run_probe_job(request_path):
     )
 
 
-# Rank-0 train.py call: consume probe result JSONs, log metrics, then delete temporary probe checkpoints.
+# train.py call: consume probe result JSONs, log metrics, then delete temporary probe checkpoints.
 def collect_probe_results(state, wandb_run, metrics_path):
     state["data"] = json.loads(state["paths"]["state_path"].read_text())
     logged = set(state["data"]["logged_results"])

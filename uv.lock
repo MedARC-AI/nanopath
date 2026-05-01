@@ -305,7 +305,6 @@ dependencies = [
     { name = "h5py" },
     { name = "huggingface-hub" },
     { name = "numpy" },
-    { name = "nvidia-ml-py" },
     { name = "openslide-bin" },
     { name = "openslide-python" },
     { name = "pyarrow" },
@@ -320,7 +319,6 @@ requires-dist = [
     { name = "h5py", specifier = ">=3.16.0" },
     { name = "huggingface-hub", specifier = ">=0.30.0" },
     { name = "numpy", specifier = ">=2.2.0" },
-    { name = "nvidia-ml-py", specifier = ">=12.0.0" },
     { name = "openslide-bin", specifier = ">=4.0.0" },
     { name = "openslide-python", specifier = ">=1.4.0" },
     { name = "pyarrow", specifier = ">=19.0.0" },
@@ -458,15 +456,6 @@ version = "0.7.1"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/56/79/12978b96bd44274fe38b5dde5cfb660b1d114f70a65ef962bcbbed99b549/nvidia_cusparselt_cu12-0.7.1-py3-none-manylinux2014_x86_64.whl", hash = "sha256:f1bb701d6b930d5a7cea44c19ceb973311500847f81b634d802b7b539dc55623", size = 287193691, upload-time = "2025-02-26T00:15:44.104Z" },
-]
-
-[[package]]
-name = "nvidia-ml-py"
-version = "13.595.45"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ce/49/c29f6e30d8662d2e94fef17739ea7309cc76aba269922ae999e4cc07f268/nvidia_ml_py-13.595.45.tar.gz", hash = "sha256:c9f34897fe0441ff35bc8f35baf80f830a20b0f4e6ce71e0a325bc0e66acf079", size = 50780, upload-time = "2026-03-19T16:59:44.956Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/8a/24/fc256107d23597fa33d319505ce77160fa1a2349c096d01901ffc7cb7fc4/nvidia_ml_py-13.595.45-py3-none-any.whl", hash = "sha256:b65a7977f503d56154b14d683710125ef93594adb63fbf7e559336e3318f1376", size = 51776, upload-time = "2026-03-19T16:59:43.603Z" },
 ]
 
 [[package]]

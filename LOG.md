@@ -8,10 +8,10 @@ Running notes on what has been tried in nanopath, with links to wandb where poss
 
 Tested whether you can warm-start from Meta's `dinov2_vit{s,b}14_reg` weights and keep training with the LeJEPA recipe (JEPA-pred + SIGReg). The hope was that DINOv2's strong general image features would carry through and SIGReg/JEPA-pred would tilt them toward pathology. Both runs ended up at or below the untouched-DINOv2 baseline (`0.5838`, measured via [`6r1cmaee`](https://wandb.ai/paulscotti/nanopath/runs/6r1cmaee)). LeJEPA does not preserve DINOv2's pretrained features.
 
-| variant | wandb | GPUs | budget | wall | linear | KNN | few-shot | seg | **mean** | Δ vs untouched DINOv2 |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| ViT-B/14-reg, default LeJEPA hypers (`λ_jepa=1`, `λ_sig=0.05`, `lr=1e-4`, bs 128) | [bkwuce5d](https://wandb.ai/paulscotti/nanopath/runs/bkwuce5d) | 1 | 1e18 | 83 min | 0.7520 | 0.6801 | 0.5536 | 0.3801 | **0.5914** | +0.008 |
-| ViT-S/14-reg, gentler hypers (`λ_jepa=1`, `λ_sig=0.01`, `lr=5e-5`, bs 256) | [w5q51ajb](https://wandb.ai/paulscotti/nanopath/runs/w5q51ajb) | 4 | 2.5e17 | 61 min | 0.5898 | 0.4886 | 0.4380 | 0.3311 | **0.4619** | **−0.122** |
+| variant | wandb | budget | wall | linear | KNN | few-shot | seg | **mean** | Δ vs untouched DINOv2 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| ViT-B/14-reg, default LeJEPA hypers (`λ_jepa=1`, `λ_sig=0.05`, `lr=1e-4`, bs 128) | [bkwuce5d](https://wandb.ai/paulscotti/nanopath/runs/bkwuce5d) | 1e18 | 83 min | 0.7520 | 0.6801 | 0.5536 | 0.3801 | **0.5914** | +0.008 |
+| ViT-S/14-reg, gentler hypers (`λ_jepa=1`, `λ_sig=0.01`, `lr=5e-5`, bs 256) | [w5q51ajb](https://wandb.ai/paulscotti/nanopath/runs/w5q51ajb) | 2.5e17 | 61 min | 0.5898 | 0.4886 | 0.4380 | 0.3311 | **0.4619** | **−0.122** |
 
 Reading: the ViT-B run is essentially flat against the untouched DINOv2 baseline — the LeJEPA recipe burns a 1e18 budget without learning anything useful from TCGA (well below the +0.01 leaderboard threshold). The ViT-S v2 run is much worse: linear/KNN/fewshot all collapse, and `train/sig` stays elevated (`1.64` at end, nowhere near zero), suggesting the SIGReg constraint with `λ_sig=0.01` was too weak to prevent the JEPA-pred MSE term from pulling features toward a degenerate solution. Lowering the SIGReg weight from the production LeJEPA `0.05 → 0.01` appears to be the proximate cause of the collapse.
 
@@ -29,7 +29,7 @@ Student/teacher pair built from Meta's `dinov2_vits14_reg` checkpoint (ViT-S/14 
 
 - **DINO CLS self-distillation** between cross-paired global views (Sinkhorn-Knopp centred teacher targets, 131 072 prototypes, student/teacher temperature `0.1` / cosine `0.04 → 0.07` over the first 27% of FLOPs). Each local view also distills onto each global teacher distribution.
 - **iBOT masked-patch self-distillation** with 50% per-image mask probability and 10–45% per-image patch mask ratio.
-- **KDE uniformity** on L2-normalised CLS tokens with cross-rank `all_gather`. Off for the first 10% of FLOPs, linearly ramped to full weight by 50%, then constant.
+- **KDE uniformity** on L2-normalised CLS tokens. Off for the first 10% of FLOPs, linearly ramped to full weight by 50%, then constant.
 
 Backbone is trained with AdamW, `lr=1e-4`, layer-wise LR decay `0.7^(11-i)` per block, additional `0.7^12 · 0.2` on the patch_embed, biases/norms with no weight decay, weight decay cosine `0.04 → 0.2`, drop_path `0.1` (linearly per depth), grad clip `3.0`. Teacher backbone + both teacher heads are EMA-updated with momentum cosine `0.994 → 1.0`. Final-layer LR is frozen for the first 0.91% of FLOPs.
 
@@ -37,11 +37,11 @@ Augmentation stack (in `dataloader.py`): HEDJitter `σ=0.05` before crop, Random
 
 Reference points:
 - Untouched Meta `dinov2_vits14_reg` (no continual pretraining), measured on Paul's H100 via [`6r1cmaee`](https://wandb.ai/paulscotti/nanopath/runs/6r1cmaee): `0.5838`
-- Old LeJEPA `leader_8gpu`: `0.5228`
+- Old LeJEPA leader: `0.5228`
 - This recipe (3-seed-confirmed mean across seeds 1337/2027/4242 in Tanishq's pre-merge sweep): `0.6380` (σ ≈ 0.0007)
 - This recipe on Paul's 1×H100 wall-clock path at seed 1337 after the migration: **`0.6280`** ← current leader (`iewrzghc`, `kde_loss_weight=0.005`)
 
-Tanishq's pre-merge sweep ran 50+ ablations off a `drop_path=0.1, layerwise_decay=0.7` base on a 4×H100 0.1e18 FLOP budget. Each entry below is a single-knob change off that base; positive deltas survived but did not all clear the 0.01 leaderboard threshold individually. The recipe that ports cleanly to the parquet-shard data path is the cross-rank KDE one — it was the only proven-positive knob that wasn't already on by default and wasn't a slide-reader-side artifact.
+Tanishq's pre-merge sweep ran 50+ ablations off a `drop_path=0.1, layerwise_decay=0.7` base on a 0.1e18 FLOP budget. Each entry below is a single-knob change off that base; positive deltas survived but did not all clear the 0.01 leaderboard threshold individually. The recipe that ports cleanly to the parquet-shard data path is the KDE uniformity one — it was the only proven-positive knob that wasn't already on by default and wasn't a slide-reader-side artifact.
 
 **Positive (kept):**
 - KDE uniformity (`+0.0035`, +0.0042 with `w=0.003, c=12.5`). Confirmed across three seeds at the production `w=0.002, c=10` setting; later bumping the checked-in `kde_loss_weight` from `0.002` to `0.005` left the final probe score essentially unchanged (the leader run `iewrzghc` uses `w=0.005`).
