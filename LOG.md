@@ -19,9 +19,9 @@ Implication for the leaderboard: there is no shortcut version of "DINOv2 init + 
 
 ## 2026-04-30: LeJEPA leader replaced by DINOv2 continual pretraining (@tmabraham, @PaulScotti)
 
-This is the run that moved the leaderboard from the old LeJEPA baseline (`0.5228`) to **`0.6274`** by continually pretraining Meta's `dinov2_vits14_reg` on TCGA tiles with DINO CLS + iBOT + KDE. The leaderboard run (`hzvxcy00`) used the 1e18-FLOP cap and stopped cleanly on the 1×H100 wall-clock path after 0.183e18 FLOPs: ~43.8 min training + ~3.9 min probes. The current checked-in configs keep the same ViT-S/14 backbone, 1e18 cap, and clean wall-clock-stop path in `train.py` / `submit/train_1gpu.sbatch`.
+This is the run that moved the leaderboard from the old LeJEPA baseline (`0.5228`) to **`0.6280`** by continually pretraining Meta's `dinov2_vits14_reg` on TCGA tiles with DINO CLS + iBOT + KDE. The leaderboard run (`iewrzghc`) used the 1e18-FLOP cap and stopped cleanly on the 1×H100 wall-clock path after 0.184e18 FLOPs: ~44.1 min training + ~4.2 min probes. The current checked-in configs keep the same ViT-S/14 backbone, 1e18 cap, and clean wall-clock-stop path in `train.py` / `submit/train_1gpu.sbatch`.
 
-[wandb run hzvxcy00](https://wandb.ai/paulscotti/nanopath/runs/hzvxcy00).
+[wandb run iewrzghc](https://wandb.ai/paulscotti/nanopath/runs/iewrzghc).
 
 Attribution: the DINOv2 recipe, ablations, and measured lift were Tanishq's contribution. Paul's contribution was the migration into nanopath: reading the full DINOv2-based codebase and rewriting only the important pieces into our current flat files, keeping the smallest practical diff while preserving the parquet data path, probe contract, and no-runtime-DINOv2-dependency style.
 
@@ -39,12 +39,12 @@ Reference points:
 - Untouched Meta `dinov2_vits14_reg` (no continual pretraining), measured on Paul's H100 via [`6r1cmaee`](https://wandb.ai/paulscotti/nanopath/runs/6r1cmaee): `0.5838`
 - Old LeJEPA `leader_8gpu`: `0.5228`
 - This recipe (3-seed-confirmed mean across seeds 1337/2027/4242 in Tanishq's pre-merge sweep): `0.6380` (σ ≈ 0.0007)
-- This recipe on Paul's 1×H100 wall-clock path at seed 1337 after the migration: **`0.6274`** ← current leader
+- This recipe on Paul's 1×H100 wall-clock path at seed 1337 after the migration: **`0.6280`** ← current leader (`iewrzghc`, `kde_loss_weight=0.005`)
 
 Tanishq's pre-merge sweep ran 50+ ablations off a `drop_path=0.1, layerwise_decay=0.7` base on a 4×H100 0.1e18 FLOP budget. Each entry below is a single-knob change off that base; positive deltas survived but did not all clear the 0.01 leaderboard threshold individually. The recipe that ports cleanly to the parquet-shard data path is the cross-rank KDE one — it was the only proven-positive knob that wasn't already on by default and wasn't a slide-reader-side artifact.
 
 **Positive (kept):**
-- KDE uniformity (`+0.0035`, +0.0042 with `w=0.003, c=12.5`). Confirmed across three seeds at the production `w=0.002, c=10` setting.
+- KDE uniformity (`+0.0035`, +0.0042 with `w=0.003, c=12.5`). Confirmed across three seeds at the production `w=0.002, c=10` setting; later bumping the checked-in `kde_loss_weight` from `0.002` to `0.005` left the final probe score essentially unchanged (the leader run `iewrzghc` uses `w=0.005`).
 - Stronger color jitter `0.30` (`+0.0022`) — close enough to the default `0.20` that we kept the existing `0.20` to minimise diffs.
 
 **Neutral or negative (rejected):**

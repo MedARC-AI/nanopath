@@ -45,13 +45,15 @@ Score is final `mean_probe_score`: unweighted mean of standard classification pr
 
 | # | mean | linear | KNN | few-shot | seg Jaccard | Description | wandb | Date | Contributors |
 |---|------:|-------:|----:|---------:|------------:|-------------|-------|------|--------------|
-| 1 | **0.6274** | 0.7960 | 0.7153 | 0.5919 | 0.4063 | DINOv2 ViT-S/14-reg continual pretraining (DINO CLS + iBOT + KDE on TCGA tiles) | [hzvxcy00](https://wandb.ai/paulscotti/nanopath/runs/hzvxcy00) | Apr 30 2026 | @tmabraham, @PaulScotti |
+| 1 | **0.6280** | 0.7964 | 0.7084 | 0.6031 | 0.4039 | DINOv2 ViT-S/14-reg continual pretraining (DINO CLS + iBOT + KDE on TCGA tiles) | [iewrzghc](https://wandb.ai/paulscotti/nanopath/runs/iewrzghc) | May 1 2026 | @tmabraham, @PaulScotti |
 | 2 | 0.5838 | 0.7472 | 0.6614 | 0.6110 | 0.3155 | Untouched Meta `dinov2_vits14_reg` (no continual pretraining on TCGA) | [6r1cmaee](https://wandb.ai/paulscotti/nanopath/runs/6r1cmaee) | Apr 30 2026 | @tmabraham |
 | 3 | 0.5228 | 0.6832 | 0.6093 | 0.4490 | 0.3496 | LeJEPA baseline | [t72j3r8k](https://wandb.ai/paulscotti/nanopath/runs/t72j3r8k) | Apr 26 2026 | @PaulScotti |
 
 ### How to submit to the leaderboard
 
 The current `configs/leader.yaml` is the top performing leaderboard recipe. To get on the leaderboard you must outperform the existing top leaderboard `mean_probe_score` by at least 0.01. If you do so, open a PR to this repo with a description of your changes (please keep only the minimal necessary code changes that improve performance) and share your wandb run/report. [@PaulScotti](https://github.com/PaulScotti) will train a new model using your code on his 1 80GB H100, using a different rng seed and striving to reduce the submission to the smallest practical diff against the current codebase. If it still improves `mean_probe_score` by at least 0.01, we will update the README & leaderboard accordingly. **You don't need an H100 yourself to submit** — train on whatever hardware you have access to, share the run if you think it's a winner, and Paul handles H100 verification.
+
+We also strongly welcome PRs that simplify the codebase — either by reducing lines of code (excluding commented-out lines intended for readability) or by reducing complexity (e.g. replacing the cosine LR scheduler with a constant LR) — without regressing `mean_probe_score`.
 
 ### What you must NOT change for a leaderboard submission
 
@@ -76,7 +78,7 @@ The above limits force submissions to be **simultaneously compute efficient and 
 - All probe config variables in `configs/leader.yaml`.
 
 **Initializing model from a pretrained ckpt is OK only if not pathology-specific**
-You can initialize the model using DINOv2 checkpoint (trained on natural images) but you can't initialize from say, H-optimus or OpenMidnight checkpoints. If we want to train a pathology foundation model we can't offload most of the training to someone else's pretrained pathology-specific model.
+You can initialize the model using DINOv2 checkpoint (trained on natural images) but you can't initialize from, say, H-optimus or OpenMidnight checkpoints. We want to train a pathology foundation model so we shouldn't offload most of the training to someone else's pathology-specific model.
 
 ## Repository layout
 
@@ -105,12 +107,11 @@ Edit `data.dataset_dir` and every `probe.dataset_roots.*` in your config (`confi
 ```bash
 # Pull the 4M-tile parquet dataset from the medarc/nanopath HF mirror into
 # data.dataset_dir, pull each missing probe dataset from its public source
-# into the configured probe.dataset_roots paths, and fetch Meta's
-# DINOv2 weights for model.type into the torch hub cache.
+# into the configured probe.dataset_roots paths, and fetch pretrained models
 python prepare.py configs/leader.yaml download=True
 
 # Verify-only: confirms the parquet shards, every probe dataset listed in
-# the config, and the DINOv2 backbone weights all exist on disk where
+# the config, and any necessary pretrained weights all exist on disk where
 # train.py expects them.
 python prepare.py configs/leader.yaml download=False
 ```
@@ -118,12 +119,12 @@ python prepare.py configs/leader.yaml download=False
 **What `download=True` does**
 1. **TCGA tiles**: `huggingface_hub.snapshot_download` (filtered to `shard-*.parquet`) pulls the 200 parquet shards (~120 GB total, `{path: string, jpeg: binary}` rows with 64-row row groups) from [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) into `data.dataset_dir`.
 2. **Probe datasets** (bach / bracs / break_his / mhist / pcam / pannuke): for each empty root, fetches + unpacks the dataset from its public source into the configured path.
-3. **DINOv2 backbone weights**: `torch.hub.load_state_dict_from_url` fetches the Meta checkpoint for `model.type` (`dinov2_vits14_reg` or `dinov2_vitb14_reg`) from `dl.fbaipublicfiles.com` into `~/.cache/torch/hub/checkpoints/`.
+3. **DINOv2 backbone weights**: `torch.hub.load_state_dict_from_url` fetches the Meta checkpoint for `model.type` from `dl.fbaipublicfiles.com` into `~/.cache/torch/hub/checkpoints/`.
 
 **Prerequisites**
 - ~120 GB free wherever `data.dataset_dir` lives for the parquet shards (cluster default: `/data/nanopath_parquet`).
 - ~30 GB free in total across the six `probe.dataset_roots` entries (pannuke ~13 GB + bach ~10 GB are the bulk; the rest are smaller).
-- ~330 MB free under `~/.cache/torch/hub/checkpoints/` for the largest supported DINOv2 weights.
+- ~330 MB free under `~/.cache/torch/hub/checkpoints/` for DINOv2 weights.
 - mhist requires a one-time form at https://bmirds.github.io/MHIST/. Drop the resulting `annotations.csv` + `images.zip` into `probe.dataset_roots.mhist`, then rerun `prepare.py … download=True` to unpack.
 
 ### Regenerating the tile dataset from raw SVS
@@ -150,7 +151,7 @@ pack_from_jpeg_dir(jpeg_dir, jpeg_dir / 'manifest.txt', Path('/data/nanopath_par
 "
 ```
 
-Once `data.dataset_dir` contains `shard-*.parquet`, `prepare.py … download=False` will print `[skip] tiles` and only fetch the probe datasets + DINOv2 weights. To publish a new variant of the dataset, push the resulting shards to a fresh HF dataset repo and update `HF_REPO_ID` in `prepare.py`.
+To publish a new variant of the dataset, push the resulting shards to a fresh HF dataset repo and update `HF_REPO_ID` in `prepare.py`.
 
 ## Running
 
@@ -167,6 +168,8 @@ Leader (full train+probe for the first place recipe in our Leaderboard)
 sbatch submit/train_1gpu.sbatch configs/leader.yaml
 # or directly: `python train.py configs/leader.yaml`
 # can alternatively do `submit/train_4gpu.sbatch` for faster training
+# override the run's output_dir without editing the YAML:
+#   sbatch submit/train_1gpu.sbatch configs/leader.yaml output_dir=/data/$USER/nanopath/leader/myrun
 ```
 
 `configs/leader.yaml` is sized for an 80 GB H100 at `train.global_batch_size: 128`. On smaller cards you can set `train.activation_checkpointing: true` if you OOM. Smoke fits comfortably on any 24 GB+ GPU.
@@ -185,7 +188,7 @@ sbatch submit/train_1gpu.sbatch configs/leader.yaml
 
 `submit/train_*.sbatch` set `--signal=USR1@900`, so wall-clock expiry gets a 15-minute clean-finish window: `train.py`'s SIGUSR1 handler flips `stop_requested`, the train loop exits, the final checkpoint is saved (when `save_every` is set), downstream probes run, `summary.json` is written, and the job exits without auto-resume. Other kills/preemptions still use `--requeue`; the requeued job sees an existing `output_dir/latest.pt` and resumes from that checkpoint, same wandb run id, same step counter, same optimizer + EMA state, no `train.resume` config edit. You'll lose at most `train.save_every` steps of progress.
 
-To start a run completely fresh instead, either delete the run's `project.output_dir` or change `project.output_dir` to a new path before launching. The `train.resume` config field still works as an explicit override (e.g. resuming from a different run's checkpoint) and takes priority over the auto-detect.
+To start a run completely fresh, either delete the run's `project.output_dir`, change `project.output_dir` in the YAML, or pass `output_dir=<path>` after the config on the `train.py` / sbatch command line to point the run at a fresh location without editing the YAML. The `train.resume` config field still works as an explicit override (e.g. resuming from a different run's checkpoint) and takes priority over the auto-detect.
 
 ## Experiment log
 
@@ -193,4 +196,4 @@ See [LOG.md](LOG.md) for running notes on what has been tried in nanopath. Negat
 
 ## Acknowledgements
 
-Inspired by [nanochat](https://github.com/karpathy/nanochat). The DINOv2 backbone weights are Meta checkpoints loaded by state-dict into our own clean ViT implementation. The DINO CLS / iBOT / KDE loss recipe and its hyperparameters are based on Tanishq Mathew Abraham's continual-pretraining sweep on TCGA tiles. Probe code, dataset splits, and the pannuke `MaskTransformer` head are adapted from the [Thunder benchmark](https://mics-lab.github.io/thunder/).
+Inspired by [nanochat](https://github.com/karpathy/nanochat). The DINOv2 backbone weights are [Meta checkpoints](https://github.com/facebookresearch/dinov2) loaded by state-dict into our own clean ViT implementation. Probe code is adapted from the [Thunder benchmark](https://mics-lab.github.io/thunder/).

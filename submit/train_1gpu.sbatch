@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=baseline
+#SBATCH --job-name=leader_1gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-task=1
@@ -15,10 +15,13 @@
 set -euo pipefail
 
 # Single-GPU SLURM launcher: torchrun with NPROC_PER_NODE=1, optional first
-# arg overrides the YAML config (defaults to configs/leader.yaml).
+# arg overrides the YAML config (defaults to configs/leader.yaml). Any extra
+# args after that are forwarded to train.py as overrides, e.g.
+#   sbatch submit/train_1gpu.sbatch configs/leader.yaml output_dir=/data/$USER/nanopath/leader/myrun
 # Logs land in repo-local slurm/<jobid>.{out,err}.
 REPO_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 CONFIG_FILE="${1:-${REPO_DIR}/configs/leader.yaml}"
+[[ $# -gt 0 ]] && shift
 NPROC_PER_NODE=1
 
 cd "${REPO_DIR}"
@@ -40,7 +43,7 @@ torchrun \
   --standalone \
   --nproc_per_node "${NPROC_PER_NODE}" \
   train.py \
-  "${CONFIG_FILE}" &
+  "${CONFIG_FILE}" "$@" &
 TR_PID=$!
 trap 'pkill -USR1 -P "$TR_PID"' USR1
 while kill -0 "$TR_PID" 2>/dev/null; do wait "$TR_PID" || true; done
