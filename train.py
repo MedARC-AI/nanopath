@@ -198,11 +198,11 @@ def main():
         nonlocal stop_requested
         stop_requested = True
 
-    signal.signal(signal.SIGUSR1, request_stop)
-    if distributed:
-        dist.init_process_group(backend="nccl", timeout=timedelta(minutes=45))
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
+    signal.signal(signal.SIGUSR1, request_stop)
+    if distributed:
+        dist.init_process_group(backend="nccl", timeout=timedelta(minutes=45), device_id=device)
     # Rank-offset seeds keep DDP workers from sampling identical augmentation streams.
     random.seed(train_cfg["seed"] + rank)
     np.random.seed(train_cfg["seed"] + rank)
@@ -564,6 +564,12 @@ def main():
                 opt.step()
             if measured_flops_per_step is None:
                 measured_flops_per_step = int(flop_ctx.get_total_flops()) * world_size
+                # prevent ranks disagreeing on `train_flops >= max_train_flops`, where one rank enters
+                # the eval pass while others don't — leading to NCCL collectives that never match.
+                if distributed:
+                    t = torch.tensor([measured_flops_per_step], device=device)
+                    dist.broadcast(t, src=0)
+                    measured_flops_per_step = int(t.item())
                 if rank == 0:
                     print(f"{console_prefix()} measured_flops_per_step: {measured_flops_per_step:,}", flush=True)
             step_train_flops = measured_flops_per_step

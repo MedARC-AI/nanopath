@@ -2,7 +2,7 @@ project:
   name: nanopath-leader-dinov2
   family: leader
   recipe_id: dinov2-vits14-reg-kde
-  output_dir: /data/$USER/nanopath/leader/leader
+  output_dir: /data/$USER/nanopath/leader/leader3-1gpu
   wandb_dir: /data/$USER/nanopath/wandb
 
 data:

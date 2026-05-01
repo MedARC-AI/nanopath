@@ -4,7 +4,6 @@ Project goals:
 - Keep the codebase hackable and nanochat-like: flat organization, few files, few lines, and minimal abstractions.
 
 Before changing code:
-- Make sure the active venv is ours: `~/nanopath/.venv/bin/activate`.
 - For broad or ambiguous tasks, read deeply enough into the current repo to understand the training/probing/data path before recommending changes. Look at every relevant source, config, script, and doc file rather than optimizing one file in isolation.
 - Make a concrete multi-step plan for nontrivial work, then keep going through implementation, validation, and any needed doc/comment updates.
 - Default to immediately implementing sensible recommendations and validating them rather than simply suggesting recommendations.

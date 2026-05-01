@@ -45,7 +45,7 @@ Score is final `mean_probe_score`: unweighted mean of standard classification pr
 
 | # | mean | linear | KNN | few-shot | seg Jaccard | Description | wandb | Date | Contributors |
 |---|------:|-------:|----:|---------:|------------:|-------------|-------|------|--------------|
-| 1 | **0.6373** | 0.8083 | 0.7209 | 0.6330 | 0.3870 | DINOv2 ViT-S/14-reg continual pretraining (DINO CLS + iBOT + KDE on TCGA tiles) | [ugwp9367](https://wandb.ai/paulscotti/nanopath/runs/ugwp9367) | Apr 30 2026 | @tmabraham, @PaulScotti |
+| 1 | **0.6274** | 0.7960 | 0.7153 | 0.5919 | 0.4063 | DINOv2 ViT-S/14-reg continual pretraining (DINO CLS + iBOT + KDE on TCGA tiles) | [hzvxcy00](https://wandb.ai/paulscotti/nanopath/runs/hzvxcy00) | Apr 30 2026 | @tmabraham, @PaulScotti |
 | 2 | 0.5838 | 0.7472 | 0.6614 | 0.6110 | 0.3155 | Untouched Meta `dinov2_vits14_reg` (no continual pretraining on TCGA) | [6r1cmaee](https://wandb.ai/paulscotti/nanopath/runs/6r1cmaee) | Apr 30 2026 | @tmabraham |
 | 3 | 0.5228 | 0.6832 | 0.6093 | 0.4490 | 0.3496 | LeJEPA baseline | [t72j3r8k](https://wandb.ai/paulscotti/nanopath/runs/t72j3r8k) | Apr 26 2026 | @PaulScotti |
 
