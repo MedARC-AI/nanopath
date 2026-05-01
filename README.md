@@ -181,12 +181,6 @@ sbatch submit/train_1gpu.sbatch configs/leader.yaml
 - SLURM logs: `slurm/<jobid>.{out,err}` in the repo.
 - checkpoints: rolling `latest.pt` written every `train.save_every` steps under `project.output_dir`, plus one final save at end of run. `save_every: null` (smoke) disables both; probes always get their own short-lived checkpoint regardless.
 
-### Auto-resume and wall-clock stops
-
-`submit/train_1gpu.sbatch` sets `--signal=USR1@900`, so wall-clock expiry gets a 15-minute clean-finish window: `train.py`'s SIGUSR1 handler flips `stop_requested`, the train loop exits, the final checkpoint is saved (when `save_every` is set), downstream probes run, `summary.json` is written, and the job exits without auto-resume. Other kills/preemptions still use `--requeue`; the requeued job sees an existing `output_dir/latest.pt` and resumes from that checkpoint, same wandb run id, same step counter, same optimizer + EMA state, no `train.resume` config edit. You'll lose at most `train.save_every` steps of progress.
-
-To start a run completely fresh, either delete the run's `project.output_dir`, change `project.output_dir` in the YAML, or pass `output_dir=<path>` after the config on the `train.py` / sbatch command line to point the run at a fresh location. `train.resume` works as an explicit override (e.g. resuming from a different run's checkpoint) and takes priority over the auto-detect.
-
 ## Experiment log
 
 See [LOG.md](LOG.md) for running notes on what has been tried in nanopath. Negative results included! Such logs help contributors avoid retrying dead ends.

@@ -90,7 +90,7 @@ def probe_enabled(cfg):
     return bool(cfg["probe"]["enabled"]) and (len(cfg["probe"]["datasets"]) + len(cfg["probe"]["segmentation_datasets"])) > 0
 
 
-# Persist probe state so resumed train.py runs do not relog completed result files.
+# Persist probe state so explicitly resumed train.py runs do not relog completed result files.
 def write_probe_state(state):
     state["paths"]["state_path"].write_text(json.dumps(state["data"], indent=2) + "\n")
 
@@ -113,7 +113,7 @@ def prepare_probe_state(cfg, output_dir):
         "logged_results": [],
     }
     if paths["state_path"].exists():
-        # Resume can continue only if the probe family/datasets/count match the old state.
+        # Explicit resume can continue only if the probe family/datasets/count match the old state.
         previous = json.loads(paths["state_path"].read_text())
         if previous["version"] != 8:
             raise ValueError(f"unsupported probe state version: {previous['version']}")
