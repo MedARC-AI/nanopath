@@ -280,22 +280,6 @@ def fetch_pcam(root):
             gz.unlink()
 
 
-def fetch_bach(root):
-    base = "https://zenodo.org/api/records/3632035/files"
-    for name in ("ICIAR2018_BACH_Challenge.zip", "ICIAR2018_BACH_Challenge_TestDataset.zip"):
-        zip_path = root / name
-        http_download(f"{base}/{name}/content", zip_path)
-        shutil.unpack_archive(zip_path, root)
-        zip_path.unlink()
-
-
-def fetch_bracs(root):
-    # BRACS is exposed as FTP, easiest to mirror with wget --recursive.
-    cmd = ["wget", "--no-parent", "-nH", "-r", "--directory-prefix", str(root), "ftp://histoimage.na.icar.cnr.it/BRACS_RoI/"]
-    print(f"  $ {' '.join(cmd)}", flush=True)
-    subprocess.run(cmd, check=True)
-
-
 def fetch_break_his(root):
     tar = root / "BreaKHis_v1.tar.gz"
     http_download("http://www.inf.ufpr.br/vri/databases/BreaKHis_v1.tar.gz", tar)
@@ -593,8 +577,6 @@ def fetch_consep(root):
 
 
 FETCHERS = {
-    "bach": fetch_bach,
-    "bracs": fetch_bracs,
     "break_his": fetch_break_his,
     "mhist": fetch_mhist,
     "pcam": fetch_pcam,
