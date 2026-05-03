@@ -61,17 +61,26 @@ probe:
   model_weights: ema
   count: 1
   datasets:
-    - bach
-    - bracs
     - break_his
     - mhist
     - pcam
   segmentation_datasets:
     - pannuke
+    - monusac
+    - consep
+  robustness_datasets:
+    - camelyon
+    - tolkach_esca
+  slide_datasets:
+    - chimera_progression
+    - surgen_extras
   dataset_roots:
-    bach: /block/eva-data/bach
-    bracs: /block/eva-data/bracs
     break_his: /block/eva-data/breakhis
     mhist: /block/eva-data/mhist
     pcam: /block/eva-data/patch_camelyon
     pannuke: /block/thunder-data/pannuke
+    monusac: /block/eva-data/monusac
+    consep: /block/eva-data/consep
+    pathorob: /block/eva-data/pathorob
+    chimera_tiles: /data/chimera/chimera_tiles
+    surgen_tiles: /data/surgen/surgen_tiles

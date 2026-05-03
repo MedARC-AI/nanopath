@@ -18,6 +18,8 @@
 # (see README "Regenerating the tile dataset"); main() does not call them.
 
 import gzip
+import io
+import json
 import multiprocessing as mp
 import os
 import shutil
@@ -317,6 +319,279 @@ def fetch_mhist(root):
     )
 
 
+# PathoROB (Kömen et al. 2025) provides each dataset as parquet shards on the HF Hub.
+# We pull camelyon + tolkach_esca only — the benchmark's TCGA cohort overlaps with our
+# pretraining tile universe, so it isn't held-out and is excluded from our robustness eval.
+def fetch_pathorob(root):
+    from huggingface_hub import snapshot_download
+    for name in ("camelyon", "tolkach_esca"):
+        snapshot_download(
+            repo_id=f"bifold-pathomics/PathoROB-{name}",
+            repo_type="dataset",
+            local_dir=str(root / name),
+            allow_patterns=["data/*.parquet"],
+        )
+
+
+# MoNuSAC's official release ships split zips behind a Google Drive form; there's no clean
+# direct-download URL. We mirror the Thunder convention: the user drops the two release zips
+# (`MoNuSAC_images_and_annotations.zip` + `MoNuSAC Testing Data and Annotations.zip`) into the
+# configured root and we just unpack them on download=True.
+def fetch_monusac(root):
+    train_zip = root / "MoNuSAC_images_and_annotations.zip"
+    test_zip = root / "MoNuSAC Testing Data and Annotations.zip"
+    if train_zip.exists() and test_zip.exists():
+        for z in (train_zip, test_zip):
+            shutil.unpack_archive(z, root)
+            z.unlink()
+        return
+    raise SystemExit(
+        f"monusac requires manual access from https://monusac-2020.grand-challenge.org/Data/. "
+        f"Drop `MoNuSAC_images_and_annotations.zip` and `MoNuSAC Testing Data and Annotations.zip` "
+        f"into:\n  {root}\nThen re-run `python prepare.py <config> download=True` to unpack."
+    )
+
+
+# Chimera (CHIMERA bladder cancer challenge, https://chimera.grand-challenge.org/) task3:
+# 126 train (3A) + 50 held-out (3B) NMIBC WSIs with `progression` binary labels in *_CD.json
+# clinical metadata. Slides are huge .tif (~2 GB each) so probing slide-level cannot decode
+# them on the fly — we pre-extract a fixed sample of ~256 random tissue tiles per slide
+# (cached as parquet shards under /data/chimera/chimera_tiles), and probe.py mean-pools the
+# embedded tiles per slide to score AUROC. fetch_chimera() just routes the user to the
+# separate prepare_chimera.sbatch (download + extract is ~1.5 hr, too slow for prepare.py).
+CHIMERA_BUCKET = "s3://chimera-challenge/v2/task3/data"
+CHIMERA_LEVEL0_TILE = 448  # 224 px × 2 to read 0.48 mpp from a 0.24 mpp level-0 pyramid.
+CHIMERA_OUT_TILE = 224
+CHIMERA_TILES_PER_SLIDE = 256
+CHIMERA_RNG_SEED = 1337
+
+
+def fetch_chimera_raw(raw_dir):
+    """Sync HE.tif + HE_mask.tif for every 3A/3B chimera task3 case from the public S3 bucket."""
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "aws", "s3", "sync", CHIMERA_BUCKET, str(raw_dir),
+        "--no-sign-request",
+        "--exclude", "*",
+        "--include", "3A_*/*_HE.tif", "--include", "3A_*/*_HE_mask.tif",
+        "--include", "3B_*/*_HE.tif", "--include", "3B_*/*_HE_mask.tif",
+        "--include", "3A_*/*_CD.json", "--include", "3B_*/*_CD.json",
+    ]
+    print(f"  $ {' '.join(cmd)}", flush=True)
+    subprocess.run(cmd, check=True)
+
+
+# Read one slide + its tissue mask, pick CHIMERA_TILES_PER_SLIDE random foreground centers,
+# crop a 448x448 level-0 region around each, resize to 224x224 (~0.48 mpp), JPEG-encode.
+def _chimera_extract_one(case_dir):
+    case_id = case_dir.name
+    cohort = case_id[:2]
+    cd = json.loads((case_dir / f"{case_id}_CD.json").read_text())
+    progression = int(cd["progression"])
+    import tifffile
+    mask = tifffile.imread(case_dir / f"{case_id}_HE_mask.tif")
+    slide = openslide.OpenSlide(str(case_dir / f"{case_id}_HE.tif"))
+    w0, h0 = slide.dimensions
+    scale = w0 / mask.shape[1]  # mask px → level-0 px (mask aligns with a pyramid level)
+    fg = np.argwhere(mask > 0)
+    rng = np.random.default_rng(CHIMERA_RNG_SEED + int(case_id.split("_")[1]))
+    n = min(CHIMERA_TILES_PER_SLIDE, len(fg))
+    chosen = rng.choice(len(fg), size=n, replace=False)
+    rows = []
+    for i in chosen:
+        my, mx = fg[i]
+        x0 = max(0, min(w0 - CHIMERA_LEVEL0_TILE, int(mx * scale) - CHIMERA_LEVEL0_TILE // 2))
+        y0 = max(0, min(h0 - CHIMERA_LEVEL0_TILE, int(my * scale) - CHIMERA_LEVEL0_TILE // 2))
+        tile = np.asarray(slide.read_region((x0, y0), 0, (CHIMERA_LEVEL0_TILE, CHIMERA_LEVEL0_TILE)))[..., :3]
+        buf = io.BytesIO()
+        Image.fromarray(tile).resize((CHIMERA_OUT_TILE, CHIMERA_OUT_TILE), Image.BILINEAR).save(buf, "JPEG", quality=95)
+        rows.append((buf.getvalue(), case_id, cohort, progression))
+    slide.close()
+    return case_id, rows
+
+
+def prepare_chimera_tiles(raw_dir, tile_dir):
+    """Walk every 3A/3B case under raw_dir, extract tiles, write one parquet shard + labels.csv."""
+    out_data = tile_dir / "data"
+    out_data.mkdir(parents=True, exist_ok=True)
+    case_dirs = sorted(d for d in raw_dir.iterdir() if d.is_dir() and (d / f"{d.name}_HE.tif").exists() and (d / f"{d.name}_HE_mask.tif").exists() and (d / f"{d.name}_CD.json").exists())
+    workers = int(os.environ.get("PREPARE_WORKERS", os.cpu_count() or 8))
+    print(f"extracting {CHIMERA_TILES_PER_SLIDE} tiles/slide from {len(case_dirs)} chimera cases with {workers} workers", flush=True)
+    started = time.monotonic()
+    all_rows = []
+    with mp.Pool(workers) as pool:
+        for done, (case_id, rows) in enumerate(pool.imap_unordered(_chimera_extract_one, case_dirs), start=1):
+            all_rows.extend(rows)
+            if done % 10 == 0 or done == len(case_dirs):
+                print(f"[{done}/{len(case_dirs)}] {time.monotonic()-started:.0f}s elapsed, {len(all_rows):,} tiles", flush=True)
+    table = pa.table({
+        "jpeg": [r[0] for r in all_rows],
+        "slide_id": [r[1] for r in all_rows],
+        "cohort": [r[2] for r in all_rows],
+        "progression": pa.array([r[3] for r in all_rows], type=pa.int8()),
+    })
+    pq.write_table(table, out_data / "chimera-00000.parquet", compression="none", row_group_size=PARQUET_ROW_GROUP_SIZE)
+    labels = sorted({(r[1], r[2], r[3]) for r in all_rows})
+    (tile_dir / "labels.csv").write_text("slide_id,cohort,progression\n" + "\n".join(f"{s},{c},{p}" for s, c, p in labels) + "\n")
+    print(f"wrote {len(all_rows):,} tiles across {len(labels)} cases to {out_data}", flush=True)
+
+
+# fetch_chimera is the standard prepare.py download=True hook. The full pipeline is too slow
+# for an interactive prep run (~1 hr download + ~10 min extraction), so we route the user to
+# the dedicated sbatch and only check that the cache is populated.
+def fetch_chimera(root):
+    raise SystemExit(
+        f"chimera tile cache is built by a separate sbatch (download is ~350 GB, takes ~1.5 hr). "
+        f"Run `sbatch submit/prepare_chimera.sbatch` to populate {root}; then re-run "
+        f"`python prepare.py <config> download=False` to verify."
+    )
+
+
+# SurGen (Myles et al. 2025, https://arxiv.org/abs/2502.04946) SR1482 cohort: 416 NMIBC...
+# wait, SurGen SR1482 is colorectal cancer, not bladder. 416 cases × ~4 GB .czi each = 2.3 TiB
+# of WSIs on the public path-datasets bucket. We can't sync-then-extract like chimera (1.6 TB
+# of usable slides won't comfortably stage on /data) — so the prep job streams: download one
+# .czi per worker, sample 256 random tissue tiles, JPEG-encode, then DELETE the .czi before
+# moving to the next case. Net transient disk peak ≈ N_WORKERS × ~4 GB = ~16 GB. CZI mosaic
+# reads use aicspylibczi (slides are M-plane mosaics, not pyramid TIFFs).
+SURGEN_BUCKET = "s3://path-datasets/SurGen/SR1482_WSIs"
+SURGEN_LABELS_KEY = "s3://path-datasets/SurGen/SR1482_labels.csv"
+SURGEN_LEVEL0_TILE = 448  # 224 px × 2 to read 0.50 mpp from the 0.25 mpp 40x level-0 mosaic.
+SURGEN_OUT_TILE = 224
+SURGEN_TILES_PER_SLIDE = 256
+SURGEN_RNG_SEED = 1337
+SURGEN_THUMB_SCALE = 0.05  # cheap thumbnail for tissue masking via Otsu.
+SURGEN_TISSUE_THRESHOLD = 0.7  # require tile center mean(R,G,B) brightness < this fraction (1.0=white).
+
+
+# Cohort filter — extended-RAS = (KRAS or NRAS) mutated. KRAS=='No mutation' AND NRAS=='No
+# mutation' → wt (label 0); either column with 'p.' or 'c.' notation → mut (label 1); rows
+# with Failed/Insufficient/Not performed in both → dropped. Returns DataFrame with case_id,
+# slide_basename, ras columns; ~398 usable cases at ~48% positive.
+def _surgen_extras_cohort(labels_csv_path, slide_basenames):
+    import pandas as pd
+    m = pd.read_csv(labels_csv_path)
+    def lbl(row):
+        k, n = str(row.KRAS).strip(), str(row.NRAS).strip()
+        k_wt, n_wt = k == "No mutation", n == "No mutation"
+        k_mut, n_mut = ("p." in k or "c." in k), ("p." in n or "c." in n)
+        if k_wt and n_wt: return 0
+        if k_mut or n_mut: return 1
+        return None
+    m["ras"] = m.apply(lbl, axis=1)
+    m = m[m.ras.notna()].copy()
+    # Pick canonical slide per case: T{N:03d}_01.czi if present, else _02.
+    by_case = {}
+    for bn in slide_basenames:
+        # SR1482_40X_HE_T002_01.czi -> case "002", block "01"
+        parts = bn.replace(".czi", "").split("_")
+        case_n, block = parts[-2].lstrip("T"), parts[-1]
+        by_case.setdefault(int(case_n), {})[block] = bn
+    rows = []
+    for _, row in m.iterrows():
+        cid = int(row.case_id)
+        blocks = by_case.get(cid, {})
+        bn = blocks.get("01") or blocks.get("02")
+        if bn is not None:
+            rows.append({"case_id": f"T{cid:03d}", "slide_basename": bn, "ras": int(row.ras)})
+    return pd.DataFrame(rows)
+
+
+# Pool worker: download one .czi, mosaic-stitch, sample 256 tissue tiles, JPEG-encode, delete.
+# `args` is a (case_id, slide_basename, ras_label, raw_dir) tuple.
+def _surgen_extract_one(args):
+    import io, numpy as np
+    from PIL import Image
+    from aicspylibczi import CziFile
+    case_id, slide_basename, ras, raw_dir = args
+    czi_path = raw_dir / slide_basename
+    subprocess.run(["aws", "s3", "cp", f"{SURGEN_BUCKET}/{slide_basename}", str(czi_path), "--quiet"], check=True)
+    czi = CziFile(str(czi_path))
+    bbox = czi.get_mosaic_bounding_box()
+    # Otsu threshold on a low-res thumbnail (mean of RGB) — keep darker pixels (= tissue).
+    thumb = czi.read_mosaic(region=(bbox.x, bbox.y, bbox.w, bbox.h), scale_factor=SURGEN_THUMB_SCALE, C=0)[0]
+    gray = thumb.mean(axis=-1).astype(np.float32) / 255.0
+    # tissue = brightness below threshold (white background → 1.0, tissue → ~0.5-0.8)
+    fg = np.argwhere(gray < SURGEN_TISSUE_THRESHOLD)
+    rng = np.random.default_rng(SURGEN_RNG_SEED + int(case_id.lstrip("T")))
+    rows = []
+    if len(fg) > 0:
+        n = min(SURGEN_TILES_PER_SLIDE, len(fg))
+        chosen = rng.choice(len(fg), size=n, replace=False)
+        # mosaic coords are level-0 absolute (with bbox.x/.y as offsets from origin).
+        thumb_h, thumb_w = gray.shape
+        scale_x = bbox.w / thumb_w
+        scale_y = bbox.h / thumb_h
+        for i in chosen:
+            ty, tx = fg[i]
+            cx = int(bbox.x + (tx + 0.5) * scale_x)
+            cy = int(bbox.y + (ty + 0.5) * scale_y)
+            x0 = max(bbox.x, min(bbox.x + bbox.w - SURGEN_LEVEL0_TILE, cx - SURGEN_LEVEL0_TILE // 2))
+            y0 = max(bbox.y, min(bbox.y + bbox.h - SURGEN_LEVEL0_TILE, cy - SURGEN_LEVEL0_TILE // 2))
+            tile = czi.read_mosaic(region=(x0, y0, SURGEN_LEVEL0_TILE, SURGEN_LEVEL0_TILE), scale_factor=1.0, C=0)[0]
+            buf = io.BytesIO()
+            Image.fromarray(tile).resize((SURGEN_OUT_TILE, SURGEN_OUT_TILE), Image.BILINEAR).save(buf, "JPEG", quality=95)
+            rows.append((buf.getvalue(), case_id, slide_basename.replace(".czi", ""), ras))
+    czi_path.unlink()  # free the 4 GB .czi immediately so the next download has room.
+    return case_id, rows
+
+
+def prepare_surgen_tiles(raw_dir, tile_dir):
+    """Stream-and-tile: download → tile → delete each .czi, write a single parquet shard + labels.csv."""
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    out_data = tile_dir / "data"
+    out_data.mkdir(parents=True, exist_ok=True)
+    labels_csv = raw_dir / "SR1482_labels.csv"
+    subprocess.run(["aws", "s3", "cp", SURGEN_LABELS_KEY, str(labels_csv), "--quiet"], check=True)
+    # Enumerate available slide basenames on the bucket (cheap listing, no downloads).
+    listing = subprocess.run(["aws", "s3", "ls", SURGEN_BUCKET + "/"], capture_output=True, text=True, check=True).stdout
+    basenames = [line.split()[-1] for line in listing.splitlines() if line.strip().endswith(".czi")]
+    cohort = _surgen_extras_cohort(labels_csv, basenames)
+    print(f"surgen extras cohort: {len(cohort)} cases ({cohort.ras.mean():.3f} positive rate)", flush=True)
+    workers = int(os.environ.get("PREPARE_WORKERS", min(8, os.cpu_count() or 4)))
+    args = [(r.case_id, r.slide_basename, int(r.ras), raw_dir) for r in cohort.itertuples()]
+    started = time.monotonic()
+    all_rows = []
+    with mp.Pool(workers) as pool:
+        for done, (case_id, rows) in enumerate(pool.imap_unordered(_surgen_extract_one, args), start=1):
+            all_rows.extend(rows)
+            if done % 20 == 0 or done == len(args):
+                print(f"[{done}/{len(args)}] {time.monotonic()-started:.0f}s elapsed, {len(all_rows):,} tiles", flush=True)
+    table = pa.table({
+        "jpeg": [r[0] for r in all_rows],
+        "case_id": [r[1] for r in all_rows],
+        "slide_id": [r[2] for r in all_rows],
+        "ras": pa.array([r[3] for r in all_rows], type=pa.int8()),
+    })
+    pq.write_table(table, out_data / "surgen-00000.parquet", compression="none", row_group_size=PARQUET_ROW_GROUP_SIZE)
+    labels = sorted({(r[1], r[2], r[3]) for r in all_rows})
+    (tile_dir / "labels.csv").write_text("case_id,slide_id,ras\n" + "\n".join(f"{c},{s},{r}" for c, s, r in labels) + "\n")
+    print(f"wrote {len(all_rows):,} tiles across {len(labels)} cases to {out_data}", flush=True)
+
+
+def fetch_surgen(root):
+    raise SystemExit(
+        f"surgen tile cache is built by a separate sbatch (download is ~1.6 TB streamed via "
+        f"download → tile → delete pipeline, takes ~30 min). "
+        f"Run `sbatch submit/prepare_surgen.sbatch` to populate {root}; then re-run "
+        f"`python prepare.py <config> download=False` to verify."
+    )
+
+
+# CoNSeP also ships as a single zip behind a form on the HoVer-Net authors' page. Same pattern:
+# user drops `consep.zip` into the configured root and we unpack it on download=True.
+def fetch_consep(root):
+    z = root / "consep.zip"
+    if z.exists():
+        shutil.unpack_archive(z, root)
+        z.unlink()
+        return
+    raise SystemExit(
+        f"consep requires manual access from https://warwick.ac.uk/fac/cross_fac/tia/data/hovernet/. "
+        f"Drop `consep.zip` into:\n  {root}\nThen re-run `python prepare.py <config> download=True` to unpack."
+    )
+
+
 FETCHERS = {
     "bach": fetch_bach,
     "bracs": fetch_bracs,
@@ -324,6 +599,11 @@ FETCHERS = {
     "mhist": fetch_mhist,
     "pcam": fetch_pcam,
     "pannuke": fetch_pannuke,
+    "monusac": fetch_monusac,
+    "consep": fetch_consep,
+    "chimera_tiles": fetch_chimera,
+    "surgen_tiles": fetch_surgen,
+    "pathorob": fetch_pathorob,
 }
 
 
@@ -343,11 +623,25 @@ def get_paths(cfg):
 # Truthy if the path is populated. mhist needs the unpacked `images/` subdir
 # specifically: a user who has dropped only the manual images.zip would
 # otherwise look "populated" and we'd skip past fetch_mhist's unpack step.
+# pathorob needs the camelyon + tolkach_esca parquet shards (TCGA isn't used).
+# monusac needs both the train + test extracted directories.
 def is_populated(name, p):
     if not p.exists() or not any(p.iterdir()):
         return False
     if name == "mhist" and not (p / "images").exists():
         return False
+    if name == "monusac" and not ((p / "MoNuSAC_images_and_annotations").exists() and (p / "MoNuSAC Testing Data and Annotations").exists()):
+        return False
+    if name == "consep" and not ((p / "Train" / "Images").exists() and (p / "Test" / "Images").exists()):
+        return False
+    if name == "chimera_tiles" and not list((p / "data").glob("chimera-*.parquet")):
+        return False
+    if name == "surgen_tiles" and not list((p / "data").glob("surgen-*.parquet")):
+        return False
+    if name == "pathorob":
+        for ds in ("camelyon", "tolkach_esca"):
+            if not list((p / ds).glob("data/*.parquet")):
+                return False
     return True
 
 

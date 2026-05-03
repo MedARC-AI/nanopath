@@ -49,16 +49,21 @@ def console_prefix(): return f"{time.strftime('%H:%M:%S')} {os.environ.get('SLUR
 # expandvars is necessary to resolve `$USER` for checked-in configs.
 def load_config():
     if len(sys.argv) < 2:
-        raise ValueError("usage: python train.py <config.yaml> [output_dir=<path>]")
+        raise ValueError("usage: python train.py <config.yaml> [output_dir=<path>] [train.seed=<int>]")
     cfg = yaml.safe_load(os.path.expandvars(Path(sys.argv[1]).read_text()))
     cfg["config_path"] = str(Path(sys.argv[1]).resolve())
-    # Optional `key=value` overrides after the config; only output_dir is supported,
-    # since it's the run identifier and routinely set per-submission from the CLI.
+    # Optional `key=value` overrides after the config. output_dir is the run identifier and
+    # routinely set per-submission. train.seed is exposed because variance experiments across
+    # seeds are a common workflow (e.g. running the same recipe N times to estimate
+    # mean_probe_score noise floor).
     for arg in sys.argv[2:]:
         key, _, value = arg.partition("=")
-        if key != "output_dir":
-            raise ValueError(f"unsupported override {arg!r}; only output_dir=<path> is supported")
-        cfg["project"]["output_dir"] = os.path.expandvars(value)
+        if key == "output_dir":
+            cfg["project"]["output_dir"] = os.path.expandvars(value)
+        elif key == "train.seed":
+            cfg["train"]["seed"] = int(value)
+        else:
+            raise ValueError(f"unsupported override {arg!r}; supported: output_dir=<path>, train.seed=<int>")
     dataset_dir = Path(cfg["data"]["dataset_dir"])
     if not any(dataset_dir.glob("shard-*.parquet")):
         raise FileNotFoundError(

@@ -2,7 +2,7 @@
 
 ![nanopath logo](imgs/nanopath_logo.png)
 
-`nanopath` is a super lean experimental harness for training tile-level computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). It runs on a single GPU, the code is minimal/hackable, and covers the full pretraining pipeline using the public TCGA dataset (12k WSIs) and built-in probe evals from the [Thunder benchmark](https://mics-lab.github.io/thunder/).
+`nanopath` is a super lean experimental harness for training tile-level computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). It runs on a single GPU, the code is minimal/hackable, and covers the full pretraining pipeline using the public TCGA dataset (12k WSIs) and built-in probe evals from the [Thunder benchmark](https://mics-lab.github.io/thunder/) plus the medical-center robustness evaluation from [PathoROB](https://github.com/bifold-pathomics/PathoROB).
 
 This repository is intentionally made to be compatible with [autoresearch](https://github.com/karpathy/autoresearch)-style pursuits. We will continuously update our codebase and [Leaderboard](#leaderboard) to reflect the best performing model. The current leaderboard winner (`configs/leader.yaml`) takes ~1 hour on one H100 GPU (this includes the six downstream probes evaluated at the end of the same job).
 
@@ -41,13 +41,17 @@ A successful model training prints periodic train lines, logs to wandb, and ends
 
 ![Nanopath progress plot](imgs/progress_plot.png)
 
-Score is final `mean_probe_score`: unweighted mean of standard classification probe F1 aggregates (bach, bracs, break_his, mhist, pcam) and pannuke segmentation Jaccard. All metrics are computed on each dataset's validation split only; train splits solely fit the probe heads on top of the frozen backbone.
+Score is final `mean_probe_score`: unweighted mean of standard classification probe F1 aggregates (break_his, mhist, pcam), segmentation Jaccard averaged over PanNuke (pan-cancer 6-class nuclei), MoNuSAC (multi-organ 5-class nuclei from TCGA), and CoNSeP (UHCW colorectal 5-class nuclei after HoVer-Net's standard 8→5 consolidation, non-TCGA), the PathoROB robustness index (averaged over camelyon, tolkach_esca), and slide-level AUROC averaged over chimera_progression (CHIMERA bladder NMIBC progression) and surgen_extras (SurGen SR1482 colorectal extended-RAS = KRAS or NRAS mutation prediction).
 
-| # | mean | linear | KNN | few-shot | seg Jaccard | Description | wandb | Date | Contributors |
-|---|------:|-------:|----:|---------:|------------:|-------------|-------|------|--------------|
-| 1 | **0.6280** | 0.7964 | 0.7084 | 0.6031 | 0.4039 | DINOv2 ViT-S/14-reg continual pretraining (DINO CLS + iBOT + KDE on TCGA tiles) | [iewrzghc](https://wandb.ai/paulscotti/nanopath/runs/iewrzghc) | May 1 2026 | @tmabraham, @PaulScotti |
-| 2 | 0.5838 | 0.7472 | 0.6614 | 0.6110 | 0.3155 | Untouched Meta `dinov2_vits14_reg` (no continual pretraining on TCGA) | [6r1cmaee](https://wandb.ai/paulscotti/nanopath/runs/6r1cmaee) | Apr 30 2026 | @tmabraham |
-| 3 | 0.5228 | 0.6832 | 0.6093 | 0.4490 | 0.3496 | LeJEPA baseline | [t72j3r8k](https://wandb.ai/paulscotti/nanopath/runs/t72j3r8k) | Apr 26 2026 | @PaulScotti |
+All cls + seg + slide probes follow a four-way **train / tune / val / test** convention: the head is fit on `train`, hyperparameters (LR + WD on linear/seg, k on KNN, `C` on slide LR; epoch is selected by per-epoch tune-loss/F1) are chosen on `tune`, the routine probe metric is reported once on `val` (this feeds `mean_probe_score`), and `test` is sealed — only computed when `cfg.probe.compute_test=true`, off by default. Splits live in `probe_data_splits/{break_his,mhist,monusac,consep,chimera,surgen}.json` (pcam is computed at runtime via deterministic seed; PanNuke uses Fold1=train, Fold2 split 50/50 into tune+val, Fold3=test). CoNSeP is too small to support its own tune split, so its head reuses MoNuSAC's selected (lr, wd). PathoROB's robustness index is the unsupervised k-NN-based metric from [Kömen et al. 2025](https://arxiv.org/abs/2507.17845) — no head training, no labels at evaluation time, no train/tune/val/test split. The PathoROB benchmark's TCGA cohort is intentionally excluded (TCGA is in our pretraining universe, so it's not held-out), and the breast-heavy bach/bracs classification probes were dropped (they overlapped heavily with break_his while bach was already saturated near F1 ≈ 0.98 — kept only break_his to represent breast). MoNuSAC ROIs are TCGA-derived (per-WSI biology overlaps with our pretraining universe), so CoNSeP is included alongside it as a non-TCGA cell-level anchor; PanNuke is also non-TCGA (tissue archives outside TCGA). Chimera (UMC Utrecht / Radboud bladder cohort) and SurGen (St Andrews / Glasgow colorectal cohort) are both non-TCGA. Both chimera and surgen splits are case-grouped (no slide leakage across splits).
+
+| # | mean | linear | KNN | few-shot | seg Jaccard | robustness | Description | wandb | Date | Contributors |
+|---|------:|-------:|----:|---------:|------------:|-----------:|-------------|-------|------|--------------|
+| 1 | – | – | – | – | – | – | DINOv2 ViT-S/14-reg continual pretraining (DINO CLS + iBOT + KDE on TCGA tiles) | [iewrzghc](https://wandb.ai/paulscotti/nanopath/runs/iewrzghc) | May 1 2026 | @tmabraham, @PaulScotti |
+| 2 | – | – | – | – | – | – | Untouched Meta `dinov2_vits14_reg` (no continual pretraining on TCGA) | [6r1cmaee](https://wandb.ai/paulscotti/nanopath/runs/6r1cmaee) | Apr 30 2026 | @tmabraham |
+| 3 | – | – | – | – | – | – | LeJEPA baseline | [t72j3r8k](https://wandb.ai/paulscotti/nanopath/runs/t72j3r8k) | Apr 26 2026 | @PaulScotti |
+
+All numeric cells are dashed pending re-evaluation under the revised probe suite — bach + bracs were dropped from classification and TCGA was dropped from PathoROB, so prior `mean_probe_score` values are no longer comparable.
 
 ### How to submit to the leaderboard
 
@@ -91,7 +95,7 @@ You can initialize the model using DINOv2 checkpoint (trained on natural images)
 ### Helper files
 - `AGENTS.md` — guidelines for AI assistants and human contributors: design philosophy (minimal/hackable, nanochat-flavored), coding rules, experiment discipline, and cluster/storage conventions. Note some language is specific to the MedARC cluster.
 - `prepare.py` — data prep: verify or download HF tile mirror + probe datasets + any pretrained weights.
-- `probe.py` — downstream probes (KNN, few-shot, linear, segmentation).
+- `probe.py` — downstream probes (KNN, few-shot, linear, segmentation, PathoROB robustness index).
 - `submit/train_1gpu.sbatch` — SLURM launcher for single-GPU training.
 - `probe_data_splits/` — checked-in classification splits for probes.
 - `download_TCGA.sh` — manual utility, run by hand if you want the full 12K TCGA open-access SVS slide set (~13 TB) for forking the tile-extraction recipe. Not invoked by `prepare.py` and not needed for any standard training workflow.
@@ -118,14 +122,18 @@ python prepare.py configs/leader.yaml download=False
 
 **What `download=True` does**
 1. **TCGA tiles**: `huggingface_hub.snapshot_download` (filtered to `shard-*.parquet`) pulls the 200 parquet shards (~120 GB total, `{path: string, jpeg: binary}` rows with 64-row row groups) from [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) into `data.dataset_dir`.
-2. **Probe datasets** (bach / bracs / break_his / mhist / pcam / pannuke): for each empty root, fetches + unpacks the dataset from its public source into the configured path.
+2. **Probe datasets** (break_his / mhist / pcam / pannuke / monusac / consep / pathorob / chimera_tiles / surgen_tiles): for each empty root, fetches + unpacks the dataset from its public source into the configured path. chimera_tiles and surgen_tiles are built separately via `submit/prepare_chimera.sbatch` and `submit/prepare_surgen.sbatch` respectively (each is heavy, not auto-fetched here). The pathorob root is populated with parquet shards under `<root>/{camelyon,tolkach_esca}/data/*.parquet` from the [PathoROB HF datasets](https://huggingface.co/collections/bifold-pathomics/pathorob-6899f50a714f446d0c974f87); the benchmark's TCGA cohort is intentionally excluded since TCGA is in our pretraining universe.
 3. **DINOv2 backbone weights**: `torch.hub.load_state_dict_from_url` fetches the Meta checkpoint for `model.type` from `dl.fbaipublicfiles.com` into `~/.cache/torch/hub/checkpoints/`.
 
 **Prerequisites**
 - ~120 GB free wherever `data.dataset_dir` lives for the parquet shards (cluster default: `/data/nanopath_parquet`).
-- ~30 GB free in total across the six `probe.dataset_roots` entries (pannuke ~13 GB + bach ~10 GB are the bulk; the rest are smaller).
+- ~15 GB free in total across the five `probe.dataset_roots` entries (pannuke ~13 GB is the bulk; pathorob is ~1 GB; the rest are smaller).
 - ~330 MB free under `~/.cache/torch/hub/checkpoints/` for DINOv2 weights.
 - mhist requires a one-time form at https://bmirds.github.io/MHIST/. Drop the resulting `annotations.csv` + `images.zip` into `probe.dataset_roots.mhist`, then rerun `prepare.py … download=True` to unpack.
+- monusac requires a one-time download from https://monusac-2020.grand-challenge.org/Data/. Drop both release zips (`MoNuSAC_images_and_annotations.zip` and `MoNuSAC Testing Data and Annotations.zip`) into `probe.dataset_roots.monusac`, then rerun `prepare.py … download=True` to unpack.
+- consep requires a one-time download from https://warwick.ac.uk/fac/cross_fac/tia/data/hovernet/. Drop `consep.zip` into `probe.dataset_roots.consep`, then rerun `prepare.py … download=True` to unpack.
+- chimera_tiles is built by a dedicated sbatch (`sbatch submit/prepare_chimera.sbatch`). The job pulls ~350 GB of WSIs from the public `s3://chimera-challenge/v2/task3/` bucket into `/data/chimera/raw`, then extracts a fixed 256-tile sample per slide into a parquet shard at `/data/chimera/chimera_tiles/data/`. End-to-end ≈1.5 hr on a CPU node; only run once per cohort change.
+- surgen_tiles is built by a dedicated sbatch (`sbatch submit/prepare_surgen.sbatch`). The job streams ~1.6 TB of .czi WSIs from `s3://path-datasets/SurGen/SR1482_WSIs/` (cloudflare R2 — uses the AWS_ENDPOINT_URL credentials in `~/.bashrc`) one case at a time, samples 256 random tissue tiles per slide via `aicspylibczi`, JPEG-encodes them, and deletes the .czi before moving on (transient peak ~32 GB). Output: `/data/surgen/surgen_tiles/data/surgen-00000.parquet` + `labels.csv`. ~30 min on a CPU node; run once.
 
 ### Regenerating the tile dataset from raw SVS
 

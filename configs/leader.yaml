@@ -64,22 +64,50 @@ probe:
   enabled: true
   model_weights: ema
   count: 1 # 4 means probing at 25%, 50%, 75%, and 100% of the training FLOP budget. 1 means probing just at the end.
+  # bach + bracs were dropped: 3 of the original 5 classification probes (bach, bracs,
+  # break_his) were all breast histology at varying granularities, so the suite over-counted
+  # one tissue. Of the breast trio, break_his stays because it's still the most discriminating
+  # (~0.58 linear F1 vs bach's ~0.98 saturation). Net: ~3 min saved per probe + better tissue
+  # diversity (breast subtyping, colon polyp, lymph-node mets).
   datasets:
-    - bach
-    - bracs
     - break_his
     - mhist
     - pcam
+  # PanNuke (pan-cancer 6-class nuclei) + MoNuSAC (4-organ 5-class cell types, TCGA-derived) +
+  # CoNSeP (UHCW colorectal 5-class cell types after HoVer-Net's standard 8→5 consolidation,
+  # non-TCGA so it anchors the seg axis off our pretraining distribution). All feed seg_mean_jaccard.
   segmentation_datasets:
     - pannuke
+    - monusac
+    - consep
+  # PathoROB (Kömen et al. 2025) downstream robustness eval: cosine kNN over the cls + mean
+  # patch-token feature on each HF dataset, robustness_index = SO / (SO + OS) at the per-
+  # dataset median k_opt from the preprint. tcga is intentionally excluded — TCGA tiles are
+  # already in our pretraining universe, so a TCGA robustness measurement isn't held-out.
+  robustness_datasets:
+    - camelyon
+    - tolkach_esca
+  # Slide-level outcome probes:
+  #   chimera_progression: bladder NMIBC progression (CHIMERA task 3). LR on 3A cohort (n=126),
+  #     AUROC on held-out 3B cohort (n=50). Cache built via `sbatch submit/prepare_chimera.sbatch`.
+  #   surgen_extras: colorectal extended-RAS (KRAS or NRAS mutation, SR1482 cohort). 5-fold
+  #     stratified CV at the case level on n≈398 cases (~48% positive). Cache built via
+  #     `sbatch submit/prepare_surgen.sbatch`.
+  slide_datasets:
+    - chimera_progression
+    - surgen_extras
   # Dataset roots are read by probe.py. Defaults are the MedARC cluster's
   # shared /block paths (already populated, zero setup). Off-cluster, point
   # these at writable directories and run prepare.py with download=True to
-  # fetch the data.
+  # fetch the data. The pathorob root holds parquet shards under <root>/<name>/
+  # data/*.parquet.
   dataset_roots:
-    bach: /block/eva-data/bach
-    bracs: /block/eva-data/bracs
     break_his: /block/eva-data/breakhis
     mhist: /block/eva-data/mhist
     pcam: /block/eva-data/patch_camelyon
     pannuke: /block/thunder-data/pannuke
+    monusac: /block/eva-data/monusac
+    consep: /block/eva-data/consep
+    pathorob: /block/eva-data/pathorob
+    chimera_tiles: /data/chimera/chimera_tiles
+    surgen_tiles: /data/surgen/surgen_tiles
