@@ -61,17 +61,18 @@ probe:
   model_weights: ema
   count: 1
   datasets:
-    - bach
     - bracs
     - break_his
     - mhist
     - pcam
   segmentation_datasets:
     - pannuke
+  robustness_datasets:
+    - pathorob
   dataset_roots:
-    bach: /block/eva-data/bach
     bracs: /block/eva-data/bracs
     break_his: /block/eva-data/breakhis
     mhist: /block/eva-data/mhist
     pcam: /block/eva-data/patch_camelyon
     pannuke: /block/thunder-data/pannuke
+    pathorob: /block/pathorob

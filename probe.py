@@ -1,7 +1,14 @@
-# Inline downstream probes. mean_probe_score = unweighted mean of four
-# aggregates: linear, KNN, and SimpleShot few-shot F1 over bach/bracs/
-# break_his/mhist/pcam, plus PanNuke macro Jaccard from the MaskTransformer
-# head defined below trained with multiclass dice loss.
+# Inline downstream probes. mean_probe_score = unweighted mean of one score per
+# downstream dataset in {bracs, break_his, mhist, pcam, pannuke, pathorob}:
+#   classification (bracs/break_his/mhist/pcam): mean of (linear, KNN, SimpleShot
+#                                                 few-shot) val F1
+#   pannuke:  macro Jaccard from the MaskTransformer head trained with multiclass
+#             dice loss
+#   pathorob: PathoROB robustness index (Kömen et al. 2025) over the camelyon and
+#             tolkach_esca patch sets — held-out (we exclude PathoROB-tcga and
+#             VALSET3_TCGA because TCGA is in our pretraining universe).
+# Bucket aggregates (linear/knn/fewshot/seg/robustness means) are still logged for
+# the leaderboard table.
 #
 # train.py snapshots a probe checkpoint at each FLOP milestone and runs
 # this file as a subprocess (`python probe.py req.json`); training pauses, the
@@ -10,23 +17,23 @@
 # one loaded DinoV2ViT: the main thread loops classification datasets (for
 # each, embed train+val with the frozen backbone once, then run all three
 # heads — KNN, SimpleShot few-shot, and linear — on those cached embeddings)
-# while a background thread runs PanNuke. Putting both on one GPU helps
-# because classification spends a lot of time in plain Python/CPU code which
-# leaves the GPU free to crunch PanNuke.
+# then runs PathoROB (cls+mean(patch) cosine kNN, same-slide filtered), while a
+# background thread runs PanNuke. Putting both on one GPU helps because
+# classification spends a lot of time in plain Python/CPU code which leaves
+# the GPU free to crunch PanNuke.
 #
 # Rough per-task wall on a 1xH100 leader-recipe checkpoint (the full ViT, not
 # smoke). bracs and PanNuke dominate; the others are short tail.
-#   bach        ~15s         
-#   bracs       ~180s        
+#   bracs       ~180s
 #   break_his   ~14s
 #   mhist       ~16s
-#   pcam        ~35s         subsampled to 3072 train / 768 val 
+#   pcam        ~35s         subsampled to 3072 train / 768 val
+#   pathorob    ~10-15s      camelyon (~22K) + tolkach_esca (~16K filtered) patches
 #   PanNuke     ~200-750s    the train/val npy folds are mmap'd from disk, so
 #                            wall depends a lot on whether the OS page cache is warm
-# PanNuke runs in parallel with the classification loop, so probe wall is roughly
-# max(PanNuke, sum of cls) plus a small tail. In practice that's ~12-13 min when
-# PanNuke loads the npy folds from cold disk, but as fast as ~5 min on warm cache
-# (e.g. re-running soon after a previous probe on the same node).
+# PanNuke runs in parallel with the classification + pathorob loop, so probe wall is
+# roughly max(PanNuke, sum of cls + pathorob) plus a small tail. In practice that's
+# ~12-13 min on cold PanNuke cache, ~5 min warm.
 
 import json
 import os
@@ -62,10 +69,14 @@ FEWSHOT_TRIALS = 1000
 FEWSHOT_SEED = 1337
 KNN_K_VALS = [1, 3, 5, 10, 20, 30, 40, 50]
 KNN_CHUNK_SIZE = 4096
-CLASSIFICATION_DATASETS = ["bach", "bracs", "break_his", "mhist", "pcam"]
+CLASSIFICATION_DATASETS = ["bracs", "break_his", "mhist", "pcam"]
 SEGMENTATION_DATASETS = ["pannuke"]
-# Module-level so ClassificationDataset / inline_pannuke_jaccard can read it without threading
-# cfg through every call. Populated from cfg.probe.dataset_roots by prepare_probe_state()
+ROBUSTNESS_DATASETS = ["pathorob"]
+# PathoROB per-subset median k_opt from the preprint (Kömen et al. 2025, https://arxiv.org/abs/2507.17845).
+# We exclude PathoROB-tcga (overlaps pretraining) and filter Tolkach ESCA's VALSET3_TCGA medical center.
+PATHOROB_SUBSETS = {"camelyon": 11, "tolkach_esca": 46}
+# Module-level so ClassificationDataset / inline_pannuke_jaccard / inline_pathorob can read it without
+# threading cfg through every call. Populated from cfg.probe.dataset_roots by prepare_probe_state()
 # (train.py main process) and run_probe_job() (probe subprocess).
 DATASET_ROOTS = {}
 
@@ -87,7 +98,11 @@ def probe_paths(output_dir):
 
 # Probes are enabled only when the recipe asks for them and names at least one task.
 def probe_enabled(cfg):
-    return bool(cfg["probe"]["enabled"]) and (len(cfg["probe"]["datasets"]) + len(cfg["probe"]["segmentation_datasets"])) > 0
+    return bool(cfg["probe"]["enabled"]) and (
+        len(cfg["probe"]["datasets"])
+        + len(cfg["probe"]["segmentation_datasets"])
+        + len(cfg["probe"].get("robustness_datasets", []))
+    ) > 0
 
 
 # Persist probe state so explicitly resumed train.py runs do not relog completed result files.
@@ -104,18 +119,20 @@ def prepare_probe_state(cfg, output_dir):
         path.mkdir(parents=True, exist_ok=True)
     classification = [str(x) for x in cfg["probe"]["datasets"]]
     segmentation = [str(x) for x in cfg["probe"]["segmentation_datasets"]]
+    robustness = [str(x) for x in cfg["probe"].get("robustness_datasets", [])]
     data = {
-        "version": 8,
+        "version": 9,
         "family": str(cfg["project"]["family"]),
         "classification_datasets": classification,
         "segmentation_datasets": segmentation,
+        "robustness_datasets": robustness,
         "count": int(cfg["probe"]["count"]),
         "logged_results": [],
     }
     if paths["state_path"].exists():
         # Explicit resume can continue only if the probe family/datasets/count match the old state.
         previous = json.loads(paths["state_path"].read_text())
-        if previous["version"] != 8:
+        if previous["version"] != 9:
             raise ValueError(f"unsupported probe state version: {previous['version']}")
         if previous["family"] != data["family"]:
             raise ValueError(f"probe family changed from {previous['family']} to {data['family']}")
@@ -123,6 +140,8 @@ def prepare_probe_state(cfg, output_dir):
             raise ValueError(f"classification datasets changed from {previous['classification_datasets']} to {data['classification_datasets']}")
         if previous["segmentation_datasets"] != data["segmentation_datasets"]:
             raise ValueError(f"segmentation datasets changed from {previous['segmentation_datasets']} to {data['segmentation_datasets']}")
+        if previous.get("robustness_datasets", []) != data["robustness_datasets"]:
+            raise ValueError(f"robustness datasets changed from {previous.get('robustness_datasets', [])} to {data['robustness_datasets']}")
         if previous["count"] != data["count"]:
             raise ValueError(f"probe count changed from {previous['count']} to {data['count']}")
         data["logged_results"] = previous["logged_results"]
@@ -132,6 +151,9 @@ def prepare_probe_state(cfg, output_dir):
     for dataset in segmentation:
         if dataset not in SEGMENTATION_DATASETS:
             raise ValueError(f"unsupported segmentation dataset: {dataset}")
+    for dataset in robustness:
+        if dataset not in ROBUSTNESS_DATASETS:
+            raise ValueError(f"unsupported robustness dataset: {dataset}")
     state = {"paths": paths, "data": data}
     write_probe_state(state)
     return state
@@ -151,9 +173,10 @@ def queue_probe_job(state, checkpoint_payload, checkpoint_step, target_flops, ta
         "result_path": str(state["paths"]["results_dir"] / f"{step_tag}.json"),
         "classification_datasets": list(state["data"]["classification_datasets"]),
         "segmentation_datasets": list(state["data"]["segmentation_datasets"]),
+        "robustness_datasets": list(state["data"].get("robustness_datasets", [])),
         "job_id": f"{slurm_id}-{checkpoint_step:07d}",
     }
-    for dataset in request["classification_datasets"] + request["segmentation_datasets"]:
+    for dataset in request["classification_datasets"] + request["segmentation_datasets"] + request["robustness_datasets"]:
         if not DATASET_ROOTS[dataset].exists():
             raise FileNotFoundError(f"missing dataset root for {dataset}: {DATASET_ROOTS[dataset]}")
     torch.save(checkpoint_payload, request["checkpoint_path"])
@@ -166,7 +189,8 @@ def queue_probe_job(state, checkpoint_payload, checkpoint_step, target_flops, ta
         f"{console_prefix()} Probe  [{checkpoint_step}]  "
         f"start: {request['job_id']}  target_fraction: {target_fraction:.4f}  "
         f"classification: {','.join(request['classification_datasets']) or '-'}  "
-        f"segmentation: {','.join(request['segmentation_datasets']) or '-'}",
+        f"segmentation: {','.join(request['segmentation_datasets']) or '-'}  "
+        f"robustness: {','.join(request['robustness_datasets']) or '-'}",
         flush=True,
     )
     subprocess.run([sys.executable, str(Path(__file__).resolve()), request["request_path"]], env=env, check=True)
@@ -180,7 +204,7 @@ def queue_probe_job(state, checkpoint_payload, checkpoint_step, target_flops, ta
 # Image dataset adapter for classification probes; dataset-specific split logic lives here.
 class ClassificationDataset(torch.utils.data.Dataset):
     # Loads images for the classification probes. For pcam we subsample with a fixed seed
-    # to match Thunder's PATCH_CAMELYON_SUBSET behaviour; the other four datasets use the
+    # to match Thunder's PATCH_CAMELYON_SUBSET behaviour; bracs/break_his/mhist use the
     # cached probe_data_splits JSON (one-time output of `thunder generate-data-splits`).
     # Load image paths/labels or PCam h5 arrays for one train/val split.
     def __init__(self, dataset, split, transform):
@@ -411,6 +435,77 @@ def inline_pannuke_jaccard(model, mean, std, device):
     return float(np.average(per_image_j, weights=weights)), time.monotonic() - started_at
 
 
+# PathoROB robustness index (Kömen et al. 2025, https://arxiv.org/abs/2507.17845).
+# For each subset (camelyon, tolkach_esca) embed every patch once with cls + mean(patch tokens),
+# L2-normalize, then compute robustness_index = SO / (SO + OS) where over each query's top-k_opt
+# cosine kNN neighbours (after dropping same-slide neighbours, since slide patches are
+# near-duplicates) we count: SO = same biological / other medical center, OS = other biological /
+# same medical center. k_opt values are the per-subset preprint medians (PATHOROB_SUBSETS).
+# Returns {subset: index, ...}; the per-dataset pathorob score is the mean over subsets.
+def inline_pathorob(model, mean, std, device, transform):
+    import io, numpy as np, pyarrow as pa, pyarrow.parquet as pq
+    from PIL import Image
+
+    started_at = time.monotonic()
+    autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+
+    # Tiny dataset wrapper around an Arrow image-bytes column. to_pylist materialises the bytes
+    # once in the parent process so DataLoader workers pickle bytes only.
+    class _Patches(torch.utils.data.Dataset):
+        def __init__(self, byts): self.byts = byts
+        def __len__(self): return len(self.byts)
+        def __getitem__(self, i): return transform(Image.open(io.BytesIO(self.byts[i])).convert("RGB"))
+
+    out = {}
+    for name, k_target in PATHOROB_SUBSETS.items():
+        files = sorted((DATASET_ROOTS["pathorob"] / name).glob("data/*.parquet"))
+        tbl = pa.concat_tables([pq.read_table(f) for f in files])
+        meta = tbl.select(["slide_id", "biological_class", "medical_center"]).to_pandas()
+        if name == "tolkach_esca":
+            keep = meta.medical_center.to_numpy(dtype=object) != "VALSET3_TCGA"
+            tbl = tbl.filter(pa.array(keep))
+            meta = meta[keep].reset_index(drop=True)
+        byts = [r["bytes"] for r in tbl.column("image").to_pylist()]
+        loader = torch.utils.data.DataLoader(
+            _Patches(byts), batch_size=EMBED_BATCH_SIZE, num_workers=EMBED_NUM_WORKERS,
+            pin_memory=True, shuffle=False,
+        )
+        embs = []
+        with torch.no_grad():
+            for batch in loader:
+                x = batch.to(device, non_blocking=True)
+                with autocast:
+                    o = model((x - mean) / std)
+                    feat = torch.cat([o["x_norm_clstoken"], o["x_norm_patchtokens"].mean(dim=1)], dim=-1)
+                embs.append(feat.float().cpu().numpy())
+        embs = np.concatenate(embs).astype(np.float32)
+        embs /= np.maximum(np.linalg.norm(embs, axis=1, keepdims=True), 1e-12)
+        embs_t = torch.from_numpy(embs).to(device)
+        sl = meta.slide_id.to_numpy(dtype=object)
+        bi = meta.biological_class.to_numpy(dtype=object)
+        ce = meta.medical_center.to_numpy(dtype=object)
+        n = len(meta)
+        # Pull k_target + (max patches per slide) neighbours so same-slide filtering still leaves
+        # at least k_target survivors; use to_numpy(dtype=object) so 2D fancy indexing works.
+        margin = int(np.unique(sl, return_counts=True)[1].max())
+        k = min(k_target + margin, n - 1)
+        SO = OS = 0
+        for s in range(0, n, KNN_CHUNK_SIZE):
+            e = min(s + KNN_CHUNK_SIZE, n)
+            sim = embs_t[s:e] @ embs_t.T
+            sim[torch.arange(e - s, device=device), torch.arange(s, e, device=device)] = -float("inf")
+            topk = torch.topk(sim, k, dim=1).indices.cpu().numpy()
+            qi = np.arange(s, e)
+            bm = bi[topk] == bi[qi][:, None]  # same biological class
+            cm = ce[topk] == ce[qi][:, None]  # same medical center
+            ns = sl[topk] != sl[qi][:, None]  # different slide
+            keep = ns & (np.cumsum(ns, axis=1) <= k_target)
+            SO += int(((bm & ~cm) & keep).sum())
+            OS += int(((~bm & cm) & keep).sum())
+        out[name] = SO / (SO + OS)
+    return out, time.monotonic() - started_at
+
+
 # KNN probe over frozen embeddings; best k is selected on the validation split.
 def inline_knn_val_f1(train_embs, train_labels, val_embs, val_labels, k_vals):
     import numpy as np
@@ -511,6 +606,7 @@ def run_probe_job(request_path):
     request = json.loads(Path(request_path).read_text())
     classification = list(request["classification_datasets"])
     segmentation = list(request["segmentation_datasets"])
+    robustness = list(request.get("robustness_datasets", []))
     print(
         f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
         f"start: {request['job_id']}  checkpoint: {request['checkpoint_path']}",
@@ -578,39 +674,74 @@ def run_probe_job(request_path):
             flush=True,
         )
 
+    # Robustness runs on the main thread after classification — it is GPU-bound, so chaining
+    # it onto the classification loop avoids contending with PanNuke for the device.
+    rob_indices = {}
+    for dataset in robustness:
+        # PATHOROB_SUBSETS keys (camelyon, tolkach_esca) are evaluated inside inline_pathorob.
+        print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_pathorob_start: {dataset}", flush=True)
+        subset_indices, rob_wall = inline_pathorob(model, mean, std, device, transform)
+        rob_indices[dataset] = {**subset_indices, "mean": float(sum(subset_indices.values()) / len(subset_indices))}
+        print(
+            f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
+            f"inline_pathorob_done: {dataset}  "
+            f"{'  '.join(f'{k}={v:.4f}' for k, v in subset_indices.items())}  "
+            f"mean={rob_indices[dataset]['mean']:.4f}  wall={rob_wall:.2f}s",
+            flush=True,
+        )
+
     if seg_future is not None:
         # .result() re-raises any exception from the segmentation thread so the probe job fails loudly.
         seg_future.result()
         seg_executor.shutdown()
 
     # Aggregate per-dataset metrics into the result file consumed by train.py.
+    # mean_probe_score = unweighted mean of one score per downstream dataset (classification F1
+    # mean, segmentation Jaccard, pathorob robustness mean). Bucket aggregates are also kept
+    # for the leaderboard table.
     metrics = {}
     results = {}
+    per_dataset_score = {}
     for dataset in classification:
         metrics[f"probe_{dataset}_linear_val_f1"] = inline_metrics[dataset]["linear_val_f1"]
         metrics[f"probe_{dataset}_knn_val_f1"] = inline_metrics[dataset]["knn_val_f1"]
         metrics[f"probe_{dataset}_fewshot_val_f1"] = inline_metrics[dataset]["fewshot_val_f1"]
+        per_dataset_score[dataset] = (
+            inline_metrics[dataset]["linear_val_f1"]
+            + inline_metrics[dataset]["knn_val_f1"]
+            + inline_metrics[dataset]["fewshot_val_f1"]
+        ) / 3.0
         results[dataset] = inline_metrics[dataset]
     for dataset in segmentation:
         metrics[f"probe_{dataset}_seg_val_jaccard"] = seg_jaccards[dataset]
+        per_dataset_score[dataset] = seg_jaccards[dataset]
         results[dataset] = {"seg_val_jaccard": seg_jaccards[dataset]}
+    for dataset in robustness:
+        for sub, idx in rob_indices[dataset].items():
+            if sub == "mean":
+                continue
+            metrics[f"probe_{dataset}_{sub}_robustness_index"] = idx
+        metrics[f"probe_{dataset}_robustness_index"] = rob_indices[dataset]["mean"]
+        per_dataset_score[dataset] = rob_indices[dataset]["mean"]
+        results[dataset] = rob_indices[dataset]
 
-    # Mean probe score is the main model-selection signal across classification and segmentation tasks.
-    if len(classification) > 0:
+    if classification:
         metrics["linear_mean_f1"] = sum(metrics[f"probe_{d}_linear_val_f1"] for d in classification) / len(classification)
         metrics["knn_mean_f1"] = sum(metrics[f"probe_{d}_knn_val_f1"] for d in classification) / len(classification)
         metrics["fewshot_mean_f1"] = sum(metrics[f"probe_{d}_fewshot_val_f1"] for d in classification) / len(classification)
-    if len(segmentation) > 0:
+    if segmentation:
         metrics["seg_mean_jaccard"] = sum(metrics[f"probe_{d}_seg_val_jaccard"] for d in segmentation) / len(segmentation)
+    if robustness:
+        metrics["robustness_mean"] = sum(metrics[f"probe_{d}_robustness_index"] for d in robustness) / len(robustness)
 
-    task_means = [metrics[k] for k in ("linear_mean_f1", "knn_mean_f1", "fewshot_mean_f1", "seg_mean_jaccard") if k in metrics]
-    metrics["mean_probe_score"] = sum(task_means) / len(task_means)
+    metrics["mean_probe_score"] = sum(per_dataset_score.values()) / len(per_dataset_score)
 
     print(
         f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
         f"result: mean_probe_score={metrics['mean_probe_score']:.6f}  "
         f"linear={metrics.get('linear_mean_f1')}  knn={metrics.get('knn_mean_f1')}  "
         f"fewshot={metrics.get('fewshot_mean_f1')}  seg={metrics.get('seg_mean_jaccard')}  "
+        f"robustness={metrics.get('robustness_mean')}  "
         f"wall: {time.monotonic() - probe_started_at:.2f}s",
         flush=True,
     )
@@ -627,6 +758,7 @@ def run_probe_job(request_path):
                 "checkpoint_path": request["checkpoint_path"],
                 "classification_datasets": classification,
                 "segmentation_datasets": segmentation,
+                "robustness_datasets": robustness,
                 "metrics": metrics,
                 "results": results,
             },

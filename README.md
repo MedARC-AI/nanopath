@@ -41,13 +41,15 @@ A successful model training prints periodic train lines, logs to wandb, and ends
 
 ![Nanopath progress plot](imgs/progress_plot.png)
 
-Score is final `mean_probe_score`: unweighted mean of standard classification probe F1 aggregates (bach, bracs, break_his, mhist, pcam) and pannuke segmentation Jaccard. All metrics are computed on each dataset's validation split only; train splits solely fit the probe heads on top of the frozen backbone.
+Score is final `mean_probe_score`: unweighted mean of one score per downstream dataset across `{bracs, break_his, mhist, pcam, pannuke, pathorob}`. The per-dataset score is the mean of (linear, KNN, few-shot) F1 for the four tile classifiers, the macro Jaccard for the pannuke segmentation head, and the [PathoROB](https://arxiv.org/abs/2507.17845) robustness index averaged over the held-out camelyon and tolkach_esca patch sets (TCGA-overlap subsets excluded). Classification, segmentation, and pathorob each only ever see their respective val splits at scoring time; train splits solely fit the probe heads on top of the frozen backbone (pathorob is unsupervised cosine-kNN over patch embeddings, no head fit).
 
-| # | mean | linear | KNN | few-shot | seg Jaccard | Description | wandb | Date | Contributors |
-|---|------:|-------:|----:|---------:|------------:|-------------|-------|------|--------------|
-| 1 | **0.6280** | 0.7964 | 0.7084 | 0.6031 | 0.4039 | DINOv2 ViT-S/14-reg continual pretraining (DINO CLS + iBOT + KDE on TCGA tiles) | [iewrzghc](https://wandb.ai/paulscotti/nanopath/runs/iewrzghc) | May 1 2026 | @tmabraham, @PaulScotti |
-| 2 | 0.5838 | 0.7472 | 0.6614 | 0.6110 | 0.3155 | Untouched Meta `dinov2_vits14_reg` (no continual pretraining on TCGA) | [6r1cmaee](https://wandb.ai/paulscotti/nanopath/runs/6r1cmaee) | Apr 30 2026 | @tmabraham |
-| 3 | 0.5228 | 0.6832 | 0.6093 | 0.4490 | 0.3496 | LeJEPA baseline | [t72j3r8k](https://wandb.ai/paulscotti/nanopath/runs/t72j3r8k) | Apr 26 2026 | @PaulScotti |
+The leaderboard table below is from before pathorob was added. Re-running these checkpoints under the current metric is in progress; the linear / KNN / few-shot / seg columns remain valid (the same F1/Jaccard heads, now over 4 cls datasets instead of 5 since bach was dropped from the suite), but `mean` and the missing `robustness` column are not directly comparable.
+
+| # | mean | linear | KNN | few-shot | seg Jaccard | robustness | Description | wandb | Date | Contributors |
+|---|------:|-------:|----:|---------:|------------:|-----------:|-------------|-------|------|--------------|
+| 1 | **0.6280** | 0.7964 | 0.7084 | 0.6031 | 0.4039 | — | DINOv2 ViT-S/14-reg continual pretraining (DINO CLS + iBOT + KDE on TCGA tiles) | [iewrzghc](https://wandb.ai/paulscotti/nanopath/runs/iewrzghc) | May 1 2026 | @tmabraham, @PaulScotti |
+| 2 | 0.5838 | 0.7472 | 0.6614 | 0.6110 | 0.3155 | — | Untouched Meta `dinov2_vits14_reg` (no continual pretraining on TCGA) | [6r1cmaee](https://wandb.ai/paulscotti/nanopath/runs/6r1cmaee) | Apr 30 2026 | @tmabraham |
+| 3 | 0.5228 | 0.6832 | 0.6093 | 0.4490 | 0.3496 | — | LeJEPA baseline | [t72j3r8k](https://wandb.ai/paulscotti/nanopath/runs/t72j3r8k) | Apr 26 2026 | @PaulScotti |
 
 ### How to submit to the leaderboard
 
@@ -64,7 +66,7 @@ Anything not explicitly fixed below (e.g., model architecture, training objectiv
 Every leaderboard run is verified on the organizer's compute (1 80GB H100 gpu), bounded by two possible caps:
 
 - **`train.max_train_flops` ≤ 1e18 training FLOPs**, measured directly from aten op shapes via `torch.utils.flop_counter.FlopCounterMode` on the first step (forward + backward + opt.step) and reused thereafter since per-step shapes are fixed. This counts everything that touches the GPU during a step — student backbone, EMA teacher forward, projection heads, masking, etc. — not just the backbone.
-- **≤45 min. end-to-end on a single 80 GB H100**, enforced by SLURM. `submit/train_1gpu.sbatch` runs with `--signal=USR1@900`, so SLURM sends `SIGUSR1` 15 minutes before the `--time` wall; `train.py`'s SIGUSR1 handler catches it as a clean stop signal, cuts training, and uses the remaining ~15 minutes for the final checkpoint save + the six probe head fits + downstream eval. With `--time=01:00:00`, that's ≈45 min effective training + 15 min for probes = 1 h total.
+- **≤45 min. end-to-end on a single 80 GB H100**, enforced by SLURM. `submit/train_1gpu.sbatch` runs with `--signal=USR1@900`, so SLURM sends `SIGUSR1` 15 minutes before the `--time` wall; `train.py`'s SIGUSR1 handler catches it as a clean stop signal, cuts training, and uses the remaining ~15 minutes for the final checkpoint save + the five fitted probes (linear/KNN/few-shot on the cls datasets, MaskTransformer on pannuke) + the unsupervised pathorob kNN. With `--time=01:00:00`, that's ≈45 min effective training + 15 min for probes = 1 h total.
 
 The above limits force submissions to be **simultaneously compute efficient and systems efficient**.
 
@@ -118,12 +120,12 @@ python prepare.py configs/leader.yaml download=False
 
 **What `download=True` does**
 1. **TCGA tiles**: `huggingface_hub.snapshot_download` (filtered to `shard-*.parquet`) pulls the 200 parquet shards (~120 GB total, `{path: string, jpeg: binary}` rows with 64-row row groups) from [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) into `data.dataset_dir`.
-2. **Probe datasets** (bach / bracs / break_his / mhist / pcam / pannuke): for each empty root, fetches + unpacks the dataset from its public source into the configured path.
+2. **Probe datasets** (bracs / break_his / mhist / pcam / pannuke / pathorob): for each empty root, fetches + unpacks the dataset from its public source into the configured path. (pathorob is fetched from the [bifold-pathomics PathoROB collection](https://huggingface.co/collections/bifold-pathomics/pathorob); we mirror only the camelyon and tolkach_esca subsets — the TCGA subset is excluded because it overlaps our pretraining data.)
 3. **DINOv2 backbone weights**: `torch.hub.load_state_dict_from_url` fetches the Meta checkpoint for `model.type` from `dl.fbaipublicfiles.com` into `~/.cache/torch/hub/checkpoints/`.
 
 **Prerequisites**
 - ~120 GB free wherever `data.dataset_dir` lives for the parquet shards (cluster default: `/data/nanopath_parquet`).
-- ~30 GB free in total across the six `probe.dataset_roots` entries (pannuke ~13 GB + bach ~10 GB are the bulk; the rest are smaller).
+- ~16 GB free in total across the six `probe.dataset_roots` entries (pannuke ~13 GB is the bulk; the rest are smaller; pathorob is ~1.8 GB across the camelyon + tolkach_esca subsets we use).
 - ~330 MB free under `~/.cache/torch/hub/checkpoints/` for DINOv2 weights.
 - mhist requires a one-time form at https://bmirds.github.io/MHIST/. Drop the resulting `annotations.csv` + `images.zip` into `probe.dataset_roots.mhist`, then rerun `prepare.py … download=True` to unpack.
 

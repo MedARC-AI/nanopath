@@ -278,15 +278,6 @@ def fetch_pcam(root):
             gz.unlink()
 
 
-def fetch_bach(root):
-    base = "https://zenodo.org/api/records/3632035/files"
-    for name in ("ICIAR2018_BACH_Challenge.zip", "ICIAR2018_BACH_Challenge_TestDataset.zip"):
-        zip_path = root / name
-        http_download(f"{base}/{name}/content", zip_path)
-        shutil.unpack_archive(zip_path, root)
-        zip_path.unlink()
-
-
 def fetch_bracs(root):
     # BRACS is exposed as FTP, easiest to mirror with wget --recursive.
     cmd = ["wget", "--no-parent", "-nH", "-r", "--directory-prefix", str(root), "ftp://histoimage.na.icar.cnr.it/BRACS_RoI/"]
@@ -317,13 +308,22 @@ def fetch_mhist(root):
     )
 
 
+# PathoROB ships as two HF datasets (we exclude PathoROB-tcga because TCGA is in our
+# pretraining universe). snapshot_download mirrors each subset's parquet under
+# pathorob/<subset>/data/ to match the layout probe.py expects.
+def fetch_pathorob(root):
+    from huggingface_hub import snapshot_download
+    for subset in ("camelyon", "tolkach_esca"):
+        snapshot_download(repo_id=f"bifold-pathomics/PathoROB-{subset}", repo_type="dataset", local_dir=str(root / subset))
+
+
 FETCHERS = {
-    "bach": fetch_bach,
     "bracs": fetch_bracs,
     "break_his": fetch_break_his,
     "mhist": fetch_mhist,
     "pcam": fetch_pcam,
     "pannuke": fetch_pannuke,
+    "pathorob": fetch_pathorob,
 }
 
 
@@ -343,10 +343,13 @@ def get_paths(cfg):
 # Truthy if the path is populated. mhist needs the unpacked `images/` subdir
 # specifically: a user who has dropped only the manual images.zip would
 # otherwise look "populated" and we'd skip past fetch_mhist's unpack step.
+# pathorob needs both subsets' data/*.parquet (we ignore PathoROB-tcga).
 def is_populated(name, p):
     if not p.exists() or not any(p.iterdir()):
         return False
     if name == "mhist" and not (p / "images").exists():
+        return False
+    if name == "pathorob" and not all(list((p / s / "data").glob("*.parquet")) for s in ("camelyon", "tolkach_esca")):
         return False
     return True
 
