@@ -14,10 +14,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-# (dim, depth, heads, weight URL) for each supported variant.
+# (dim, depth, heads, pretrain_grid, ffn, pos_has_cls, weight URL) for each supported variant.
 DINOV2_VARIANTS = {
-    "dinov2_vits14_reg": (384, 12, 6, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vits14/dinov2_vits14_reg4_pretrain.pth"),
-    "dinov2_vitb14_reg": (768, 12, 12, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitb14/dinov2_vitb14_reg4_pretrain.pth"),
+    "dinov2_vits14_reg": (384, 12, 6, 37, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vits14/dinov2_vits14_reg4_pretrain.pth"),
+    "dinov2_vitb14_reg": (768, 12, 12, 37, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitb14/dinov2_vitb14_reg4_pretrain.pth"),
+    "openmidnight_vitg14_reg": (1536, 40, 24, 16, "swiglu", True, None),
+    "hoptimus0_vitg14_reg": (1536, 40, 24, 16, "swiglu", False, None),
 }
 
 
@@ -53,9 +55,21 @@ class Attention(nn.Module):
         return self.proj(out)
 
 
+class SwiGLU(nn.Module):
+    def __init__(self, dim, hidden):
+        super().__init__()
+        hidden = (int(hidden * 2 / 3) + 7) // 8 * 8
+        self.w12 = nn.Linear(dim, 2 * hidden, bias=True)
+        self.w3 = nn.Linear(hidden, dim, bias=True)
+
+    def forward(self, x):
+        a, b = self.w12(x).chunk(2, dim=-1)
+        return self.w3(F.silu(a) * b)
+
+
 # Standard pre-LN block: attn + ls1 + drop_path, then mlp + ls2 + drop_path.
 class Block(nn.Module):
-    def __init__(self, dim, heads, mlp_ratio, drop_path_p):
+    def __init__(self, dim, heads, mlp_ratio, drop_path_p, ffn="mlp"):
         super().__init__()
         hidden = int(dim * mlp_ratio)
         self.norm1 = nn.LayerNorm(dim, eps=1e-6)
@@ -63,13 +77,14 @@ class Block(nn.Module):
         self.ls1 = LayerScale(dim)
         self.drop_path1 = DropPath(drop_path_p)
         self.norm2 = nn.LayerNorm(dim, eps=1e-6)
-        self.mlp = nn.Sequential()
-        self.mlp.fc1 = nn.Linear(dim, hidden, bias=True)
-        self.mlp.fc2 = nn.Linear(hidden, dim, bias=True)
+        self.mlp = SwiGLU(dim, hidden) if ffn == "swiglu" else nn.Sequential()
+        if ffn == "mlp":
+            self.mlp.fc1 = nn.Linear(dim, hidden, bias=True)
+            self.mlp.fc2 = nn.Linear(hidden, dim, bias=True)
         self.ls2 = LayerScale(dim)
         self.drop_path2 = DropPath(drop_path_p)
 
-    def _ff(self, x): return self.mlp.fc2(F.gelu(self.mlp.fc1(x)))
+    def _ff(self, x): return self.mlp(x) if isinstance(self.mlp, SwiGLU) else self.mlp.fc2(F.gelu(self.mlp.fc1(x)))
 
     def forward(self, x):
         x = x + self.drop_path1(self.ls1(self.attn(self.norm1(x))))
@@ -80,35 +95,35 @@ class Block(nn.Module):
 # ViT-S/B-14 with 4 register tokens; key layout matches Meta's DINOv2 register checkpoints
 # (cls_token, register_tokens, pos_embed (1, 1+37^2, dim), mask_token (1, dim), patch_embed.proj,
 # blocks.{i}.{norm1,norm2,attn.qkv,attn.proj,ls1,ls2,mlp.fc1,mlp.fc2}, norm).
-# Pos embed in the checkpoint is for a 37x37 patch grid (Meta's 518x518 pretraining); we bicubically
-# interpolate at runtime to whatever (h,w) the current crop produces (16x16 for 224, 7x7 for 98).
+# Pos embed is bicubically interpolated at runtime to the current patch grid.
+# Meta DINOv2 includes a cls pos and uses 37x37 patches; ViT-G baselines use 16x16.
 class DinoV2ViT(nn.Module):
     def __init__(self, variant="dinov2_vits14_reg", drop_path_rate=0.0):
         super().__init__()
-        dim, depth, heads, _ = DINOV2_VARIANTS[variant]
+        dim, depth, heads, pretrain_grid, ffn, pos_has_cls, _ = DINOV2_VARIANTS[variant]
         mlp_ratio, patch, registers = 4.0, 14, 4
         self.variant = variant
         self.patch_size, self.registers, self.embed_dim = patch, registers, dim
-        self._pretrain_grid = 37
+        self._pretrain_grid, self._pos_has_cls = pretrain_grid, pos_has_cls
         self.patch_embed = nn.Module()
         self.patch_embed.proj = nn.Conv2d(3, dim, kernel_size=patch, stride=patch, bias=True)
         self.cls_token = nn.Parameter(torch.zeros(1, 1, dim))
         self.register_tokens = nn.Parameter(torch.zeros(1, registers, dim))
-        self.pos_embed = nn.Parameter(torch.zeros(1, 1 + self._pretrain_grid**2, dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, int(self._pos_has_cls) + self._pretrain_grid**2, dim))
         self.mask_token = nn.Parameter(torch.zeros(1, dim))
         rates = [drop_path_rate * i / max(1, depth - 1) for i in range(depth)]
-        self.blocks = nn.ModuleList(Block(dim, heads, mlp_ratio, p) for p in rates)
+        self.blocks = nn.ModuleList(Block(dim, heads, mlp_ratio, p, ffn=ffn) for p in rates)
         self.norm = nn.LayerNorm(dim, eps=1e-6)
 
-    # Bicubic resample of the 37x37 patch pos grid to the current (h, w) grid.
+    # Bicubic resample of the checkpoint patch-pos grid to the current (h, w) grid.
     def _interpolate_pos_embed(self, h, w):
-        cls_pos = self.pos_embed[:, :1]
+        cls_pos = self.pos_embed[:, :1] if self._pos_has_cls else None
         g = self._pretrain_grid
-        patch_pos = self.pos_embed[:, 1:].reshape(1, g, g, -1).permute(0, 3, 1, 2).float()
+        patch_pos = self.pos_embed[:, int(self._pos_has_cls):].reshape(1, g, g, -1).permute(0, 3, 1, 2).float()
         # antialias=True matches Meta's default for DINOv2 `_reg` variants.
         patch_pos = F.interpolate(patch_pos, size=(h, w), mode="bicubic", align_corners=False, antialias=True)
-        patch_pos = patch_pos.permute(0, 2, 3, 1).reshape(1, h * w, -1).to(cls_pos.dtype)
-        return torch.cat([cls_pos, patch_pos], dim=1)
+        patch_pos = patch_pos.permute(0, 2, 3, 1).reshape(1, h * w, -1).to(self.pos_embed.dtype)
+        return torch.cat([cls_pos, patch_pos], dim=1) if cls_pos is not None else patch_pos
 
     # Build [cls, registers, patches] tokens; iBOT swaps the masked patch positions for mask_token.
     def _prepare_tokens(self, x, masks=None):
@@ -118,9 +133,11 @@ class DinoV2ViT(nn.Module):
         if masks is not None:
             x = torch.where(masks.unsqueeze(-1), self.mask_token.to(x.dtype).expand_as(x), x)
         cls = self.cls_token.expand(B, -1, -1)
-        x = torch.cat([cls, x], dim=1) + self._interpolate_pos_embed(h, w)
         regs = self.register_tokens.expand(B, -1, -1)
-        return torch.cat([x[:, :1], regs, x[:, 1:]], dim=1)
+        if self._pos_has_cls:
+            x = torch.cat([cls, x], dim=1) + self._interpolate_pos_embed(h, w)
+            return torch.cat([x[:, :1], regs, x[:, 1:]], dim=1)
+        return torch.cat([cls, regs, x + self._interpolate_pos_embed(h, w)], dim=1)
 
     # Returns the dict shape Meta's `forward_features` returns; used by train.py and probe.py.
     # `checkpoint=True` re-runs each block under torch.utils.checkpoint to trade compute for memory;
@@ -154,6 +171,32 @@ class DinoV2ViT(nn.Module):
 def load_dinov2_pretrained(model):
     *_, url = DINOV2_VARIANTS[model.variant]
     state = torch.hub.load_state_dict_from_url(url, progress=False, map_location="cpu")
+    model.load_state_dict(state, strict=True)
+    return model
+
+
+def load_openmidnight_checkpoint(model, path="/data/OpenMidnight_ckpts/openmidnight_checkpoint.pth"):
+    raw = torch.load(path, map_location="cpu", weights_only=False)["teacher"]
+    state = {}
+    for key, value in raw.items():
+        if "dino" in key or "ibot" in key:
+            continue
+        key = key.removeprefix("backbone.")
+        if key.startswith("blocks."):
+            _, _, block, rest = key.split(".", 3)
+            key = f"blocks.{block}.{rest}"
+        state[key] = value
+    model.load_state_dict(state, strict=True)
+    return model
+
+
+def load_hoptimus0_checkpoint(model, path="/data/H-optimus-0/pytorch_model.bin"):
+    raw = torch.load(path, map_location="cpu", weights_only=False)
+    state = {}
+    for key, value in raw.items():
+        key = key.replace("reg_token", "register_tokens").replace("mlp.fc1", "mlp.w12").replace("mlp.fc2", "mlp.w3")
+        state[key] = value
+    state["mask_token"] = model.mask_token.detach().cpu().clone()
     model.load_state_dict(state, strict=True)
     return model
 
