@@ -1,10 +1,10 @@
 # Single data-prep entry point. Reads the YAML config the user passes in and
 # checks every path train.py will read:
 #   - data.dataset_dir/shard-NNNNN.parquet   (the 4M-tile dataset, sharded)
-#   - probe.dataset_roots[name] for each of the six probe datasets
+#   - probe.dataset_roots[name] for each configured probe dataset
 #   - Meta's DINOv2 pretrained weights for cfg["model"]["type"] (torch.hub cache)
-# Defaults to HF for the tile dataset (medarc/nanopath), each probe's public
-# source, and dl.fbaipublicfiles.com for the DINOv2 backbone weights.
+# Defaults to HF for the tile dataset (medarc/nanopath), official/HF probe
+# sources, and dl.fbaipublicfiles.com for DINOv2 weights.
 # download_TCGA.sh and prepare_tiles / pack_from_jpeg_dir are only relevant if
 # you want to regenerate the tile dataset from raw SVS files; see README.
 #
@@ -18,13 +18,17 @@
 # (see README "Regenerating the tile dataset"); main() does not call them.
 
 import gzip
+import hashlib
+import json
 import multiprocessing as mp
 import os
+import re
 import shutil
 import subprocess
 import sys
 import time
 import urllib.request
+import xml.etree.ElementTree as ET
 from collections import OrderedDict
 from pathlib import Path
 
@@ -33,10 +37,15 @@ import openslide
 import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
-from PIL import Image
+from PIL import Image, ImageDraw
 
 
 HF_REPO_ID = "medarc/nanopath"
+HF_PROBE_PREFIX = "probes"
+PROBE_ACCESS_NOTICES = {
+    "consep": "you MUST satisfy the official CoNSeP/Warwick access terms at https://warwick.ac.uk/fac/sci/dcs/research/tia/data/hovernet/ before using these data; this mirror download is only for portable setup.",
+    "mhist": "you MUST complete MHIST's Dataset Research Use Agreement at https://bmirds.github.io/MHIST/ before using these data; this mirror download is only for portable setup.",
+}
 TILE_SIZE = 224
 JPEG_QUALITY = 95
 TARGET_TILE_COUNT = 4_000_000
@@ -252,17 +261,30 @@ def fetch_tiles_from_hf(dataset_dir):
 def http_download(url, dst):
     print(f"  GET {url}\n   -> {dst}", flush=True)
     dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(dst.name + ".part")
     req = urllib.request.Request(url, headers={"User-Agent": "nanopath"})
-    with urllib.request.urlopen(req) as r, dst.open("wb") as f:
+    with urllib.request.urlopen(req) as r, tmp.open("wb") as f:
         shutil.copyfileobj(r, f, length=1 << 20)
+    os.replace(tmp, dst)
+
+
+def hf_download(filename, dst):
+    from huggingface_hub import hf_hub_download
+    src = Path(hf_hub_download(repo_id=HF_REPO_ID, repo_type="dataset", filename=f"{HF_PROBE_PREFIX}/{filename}"))
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(src, dst)
 
 
 def fetch_pannuke(root):
     for fold in (1, 2, 3):
+        if all((root / f"Fold{fold}/{kind}/fold{fold}/{kind}.npy").exists() for kind in ("images", "masks")):
+            continue
         zip_path = root / f"fold_{fold}.zip"
         http_download(f"https://warwick.ac.uk/fac/cross_fac/tia/data/pannuke/fold_{fold}.zip", zip_path)
         shutil.unpack_archive(zip_path, root)
         zip_path.unlink()
+        if (root / f"Fold{fold}").exists():
+            shutil.rmtree(root / f"Fold{fold}")
         (root / f"Fold {fold}").rename(root / f"Fold{fold}")
 
 
@@ -276,15 +298,6 @@ def fetch_pcam(root):
             with gzip.open(gz, "rb") as fin, (root / name).open("wb") as fout:
                 shutil.copyfileobj(fin, fout)
             gz.unlink()
-
-
-def fetch_bach(root):
-    base = "https://zenodo.org/api/records/3632035/files"
-    for name in ("ICIAR2018_BACH_Challenge.zip", "ICIAR2018_BACH_Challenge_TestDataset.zip"):
-        zip_path = root / name
-        http_download(f"{base}/{name}/content", zip_path)
-        shutil.unpack_archive(zip_path, root)
-        zip_path.unlink()
 
 
 def fetch_bracs(root):
@@ -301,29 +314,305 @@ def fetch_break_his(root):
     tar.unlink()
 
 
-# MHIST requires manual form access. With download=True we unpack any
-# images.zip the user has already dropped into the configured root; otherwise
-# we tell them where to put it.
+# UCLA Lung (idr0082) slide-level progression/regression probe. We mirror the
+# NDPIs named in the vendored split and pre-extract a small deterministic tile
+# bag so probe.py only mean-pools tile embeddings.
+UCLA_LUNG_TILES_PER_SLIDE = 64
+UCLA_LUNG_TILE_PX = 448
+UCLA_LUNG_OUT_PX = 256
+
+
+def _ucla_lung_extract_one(args):
+    import io
+    import openslide
+    ndpi_path, slide_id, seed = args
+    slide = openslide.OpenSlide(ndpi_path)
+    w, h = slide.dimensions
+    gray = np.asarray(slide.get_thumbnail((512, 512)).convert("RGB")).mean(axis=2)
+    ys, xs = np.where(gray < 230)
+    rng = np.random.default_rng(seed)
+    pick = rng.choice(len(xs), size=UCLA_LUNG_TILES_PER_SLIDE, replace=len(xs) < UCLA_LUNG_TILES_PER_SLIDE)
+    sx, sy = w / gray.shape[1], h / gray.shape[0]
+    rows = []
+    for i, k in enumerate(pick):
+        x = int(np.clip(xs[k] * sx + rng.uniform(-sx / 2, sx / 2) - UCLA_LUNG_TILE_PX / 2, 0, w - UCLA_LUNG_TILE_PX))
+        y = int(np.clip(ys[k] * sy + rng.uniform(-sy / 2, sy / 2) - UCLA_LUNG_TILE_PX / 2, 0, h - UCLA_LUNG_TILE_PX))
+        tile = np.asarray(slide.read_region((x, y), 0, (UCLA_LUNG_TILE_PX, UCLA_LUNG_TILE_PX)))[..., :3]
+        buf = io.BytesIO()
+        Image.fromarray(tile).resize((UCLA_LUNG_OUT_PX, UCLA_LUNG_OUT_PX), Image.BILINEAR).save(buf, "JPEG", quality=JPEG_QUALITY)
+        rows.append({"slide_id": slide_id, "tile_idx": i, "jpeg": buf.getvalue()})
+    slide.close()
+    return rows
+
+
+def fetch_ucla_lung(root):
+    base = "https://ftp.ebi.ac.uk/pub/databases/IDR/idr0082-pennycuick-lesions/20200517-ftp"
+    splits = json.loads((Path(__file__).resolve().parent / "probe_data_splits" / "ucla_lung.json").read_text())
+    slide_ids = sorted(set(splits["train"]["slide_ids"] + splits["val"]["slide_ids"]))
+    wsi_dir = root / "wsi"
+    wsi_dir.mkdir(parents=True, exist_ok=True)
+    for sid in slide_ids:
+        ndpi = wsi_dir / f"{sid}.ndpi"
+        if not (ndpi.exists() and ndpi.stat().st_size > 1_000_000):
+            http_download(f"{base}/{sid}.ndpi", ndpi)
+    workers = int(os.environ.get("PREPARE_WORKERS", min(16, os.cpu_count() or 8)))
+    rows = []
+    with mp.Pool(workers) as pool:
+        args = [(str(wsi_dir / f"{sid}.ndpi"), sid, 1337 + i) for i, sid in enumerate(slide_ids)]
+        for done, slide_rows in enumerate(pool.imap_unordered(_ucla_lung_extract_one, args), start=1):
+            rows.extend(slide_rows)
+            if done % 16 == 0 or done == len(args):
+                print(f"  [{done}/{len(args)}] {len(rows):,} tiles", flush=True)
+    rows.sort(key=lambda r: (r["slide_id"], r["tile_idx"]))
+    pq.write_table(pa.table({k: [r[k] for r in rows] for k in ("slide_id", "tile_idx", "jpeg")}), root / "tiles.parquet")
+
+
+def _tile_her2_slide(args):
+    slide_id, src, dst = args
+    if dst.exists() and any(dst.iterdir()):
+        return slide_id, sum(1 for _ in dst.iterdir())
+    dst.mkdir(parents=True, exist_ok=True)
+    slide = openslide.OpenSlide(str(src))
+    lvl = min(slide.level_count - 1, 2)
+    thumb = np.asarray(slide.read_region((0, 0), lvl, slide.level_dimensions[lvl]).convert("RGB"))
+    mask = thumb.mean(axis=2) < 215
+    ds = slide.level_downsamples[lvl]
+    n = 0
+    for y in range(0, slide.dimensions[1] - TILE_SIZE, TILE_SIZE):
+        for x in range(0, slide.dimensions[0] - TILE_SIZE, TILE_SIZE):
+            cy, cx = int((y + TILE_SIZE / 2) / ds), int((x + TILE_SIZE / 2) / ds)
+            if 0 <= cy < mask.shape[0] and 0 <= cx < mask.shape[1] and mask[cy, cx]:
+                Image.fromarray(np.asarray(slide.read_region((x, y), 0, (TILE_SIZE, TILE_SIZE)).convert("RGB"))).save(dst / f"{n:06d}.jpg", "JPEG", quality=90)
+                n += 1
+    slide.close()
+    return slide_id, n
+
+
+# HER2-Tumor-ROIs response probe. TCIA PathDB exposes direct SVS URLs, so we
+# download only the PathoBench fold_0 train-derived train/val slides, tile them,
+# and leave the raw SVS files cached under root/raw for resumable setup.
+HER2_PATHDB_COLLECTION_ID = 533
+
+
+def _her2_urls():
+    urls, page = {}, 0
+    while True:
+        with urllib.request.urlopen(f"https://pathdb.cancerimagingarchive.net/listofimages/{HER2_PATHDB_COLLECTION_ID}?_format=json&page={page}") as r:
+            data = json.load(r)
+        if not data:
+            return urls
+        for item in data:
+            urls[item["imageid"][0]["value"]] = item["field_wsiimage"][0]["url"]
+        page += 1
+
+
+def fetch_her2(root):
+    splits = json.loads((Path(__file__).resolve().parent / "probe_data_splits" / "her2.json").read_text())
+    slides = list(splits["train"]["slides"]) + list(splits["val"]["slides"])
+    urls, raw_dir = _her2_urls(), root / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    for sid in slides:
+        svs = raw_dir / f"{sid}.svs"
+        if not (svs.exists() and svs.stat().st_size > 1_000_000):
+            http_download(urls[sid], svs)
+    args = [(sid, raw_dir / f"{sid}.svs", root / "tiles" / sid) for sid in slides]
+    workers = int(os.environ.get("PREPARE_WORKERS", min(16, os.cpu_count() or 8)))
+    with mp.Pool(workers) as pool:
+        for i, (sid, n) in enumerate(pool.imap_unordered(_tile_her2_slide, args), start=1):
+            print(f"  [{i}/{len(args)}] {sid}: {n} tiles", flush=True)
+
+
+# SurGen SR1482 slide-level extended-RAS probe. We stream CZI files from the
+# official EBI BioStudies FTP mirror, extract 1.0 MPP tissue tiles, then delete raw CZI.
+SURGEN_EBI_BASE = "https://ftp.ebi.ac.uk/biostudies/fire/S-BIAD/285/S-BIAD1285/Files/SR1482_WSIs"
+SURGEN_TARGET_MPP = 1.0
+SURGEN_OUT_TILE = 224
+SURGEN_TILES_PER_SLIDE = 256
+SURGEN_THUMB_SCALE = 0.01
+SURGEN_TISSUE_BAND = (0.1, 0.85)
+SURGEN_RNG_SEED = 1337
+
+
+def _surgen_extract_one(args):
+    import io
+    from aicspylibczi import CziFile
+    slide_id, ras, raw_dir = args
+    czi_path = Path(raw_dir) / f"{slide_id}.czi"
+    if not (czi_path.exists() and czi_path.stat().st_size > 1_000_000):
+        http_download(f"{SURGEN_EBI_BASE}/{slide_id}.czi", czi_path)
+    czi = CziFile(str(czi_path))
+    bbox = czi.get_mosaic_bounding_box()
+    md = ET.tostring(czi.meta, encoding="unicode")
+    mpp = float(re.search(r'<Distance Id="X">\s*<Value>([^<]+)</Value>', md).group(1)) * 1e6
+    scale = mpp / SURGEN_TARGET_MPP
+    src_tile = round(SURGEN_OUT_TILE / scale)
+    thumb = czi.read_mosaic(region=(bbox.x, bbox.y, bbox.w, bbox.h), scale_factor=SURGEN_THUMB_SCALE, C=0)[0]
+    gray = thumb.mean(axis=-1).astype(np.float32) / 255.0
+    h, w = gray.shape
+    pad_x, pad_y = src_tile / 2 / bbox.w * w, src_tile / 2 / bbox.h * h
+    lo, hi = SURGEN_TISSUE_BAND
+    fg = np.argwhere((gray > lo) & (gray < hi))
+    fg = fg[(fg[:, 0] >= pad_y) & (fg[:, 0] < h - pad_y) & (fg[:, 1] >= pad_x) & (fg[:, 1] < w - pad_x)]
+    case_n, block_n = (int(x) for x in re.search(r"T(\d+)_(\d+)", slide_id).groups())
+    rng = np.random.default_rng(SURGEN_RNG_SEED + case_n * 100 + block_n)
+    rows = []
+    for i in rng.choice(len(fg), size=min(SURGEN_TILES_PER_SLIDE, len(fg)), replace=False):
+        ty, tx = fg[i]
+        cx = int(bbox.x + (tx + 0.5) * bbox.w / w) - src_tile // 2
+        cy = int(bbox.y + (ty + 0.5) * bbox.h / h) - src_tile // 2
+        tile = czi.read_mosaic(region=(cx, cy, src_tile, src_tile), scale_factor=scale, C=0)[0]
+        buf = io.BytesIO()
+        Image.fromarray(tile).resize((SURGEN_OUT_TILE, SURGEN_OUT_TILE), Image.BILINEAR).save(buf, "JPEG", quality=JPEG_QUALITY)
+        rows.append((buf.getvalue(), slide_id, ras))
+    czi_path.unlink()
+    return slide_id, rows
+
+
+def fetch_surgen(root):
+    raw, out_data = root / "raw", root / "data"
+    raw.mkdir(parents=True, exist_ok=True)
+    out_data.mkdir(parents=True, exist_ok=True)
+    splits = json.loads((Path(__file__).resolve().parent / "probe_data_splits" / "surgen.json").read_text())
+    cohort = [(sid, int(lbl), str(raw)) for split in ("train", "val") for sid, lbl in zip(splits[split]["slides"], splits[split]["labels"])]
+    workers = int(os.environ.get("PREPARE_WORKERS", min(8, os.cpu_count() or 4)))
+    rows = []
+    with mp.Pool(workers) as pool:
+        for done, (sid, slide_rows) in enumerate(pool.imap_unordered(_surgen_extract_one, cohort), start=1):
+            rows.extend(slide_rows)
+            if done % 20 == 0 or done == len(cohort):
+                print(f"  [{done}/{len(cohort)}] {len(rows):,} tiles", flush=True)
+    table = pa.table({"jpeg": [r[0] for r in rows], "slide_id": [r[1] for r in rows], "ras": pa.array([r[2] for r in rows], type=pa.int8())})
+    pq.write_table(table, out_data / "surgen-00000.parquet", compression="none", row_group_size=PARQUET_ROW_GROUP_SIZE)
+    labels = sorted({(r[1], r[2]) for r in rows})
+    (root / "labels.csv").write_text("slide_id,ras\n" + "\n".join(f"{s},{r}" for s, r in labels) + "\n")
+
+
+# PFS_VALENTINO survival probe. Only train/val slides from the vendored split
+# are tiled; PathoBench fold_0 test remains held out.
+CRC_SURVIVAL_HF_TSV = "crc_outcomes/PFS_VALENTINO/k=all.tsv"
+CRC_SURVIVAL_BIOSTUDIES = "https://ftp.ebi.ac.uk/biostudies/fire/S-BIAD/407/S-BIAD1407/Files/VALENTINO"
+CRC_SURVIVAL_TILES_PER_SLIDE = 256
+CRC_SURVIVAL_TILE_PX = 224
+CRC_SURVIVAL_TARGET_MPP = 0.5
+CRC_SURVIVAL_TISSUE_THRESH = 220
+CRC_SURVIVAL_SAMPLE_SEED = 1337
+
+
+def _tile_one_crc_survival(args):
+    import io
+    import openslide
+    wsi_path, slide_id = args
+    slide = openslide.OpenSlide(str(wsi_path))
+    w0, h0 = slide.level_dimensions[0]
+    # BioStudies VALENTINO TIFF metadata encodes native resolution inconsistently;
+    # the cohort is ~0.22 um/px, so use that fixed value for reproducible tiling.
+    src = int(round(CRC_SURVIVAL_TILE_PX * CRC_SURVIVAL_TARGET_MPP / 0.22))
+    seed = int.from_bytes(hashlib.blake2b(slide_id.encode(), digest_size=4).digest(), "big") ^ CRC_SURVIVAL_SAMPLE_SEED
+    rng = np.random.default_rng(seed)
+    rows, tries = [], 0
+    while len(rows) < CRC_SURVIVAL_TILES_PER_SLIDE and tries < CRC_SURVIVAL_TILES_PER_SLIDE * 20:
+        tries += 1
+        x = int(rng.integers(0, max(1, w0 - src)))
+        y = int(rng.integers(0, max(1, h0 - src)))
+        tile = slide.read_region((x, y), 0, (src, src)).convert("RGB").resize((CRC_SURVIVAL_TILE_PX, CRC_SURVIVAL_TILE_PX), Image.BILINEAR)
+        if np.asarray(tile.convert("L")).mean() > CRC_SURVIVAL_TISSUE_THRESH:
+            continue
+        buf = io.BytesIO()
+        tile.save(buf, "JPEG", quality=JPEG_QUALITY)
+        rows.append({"slide_id": slide_id, "image": buf.getvalue()})
+    slide.close()
+    return rows
+
+
+def fetch_crc_survival(root):
+    from huggingface_hub import hf_hub_download
+    tsv_src = hf_hub_download(repo_id="MahmoodLab/Patho-Bench", repo_type="dataset", filename=CRC_SURVIVAL_HF_TSV)
+    shutil.copy(tsv_src, root / "labels.tsv")
+    splits = json.loads((Path(__file__).resolve().parent / "probe_data_splits" / "crc_survival.json").read_text())
+    slide_ids = sorted(set(splits["train"]["slide_ids"] + splits["val"]["slide_ids"]))
+    wsi_dir = root / "wsi"
+    wsi_dir.mkdir(parents=True, exist_ok=True)
+    for sid in slide_ids:
+        out = wsi_dir / f"{sid}.tif"
+        if not (out.exists() and out.stat().st_size > 1_000_000):
+            http_download(f"{CRC_SURVIVAL_BIOSTUDIES}/{sid}.tif", out.with_suffix(".tif.part"))
+            out.with_suffix(".tif.part").rename(out)
+    workers = int(os.environ.get("PREPARE_WORKERS", os.cpu_count() or 8))
+    rows = []
+    with mp.Pool(workers) as pool:
+        for done, slide_rows in enumerate(pool.imap_unordered(_tile_one_crc_survival, [(wsi_dir / f"{sid}.tif", sid) for sid in slide_ids]), start=1):
+            rows.extend(slide_rows)
+            if done % 10 == 0 or done == len(slide_ids):
+                print(f"  [{done}/{len(slide_ids)}] patches={len(rows):,}", flush=True)
+    pq.write_table(pa.table({"slide_id": [r["slide_id"] for r in rows], "image": [r["image"] for r in rows]}), root / "patches.parquet", compression="snappy")
+
+
+# PathoROB ships as two HF datasets; TCGA subset is intentionally excluded.
+def fetch_pathorob(root):
+    from huggingface_hub import snapshot_download
+    for subset in ("camelyon", "tolkach_esca"):
+        snapshot_download(repo_id=f"bifold-pathomics/PathoROB-{subset}", repo_type="dataset", local_dir=str(root / subset))
+
+
+def fetch_monusac(root):
+    import gdown
+    Image.MAX_IMAGE_PIXELS = None
+    zip_path = root / "monusac_train.zip"
+    gdown.download(id="1lxMZaAPSpEHLSxGA9KKMt_r-4S8dwLhq", output=str(zip_path), quiet=False)
+    shutil.unpack_archive(zip_path, root)
+    class_id = {"Epithelial": 1, "Lymphocyte": 2, "Macrophage": 3, "Neutrophil": 4}
+    for tif in sorted((root / "MoNuSAC_images_and_annotations").glob("*/*.tif")):
+        xml_path, npy_path = tif.with_suffix(".xml"), tif.with_suffix(".npy")
+        w, h = Image.open(tif).size
+        label = Image.new("L", (w, h), 0)
+        draw = ImageDraw.Draw(label)
+        for ann in ET.parse(xml_path).getroot().findall(".//Annotation"):
+            fill = class_id.get(ann.find("./Attributes/Attribute").get("Name"), 0)
+            if fill == 0:
+                continue
+            for region in ann.findall("./Regions/Region"):
+                pts = [(float(v.get("X")), float(v.get("Y"))) for v in region.findall("./Vertices/Vertex")]
+                if len(pts) >= 3:
+                    draw.polygon(pts, fill=fill)
+        np.save(npy_path, np.asarray(label, dtype=np.uint8))
+
+
+# CoNSeP's Warwick landing page is sign-in gated from batch jobs, so use our
+# byte-for-byte probe mirror after warning users about the upstream terms.
+def fetch_consep(root):
+    zip_path = root / "consep.zip"
+    hf_download("consep/consep.zip", zip_path)
+    shutil.unpack_archive(zip_path, root)
+    for name in ("Train", "Test"):
+        if (root / name).exists():
+            shutil.rmtree(root / name)
+    for p in (root / "CoNSeP").iterdir():
+        shutil.move(str(p), root / p.name)
+    shutil.rmtree(root / "CoNSeP")
+    shutil.rmtree(root / "__MACOSX")
+
+
+# MHIST's official site is agreement-gated; mirror the exact probe files on HF
+# so a fresh `prepare.py ... download=True` run is noninteractive.
 def fetch_mhist(root):
-    images_zip = root / "images.zip"
-    if images_zip.exists():
-        shutil.unpack_archive(images_zip, root)
-        images_zip.unlink()
-        return
-    raise SystemExit(
-        f"mhist requires manual access. Visit https://bmirds.github.io/MHIST/#accessing-dataset, "
-        f"fill in the form, then drop annotations.csv and images.zip into:\n  {root}\n"
-        f"After that, re-run `python prepare.py <config> download=True` to unzip."
-    )
+    hf_download("mhist/annotations.csv", root / "annotations.csv")
+    hf_download("mhist/images.zip", root / "images.zip")
+    shutil.unpack_archive(root / "images.zip", root)
 
 
 FETCHERS = {
-    "bach": fetch_bach,
     "bracs": fetch_bracs,
     "break_his": fetch_break_his,
+    "consep": fetch_consep,
+    "crc_survival": fetch_crc_survival,
+    "her2": fetch_her2,
     "mhist": fetch_mhist,
+    "monusac": fetch_monusac,
     "pcam": fetch_pcam,
     "pannuke": fetch_pannuke,
+    "pathorob": fetch_pathorob,
+    "surgen": fetch_surgen,
+    "ucla_lung": fetch_ucla_lung,
 }
 
 
@@ -340,13 +629,31 @@ def get_paths(cfg):
     return paths
 
 
-# Truthy if the path is populated. mhist needs the unpacked `images/` subdir
-# specifically: a user who has dropped only the manual images.zip would
-# otherwise look "populated" and we'd skip past fetch_mhist's unpack step.
+# Truthy if the path is populated with files train.py/probe.py actually read,
+# not merely a half-written archive left by an interrupted download.
 def is_populated(name, p):
     if not p.exists() or not any(p.iterdir()):
         return False
-    if name == "mhist" and not (p / "images").exists():
+    if name in {"bracs", "break_his", "mhist"}:
+        rel = json.loads((Path(__file__).resolve().parent / "probe_data_splits" / f"{name}.json").read_text())["train"]["images"][0]
+        return (p / rel).exists()
+    if name == "pcam":
+        return all((p / f"camelyonpatch_level_2_split_{s}_{k}.h5").exists() for s in ("train", "valid") for k in ("x", "y"))
+    if name == "pannuke":
+        return all((p / f"Fold{fold}/{kind}/fold{fold}/{kind}.npy").exists() for fold in (1, 2) for kind in ("images", "masks"))
+    if name == "ucla_lung" and not (p / "tiles.parquet").exists():
+        return False
+    if name == "her2" and not any((p / "tiles").glob("*/*.jpg")):
+        return False
+    if name == "surgen" and (not (p / "labels.csv").exists() or not list((p / "data").glob("surgen-*.parquet"))):
+        return False
+    if name == "crc_survival" and not ((p / "patches.parquet").exists() and (p / "labels.tsv").exists()):
+        return False
+    if name == "pathorob" and not all(list((p / s / "data").glob("*.parquet")) for s in ("camelyon", "tolkach_esca")):
+        return False
+    if name == "monusac" and not any((p / "MoNuSAC_images_and_annotations").glob("*/*.npy")):
+        return False
+    if name == "consep" and not ((p / "Train" / "Images").exists() and (p / "Train" / "Labels").exists()):
         return False
     return True
 
@@ -382,6 +689,10 @@ def main():
 
     # Stage 2 — probe datasets. Verify-only collects every gap and reports
     # them all at once so the user fixes the YAML in a single edit.
+    if download:
+        for name in cfg["probe"]["dataset_roots"]:
+            if name in PROBE_ACCESS_NOTICES:
+                print(f"[notice] probe/{name}: {PROBE_ACCESS_NOTICES[name]}", flush=True)
     missing = []
     for name in cfg["probe"]["dataset_roots"]:
         root = paths[f"probe.{name}"]
@@ -429,12 +740,13 @@ def main():
         torch.hub.load_state_dict_from_url(pretrain_url, model_dir=str(weights_dir), progress=True)
         print("[done] dinov2 weights", flush=True)
 
-    # Reaching here means tiles + all six probe datasets + DINOv2 weights are
+    # Reaching here means tiles + every configured probe dataset + DINOv2 weights are
     # in place. Tell the user explicitly so they don't have to read between
     # the [skip] lines.
     n_shards = sum(1 for _ in dataset_dir.glob("shard-*.parquet"))
+    n_probes = len(cfg["probe"]["dataset_roots"])
     print(
-        f"\nAll data ready: {n_shards} parquet shards at {dataset_dir}, 6 probe datasets "
+        f"\nAll data ready: {n_shards} parquet shards at {dataset_dir}, {n_probes} probe datasets "
         f"({', '.join(cfg['probe']['dataset_roots'])}), and {cfg['model']['type']} weights at "
         f"{weights_path}. Launch training with `python train.py {config_path}` or "
         f"`sbatch submit/train_1gpu.sbatch {config_path}`.",

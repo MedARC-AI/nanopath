@@ -65,21 +65,36 @@ probe:
   model_weights: ema
   count: 1 # 4 means probing at 25%, 50%, 75%, and 100% of the training FLOP budget. 1 means probing just at the end.
   datasets:
-    - bach
     - bracs
     - break_his
     - mhist
     - pcam
   segmentation_datasets:
     - pannuke
-  # Dataset roots are read by probe.py. Defaults are the MedARC cluster's
-  # shared /block paths (already populated, zero setup). Off-cluster, point
-  # these at writable directories and run prepare.py with download=True to
-  # fetch the data.
+    - monusac
+    - consep
+  slide_datasets:
+    - her2
+    - ucla_lung
+  auc_datasets:
+    - surgen
+  survival_datasets:
+    - crc_survival
+  robustness_datasets:
+    - pathorob
+  # Dataset roots are read by probe.py. Defaults are shared MedARC cluster
+  # paths. Off-cluster, point these at writable directories and run prepare.py
+  # with download=True to fetch/verify the data.
   dataset_roots:
-    bach: /block/eva-data/bach
     bracs: /block/eva-data/bracs
     break_his: /block/eva-data/breakhis
+    consep: /block/eva-data/consep
+    crc_survival: /data/crc-survival
+    her2: /data/her2-tumor-roi
     mhist: /block/eva-data/mhist
+    monusac: /block/eva-data/monusac
     pcam: /block/eva-data/patch_camelyon
     pannuke: /block/thunder-data/pannuke
+    pathorob: /block/pathorob
+    surgen: /data/surgen
+    ucla_lung: /data/ucla-lung

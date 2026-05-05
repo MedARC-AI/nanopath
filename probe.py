@@ -1,32 +1,38 @@
-# Inline downstream probes. mean_probe_score = unweighted mean of four
-# aggregates: linear, KNN, and SimpleShot few-shot F1 over bach/bracs/
-# break_his/mhist/pcam, plus PanNuke macro Jaccard from the MaskTransformer
-# head defined below trained with multiclass dice loss.
+# Inline downstream probes. mean_probe_score = the unweighted mean of one scalar
+# per headline dataset: break_his, bracs, mhist, pcam, monusac, consep,
+# pannuke, her2, ucla_lung, surgen, crc_survival, pathorob. Tile/slide classification
+# datasets score the mean of linear, KNN, and SimpleShot F1; SurGen scores AUROC;
+# CRC survival scores Harrell's c-index; PathoROB scores its robustness index;
+# segmentation datasets score macro Jaccard from the MaskTransformer head below.
 #
 # train.py snapshots a probe checkpoint at each FLOP milestone and runs
 # this file as a subprocess (`python probe.py req.json`); training pauses, the
 # subprocess writes a result JSON, collect_probe_results ingests it back into
 # wandb + metrics.jsonl. Inside the subprocess, two threads share one GPU and
 # one loaded DinoV2ViT: the main thread loops classification datasets (for
-# each, embed train+val with the frozen backbone once, then run all three
-# heads — KNN, SimpleShot few-shot, and linear — on those cached embeddings)
-# while a background thread runs PanNuke. Putting both on one GPU helps
-# because classification spends a lot of time in plain Python/CPU code which
-# leaves the GPU free to crunch PanNuke.
+# each, embed train+val with the frozen backbone once, then run all three heads
+# on cached embeddings), then runs the slide/robustness/survival probes while a
+# background thread runs segmentation. Putting both on one GPU helps because
+# classification-style probes spend a lot of time in Python/CPU code which leaves
+# the GPU free to crunch segmentation.
 #
 # Rough per-task wall on a 1xH100 leader-recipe checkpoint (the full ViT, not
 # smoke). bracs and PanNuke dominate; the others are short tail.
-#   bach        ~15s         
 #   bracs       ~180s        
 #   break_his   ~14s
 #   mhist       ~16s
 #   pcam        ~35s         subsampled to 3072 train / 768 val 
+#   her2        ~180-220s    tiled HER2-Tumor-ROIs slides, mean-pooled
+#   ucla_lung   ~10s         90 slides * 64 pre-extracted tiles, mean-pooled
+#   surgen      ~30s         ~82K tiles -> mean-pool -> logistic regression
+#   crc_survival ~30-60s     PFS_VALENTINO patches -> mean-pool -> Coxnet
+#   pathorob    ~10-15s      camelyon + tolkach_esca patch sets
+#   monusac     ~20-30s      official train fold split slide-disjoint
+#   consep      ~10-15s      official Train fold split by ROI
 #   PanNuke     ~200-750s    the train/val npy folds are mmap'd from disk, so
 #                            wall depends a lot on whether the OS page cache is warm
-# PanNuke runs in parallel with the classification loop, so probe wall is roughly
-# max(PanNuke, sum of cls) plus a small tail. In practice that's ~12-13 min when
-# PanNuke loads the npy folds from cold disk, but as fast as ~5 min on warm cache
-# (e.g. re-running soon after a previous probe on the same node).
+# Segmentation runs in parallel with the classification/slide/robustness/survival
+# loop, so probe wall is roughly max(seg total, other probes) plus a small tail.
 
 import json
 import os
@@ -40,6 +46,9 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from PIL import Image
+
+Image.MAX_IMAGE_PIXELS = None  # Probe ROIs are trusted local pathology images, often >90M pixels.
 
 
 PROBE_DATA_SPLITS = Path(__file__).resolve().parent / "probe_data_splits"
@@ -51,6 +60,12 @@ SEGMENTATION_WEIGHT_DECAY = 1e-4
 SEGMENTATION_BATCH_SIZE = 64
 PANNUKE_NUM_CLASSES = 6
 PANNUKE_FOLDS = {"train": "Fold1/{kind}/fold1/{kind}.npy", "val": "Fold2/{kind}/fold2/{kind}.npy"}
+MONUSAC_NUM_CLASSES = 5
+CONSEP_NUM_CLASSES = 5
+CONSEP_REMAP = (0, 1, 2, 3, 3, 4, 4, 4)
+SEG_VAL_FRACTION = 0.2
+SEG_SPLIT_SEED = 1337
+SEG_RESIZE = 256
 LINEAR_PROBE_LRS = (1e-3, 1e-4, 1e-5)
 LINEAR_PROBE_WEIGHT_DECAY = 1e-4
 LINEAR_PROBE_EPOCHS = 200
@@ -62,11 +77,31 @@ FEWSHOT_TRIALS = 1000
 FEWSHOT_SEED = 1337
 KNN_K_VALS = [1, 3, 5, 10, 20, 30, 40, 50]
 KNN_CHUNK_SIZE = 4096
-CLASSIFICATION_DATASETS = ["bach", "bracs", "break_his", "mhist", "pcam"]
-SEGMENTATION_DATASETS = ["pannuke"]
-# Module-level so ClassificationDataset / inline_pannuke_jaccard can read it without threading
-# cfg through every call. Populated from cfg.probe.dataset_roots by prepare_probe_state()
-# (train.py main process) and run_probe_job() (probe subprocess).
+CLASSIFICATION_DATASETS = ["bracs", "break_his", "mhist", "pcam"]
+SEGMENTATION_DATASETS = ["pannuke", "monusac", "consep"]
+SLIDE_DATASETS = ["her2", "ucla_lung"]
+AUC_DATASETS = ["surgen"]
+SURVIVAL_DATASETS = ["crc_survival"]
+ROBUSTNESS_DATASETS = ["pathorob"]
+MEAN_PROBE_DATASETS = [
+    "break_his", "bracs", "mhist", "pcam", "monusac", "consep",
+    "pannuke", "her2", "ucla_lung", "surgen", "crc_survival", "pathorob",
+]
+TASK_FIELDS = {
+    "classification_datasets": ("datasets", CLASSIFICATION_DATASETS),
+    "segmentation_datasets": ("segmentation_datasets", SEGMENTATION_DATASETS),
+    "slide_datasets": ("slide_datasets", SLIDE_DATASETS),
+    "auc_datasets": ("auc_datasets", AUC_DATASETS),
+    "survival_datasets": ("survival_datasets", SURVIVAL_DATASETS),
+    "robustness_datasets": ("robustness_datasets", ROBUSTNESS_DATASETS),
+}
+SURGEN_LR_C = 1.0
+SURGEN_LR_MAX_ITER = 1000
+CRC_SURVIVAL_COX_ALPHA = 0.07
+CRC_SURVIVAL_COX_L1_RATIO = 0.5
+PATHOROB_SUBSETS = {"camelyon": 11, "tolkach_esca": 46}
+# Module-level so dataset adapters can read roots without threading cfg through every call.
+# Populated from cfg.probe.dataset_roots by prepare_probe_state() and run_probe_job().
 DATASET_ROOTS = {}
 
 
@@ -87,7 +122,7 @@ def probe_paths(output_dir):
 
 # Probes are enabled only when the recipe asks for them and names at least one task.
 def probe_enabled(cfg):
-    return bool(cfg["probe"]["enabled"]) and (len(cfg["probe"]["datasets"]) + len(cfg["probe"]["segmentation_datasets"])) > 0
+    return bool(cfg["probe"]["enabled"]) and sum(len(cfg["probe"].get(cfg_key, [])) for cfg_key, _ in TASK_FIELDS.values()) > 0
 
 
 # Persist probe state so explicitly resumed train.py runs do not relog completed result files.
@@ -102,36 +137,33 @@ def prepare_probe_state(cfg, output_dir):
     paths = probe_paths(output_dir)
     for path in [paths["probe_dir"], paths["results_dir"]]:
         path.mkdir(parents=True, exist_ok=True)
-    classification = [str(x) for x in cfg["probe"]["datasets"]]
-    segmentation = [str(x) for x in cfg["probe"]["segmentation_datasets"]]
+    groups = {request_key: [str(x) for x in cfg["probe"].get(cfg_key, [])] for request_key, (cfg_key, _) in TASK_FIELDS.items()}
     data = {
-        "version": 8,
+        "version": 10,
         "family": str(cfg["project"]["family"]),
-        "classification_datasets": classification,
-        "segmentation_datasets": segmentation,
         "count": int(cfg["probe"]["count"]),
         "logged_results": [],
+        **groups,
     }
     if paths["state_path"].exists():
         # Explicit resume can continue only if the probe family/datasets/count match the old state.
         previous = json.loads(paths["state_path"].read_text())
-        if previous["version"] != 8:
+        if previous["version"] != 10:
             raise ValueError(f"unsupported probe state version: {previous['version']}")
         if previous["family"] != data["family"]:
             raise ValueError(f"probe family changed from {previous['family']} to {data['family']}")
-        if previous["classification_datasets"] != data["classification_datasets"]:
-            raise ValueError(f"classification datasets changed from {previous['classification_datasets']} to {data['classification_datasets']}")
-        if previous["segmentation_datasets"] != data["segmentation_datasets"]:
-            raise ValueError(f"segmentation datasets changed from {previous['segmentation_datasets']} to {data['segmentation_datasets']}")
+        for request_key in TASK_FIELDS:
+            if previous.get(request_key, []) != data[request_key]:
+                raise ValueError(f"{request_key} changed from {previous.get(request_key, [])} to {data[request_key]}")
         if previous["count"] != data["count"]:
             raise ValueError(f"probe count changed from {previous['count']} to {data['count']}")
         data["logged_results"] = previous["logged_results"]
-    for dataset in classification:
-        if dataset not in CLASSIFICATION_DATASETS:
-            raise ValueError(f"unsupported classification dataset: {dataset}")
-    for dataset in segmentation:
-        if dataset not in SEGMENTATION_DATASETS:
-            raise ValueError(f"unsupported segmentation dataset: {dataset}")
+    for request_key, (_, supported) in TASK_FIELDS.items():
+        for dataset in data[request_key]:
+            if dataset not in supported:
+                raise ValueError(f"unsupported {request_key}: {dataset}")
+    configured = [d for request_key in TASK_FIELDS for d in data[request_key]]
+    assert set(configured) == set(MEAN_PROBE_DATASETS), f"probe config must contain exactly {MEAN_PROBE_DATASETS}, got {configured}"
     state = {"paths": paths, "data": data}
     write_probe_state(state)
     return state
@@ -149,11 +181,10 @@ def queue_probe_job(state, checkpoint_payload, checkpoint_step, target_flops, ta
         "checkpoint_path": str(state["paths"]["probe_dir"] / f"{step_tag}.pt"),
         "request_path": str(state["paths"]["probe_dir"] / f"{step_tag}.request.json"),
         "result_path": str(state["paths"]["results_dir"] / f"{step_tag}.json"),
-        "classification_datasets": list(state["data"]["classification_datasets"]),
-        "segmentation_datasets": list(state["data"]["segmentation_datasets"]),
+        **{request_key: list(state["data"][request_key]) for request_key in TASK_FIELDS},
         "job_id": f"{slurm_id}-{checkpoint_step:07d}",
     }
-    for dataset in request["classification_datasets"] + request["segmentation_datasets"]:
+    for dataset in [d for request_key in TASK_FIELDS for d in request[request_key]]:
         if not DATASET_ROOTS[dataset].exists():
             raise FileNotFoundError(f"missing dataset root for {dataset}: {DATASET_ROOTS[dataset]}")
     torch.save(checkpoint_payload, request["checkpoint_path"])
@@ -166,7 +197,11 @@ def queue_probe_job(state, checkpoint_payload, checkpoint_step, target_flops, ta
         f"{console_prefix()} Probe  [{checkpoint_step}]  "
         f"start: {request['job_id']}  target_fraction: {target_fraction:.4f}  "
         f"classification: {','.join(request['classification_datasets']) or '-'}  "
-        f"segmentation: {','.join(request['segmentation_datasets']) or '-'}",
+        f"segmentation: {','.join(request['segmentation_datasets']) or '-'}  "
+        f"slide: {','.join(request['slide_datasets']) or '-'}  "
+        f"auc: {','.join(request['auc_datasets']) or '-'}  "
+        f"survival: {','.join(request['survival_datasets']) or '-'}  "
+        f"robustness: {','.join(request['robustness_datasets']) or '-'}",
         flush=True,
     )
     subprocess.run([sys.executable, str(Path(__file__).resolve()), request["request_path"]], env=env, check=True)
@@ -180,7 +215,7 @@ def queue_probe_job(state, checkpoint_payload, checkpoint_step, target_flops, ta
 # Image dataset adapter for classification probes; dataset-specific split logic lives here.
 class ClassificationDataset(torch.utils.data.Dataset):
     # Loads images for the classification probes. For pcam we subsample with a fixed seed
-    # to match Thunder's PATCH_CAMELYON_SUBSET behaviour; the other four datasets use the
+    # to match Thunder's PATCH_CAMELYON_SUBSET behaviour; bracs/break_his/mhist use the
     # cached probe_data_splits JSON (one-time output of `thunder generate-data-splits`).
     # Load image paths/labels or PCam h5 arrays for one train/val split.
     def __init__(self, dataset, split, transform):
@@ -217,6 +252,49 @@ class ClassificationDataset(torch.utils.data.Dataset):
         else:
             img = Image.open(self.root / self.images[idx]).convert("RGB")
         return self.transform(img), self.labels[idx]
+
+
+# Mean-pool tile embeddings to one vector per slide for HER2 response and UCLA Lung.
+def embed_slide_dataset(model, mean, std, dataset, split, device, transform):
+    import io
+    import numpy as np
+    from PIL import Image
+
+    splits = json.loads((PROBE_DATA_SPLITS / f"{dataset}.json").read_text())[split]
+    slides = splits["slide_ids"] if dataset == "ucla_lung" else splits["slides"]
+    labels = np.asarray([int(v) for v in splits["labels"]], dtype=np.int64)
+    paths, slide_idx = [], []
+    if dataset == "ucla_lung":
+        import pyarrow.parquet as pq
+        slide_to_i = {s: i for i, s in enumerate(slides)}
+        table = pq.read_table(DATASET_ROOTS[dataset] / "tiles.parquet")
+        for sid, jpg in zip(table.column("slide_id").to_pylist(), table.column("jpeg").to_pylist()):
+            if sid in slide_to_i:
+                paths.append(jpg); slide_idx.append(slide_to_i[sid])
+    else:
+        for i, sid in enumerate(slides):
+            for tile in sorted((DATASET_ROOTS[dataset] / "tiles" / sid).glob("*.jpg")):
+                paths.append(tile); slide_idx.append(i)
+
+    class _Tiles(torch.utils.data.Dataset):
+        def __len__(self): return len(paths)
+        def __getitem__(self, i):
+            src = Image.open(io.BytesIO(paths[i])) if dataset == "ucla_lung" else Image.open(paths[i])
+            return transform(src.convert("RGB")), slide_idx[i]
+
+    loader = torch.utils.data.DataLoader(_Tiles(), batch_size=EMBED_BATCH_SIZE, shuffle=False, num_workers=EMBED_NUM_WORKERS, pin_memory=True)
+    sums, counts = None, torch.zeros(len(slides), dtype=torch.long)
+    autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    with torch.no_grad():
+        for x, si in loader:
+            x = x.to(device, non_blocking=True)
+            with autocast:
+                e = model.probe_features((x - mean) / std).float().cpu()
+            if sums is None:
+                sums = torch.zeros(len(slides), e.shape[1])
+            sums.index_add_(0, si, e)
+            counts.index_add_(0, si, torch.ones_like(si))
+    return (sums / counts.unsqueeze(1)).numpy().astype(np.float32), labels
 
 
 # Run the frozen backbone over one classification split and return numpy embeddings/labels.
@@ -320,18 +398,13 @@ class MaskTransformer(nn.Module):
         return masks.reshape(b, gs, gs, self.n_cls).permute(0, 3, 1, 2)
 
 
-# Train a lightweight segmentation head on frozen PanNuke patch features and report Jaccard.
-def inline_pannuke_jaccard(model, mean, std, device):
-    # Precompute spatial token features once with the supplied backbone, then train
-    # MaskTransformer with multiclass_dice_loss for SEGMENTATION_EPOCHS, select best
-    # epoch by val loss, and report per-image macro jaccard with Thunder's bg-only
-    # weighting (no_bg_only_weight_test=16).
+# Shared MaskTransformer probe for segmentation datasets. Each loader supplies pre-resized
+# 256x256 RGB uint8 images and int64 labels; frozen patch tokens are extracted once, then the
+# head is selected by validation dice loss and scored with Thunder's bg-only reweighted Jaccard.
+def _seg_head_jaccard(model, mean, std, device, train_images, train_labels, val_images, val_labels, n_cls):
     import numpy as np
     from sklearn.metrics import jaccard_score
 
-    started_at = time.monotonic()
-
-    # Extract spatial patch tokens once so the segmentation head training loop is cheap.
     @torch.no_grad()
     def extract(images_np):
         feats = []
@@ -342,30 +415,14 @@ def inline_pannuke_jaccard(model, mean, std, device):
                 feats.append(model.encode_image((batch - mean) / std)[:, model.registers :].float().cpu())
         return torch.cat(feats, dim=0)
 
-    pannuke_root = DATASET_ROOTS["pannuke"]
-
-    # Convert PanNuke's per-class binary mask stack into one integer label map.
-    def derive_labels(masks):
-        labels = np.zeros((masks.shape[0], 256, 256), dtype=np.int64)
-        for j in range(PANNUKE_NUM_CLASSES - 1):
-            layer = ((j + 1) * np.clip(masks[..., j], 0, 1)).astype(np.int64)
-            labels = np.where(layer != 0, layer, labels)
-        return labels
-
-    train_images = np.load(pannuke_root / PANNUKE_FOLDS["train"].format(kind="images"), mmap_mode="r")
-    val_images = np.load(pannuke_root / PANNUKE_FOLDS["val"].format(kind="images"), mmap_mode="r")
-    train_labels = derive_labels(np.load(pannuke_root / PANNUKE_FOLDS["train"].format(kind="masks"), mmap_mode="r"))
-    val_labels = derive_labels(np.load(pannuke_root / PANNUKE_FOLDS["val"].format(kind="masks"), mmap_mode="r"))
     train_feats = extract(train_images)
     val_feats = extract(val_images)
-    d_encoder = train_feats.shape[-1]
     train_labels_t = torch.from_numpy(train_labels)
     val_labels_t = torch.from_numpy(val_labels)
-    head = MaskTransformer(n_cls=PANNUKE_NUM_CLASSES, d_encoder=d_encoder, n_layers=2, n_heads=8, d_model=768, d_ff=3072).to(device)
+    head = MaskTransformer(n_cls=n_cls, d_encoder=train_feats.shape[-1], n_layers=2, n_heads=8, d_model=768, d_ff=3072).to(device)
     opt = torch.optim.Adam(head.parameters(), lr=SEGMENTATION_LR, weight_decay=SEGMENTATION_WEIGHT_DECAY)
     n = len(train_feats)
-    best_val_loss = float("inf")
-    best_state = None
+    best_val_loss, best_state = float("inf"), None
     # Select the segmentation head by validation dice loss, keeping the backbone frozen.
     for _ in range(SEGMENTATION_EPOCHS):
         head.train()
@@ -408,7 +465,225 @@ def inline_pannuke_jaccard(model, mean, std, device):
     freq_bg_only = per_image_bg_only.sum() / len(per_image_bg_only)
     weights = np.ones(len(per_image_j))
     weights[~per_image_bg_only] *= max(1.0, freq_bg_only * 16.0)
-    return float(np.average(per_image_j, weights=weights)), time.monotonic() - started_at
+    return float(np.average(per_image_j, weights=weights))
+
+
+def inline_pannuke_jaccard(model, mean, std, device):
+    import numpy as np
+    started_at = time.monotonic()
+    pannuke_root = DATASET_ROOTS["pannuke"]
+    def derive_labels(masks):
+        labels = np.zeros((masks.shape[0], 256, 256), dtype=np.int64)
+        for j in range(PANNUKE_NUM_CLASSES - 1):
+            layer = ((j + 1) * np.clip(masks[..., j], 0, 1)).astype(np.int64)
+            labels = np.where(layer != 0, layer, labels)
+        return labels
+    train_images = np.load(pannuke_root / PANNUKE_FOLDS["train"].format(kind="images"), mmap_mode="r")
+    val_images = np.load(pannuke_root / PANNUKE_FOLDS["val"].format(kind="images"), mmap_mode="r")
+    train_labels = derive_labels(np.load(pannuke_root / PANNUKE_FOLDS["train"].format(kind="masks"), mmap_mode="r"))
+    val_labels = derive_labels(np.load(pannuke_root / PANNUKE_FOLDS["val"].format(kind="masks"), mmap_mode="r"))
+    return _seg_head_jaccard(model, mean, std, device, train_images, train_labels, val_images, val_labels, PANNUKE_NUM_CLASSES), time.monotonic() - started_at
+
+
+def inline_monusac_jaccard(model, mean, std, device):
+    import numpy as np
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None
+    started_at = time.monotonic()
+    root = DATASET_ROOTS["monusac"] / "MoNuSAC_images_and_annotations"
+    slides = sorted(p.name for p in root.iterdir() if p.is_dir())
+    rng = np.random.default_rng(SEG_SPLIT_SEED)
+    rng.shuffle(slides)
+    val_slides = set(slides[-max(1, round(SEG_VAL_FRACTION * len(slides))):])
+    def load(slide_subset):
+        imgs, lbls = [], []
+        for slide in sorted(slide_subset):
+            for tif in sorted((root / slide).glob("*.tif")):
+                imgs.append(np.asarray(Image.open(tif).convert("RGB").resize((SEG_RESIZE, SEG_RESIZE), Image.BILINEAR), dtype=np.uint8))
+                lbl = np.load(tif.with_suffix(".npy"), allow_pickle=True).astype(np.uint8)
+                lbls.append(np.clip(np.asarray(Image.fromarray(lbl).resize((SEG_RESIZE, SEG_RESIZE), Image.NEAREST), dtype=np.int64), 0, MONUSAC_NUM_CLASSES - 1))
+        return np.stack(imgs), np.stack(lbls)
+    tr_imgs, tr_lbls = load(s for s in slides if s not in val_slides)
+    va_imgs, va_lbls = load(val_slides)
+    return _seg_head_jaccard(model, mean, std, device, tr_imgs, tr_lbls, va_imgs, va_lbls, MONUSAC_NUM_CLASSES), time.monotonic() - started_at
+
+
+def inline_consep_jaccard(model, mean, std, device):
+    import numpy as np
+    import scipy.io as sio
+    from PIL import Image
+    started_at = time.monotonic()
+    root = DATASET_ROOTS["consep"] / "Train"
+    pngs = sorted(p.name for p in (root / "Images").glob("*.png"))
+    rng = np.random.default_rng(SEG_SPLIT_SEED)
+    rng.shuffle(pngs)
+    val_pngs = set(pngs[-max(1, round(SEG_VAL_FRACTION * len(pngs))):])
+    remap = np.array(CONSEP_REMAP, dtype=np.int64)
+    def load(png_subset):
+        imgs, lbls = [], []
+        for name in sorted(png_subset):
+            mat = sio.loadmat(root / "Labels" / (Path(name).stem + ".mat"))
+            imgs.append(np.asarray(Image.open(root / "Images" / name).convert("RGB").resize((SEG_RESIZE, SEG_RESIZE), Image.BILINEAR), dtype=np.uint8))
+            lbls.append(remap[np.asarray(Image.fromarray(mat["type_map"].astype(np.uint8)).resize((SEG_RESIZE, SEG_RESIZE), Image.NEAREST), dtype=np.int64)])
+        return np.stack(imgs), np.stack(lbls)
+    tr_imgs, tr_lbls = load(p for p in pngs if p not in val_pngs)
+    va_imgs, va_lbls = load(val_pngs)
+    return _seg_head_jaccard(model, mean, std, device, tr_imgs, tr_lbls, va_imgs, va_lbls, CONSEP_NUM_CLASSES), time.monotonic() - started_at
+
+
+SEGMENTATION_RUNNERS = {
+    "pannuke": inline_pannuke_jaccard,
+    "monusac": inline_monusac_jaccard,
+    "consep": inline_consep_jaccard,
+}
+
+
+# PathoROB robustness index over held-out camelyon + tolkach_esca subsets. We embed cls plus
+# mean patch tokens, drop same-slide neighbors, and use the published per-subset k_opt values.
+def inline_pathorob(model, mean, std, device, transform):
+    import io
+    import numpy as np
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from PIL import Image
+
+    started_at = time.monotonic()
+    autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+
+    class _Patches(torch.utils.data.Dataset):
+        def __init__(self, byts): self.byts = byts
+        def __len__(self): return len(self.byts)
+        def __getitem__(self, i): return transform(Image.open(io.BytesIO(self.byts[i])).convert("RGB"))
+
+    out = {}
+    for name, k_target in PATHOROB_SUBSETS.items():
+        tbl = pa.concat_tables([pq.read_table(f) for f in sorted((DATASET_ROOTS["pathorob"] / name).glob("data/*.parquet"))])
+        meta = tbl.select(["slide_id", "biological_class", "medical_center"]).to_pandas()
+        if name == "tolkach_esca":
+            keep = meta.medical_center.to_numpy(dtype=object) != "VALSET3_TCGA"
+            tbl = tbl.filter(pa.array(keep))
+            meta = meta[keep].reset_index(drop=True)
+        byts = [r["bytes"] for r in tbl.column("image").to_pylist()]
+        loader = torch.utils.data.DataLoader(_Patches(byts), batch_size=EMBED_BATCH_SIZE, num_workers=EMBED_NUM_WORKERS, pin_memory=True, shuffle=False)
+        embs = []
+        with torch.no_grad():
+            for batch in loader:
+                x = batch.to(device, non_blocking=True)
+                with autocast:
+                    o = model((x - mean) / std)
+                    feat = torch.cat([o["x_norm_clstoken"], o["x_norm_patchtokens"].mean(dim=1)], dim=-1)
+                embs.append(feat.float().cpu().numpy())
+        embs = np.concatenate(embs).astype(np.float32)
+        embs /= np.maximum(np.linalg.norm(embs, axis=1, keepdims=True), 1e-12)
+        embs_t = torch.from_numpy(embs).to(device)
+        sl = meta.slide_id.to_numpy(dtype=object)
+        bi = meta.biological_class.to_numpy(dtype=object)
+        ce = meta.medical_center.to_numpy(dtype=object)
+        n = len(meta)
+        k = min(k_target + int(np.unique(sl, return_counts=True)[1].max()), n - 1)
+        SO = OS = 0
+        for s in range(0, n, KNN_CHUNK_SIZE):
+            e = min(s + KNN_CHUNK_SIZE, n)
+            sim = embs_t[s:e] @ embs_t.T
+            sim[torch.arange(e - s, device=device), torch.arange(s, e, device=device)] = -float("inf")
+            topk = torch.topk(sim, k, dim=1).indices.cpu().numpy()
+            qi = np.arange(s, e)
+            bm = bi[topk] == bi[qi][:, None]
+            cm = ce[topk] == ce[qi][:, None]
+            ns = sl[topk] != sl[qi][:, None]
+            keep = ns & (np.cumsum(ns, axis=1) <= k_target)
+            SO += int(((bm & ~cm) & keep).sum())
+            OS += int(((~bm & cm) & keep).sum())
+        out[name] = SO / (SO + OS)
+    return out, time.monotonic() - started_at
+
+
+def inline_surgen_ras_auc(model, mean, std, device, transform):
+    import io
+    import numpy as np
+    import pyarrow.parquet as pq
+    from PIL import Image
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import roc_auc_score
+
+    started_at = time.monotonic()
+    splits = json.loads((PROBE_DATA_SPLITS / "surgen.json").read_text())
+    label_of = {s: int(l) for split in ("train", "val") for s, l in zip(splits[split]["slides"], splits[split]["labels"])}
+    table = pq.read_table(DATASET_ROOTS["surgen"] / "data" / "surgen-00000.parquet")
+    slide_ids_all = np.array(table.column("slide_id").to_pylist(), dtype=object)
+    keep = np.isin(slide_ids_all, list(label_of))
+    jpeg_bytes = [b for b, k in zip(table.column("jpeg").to_pylist(), keep) if k]
+    slide_ids = slide_ids_all[keep]
+
+    class _Tiles(torch.utils.data.Dataset):
+        def __len__(self): return len(jpeg_bytes)
+        def __getitem__(self, i): return transform(Image.open(io.BytesIO(jpeg_bytes[i])).convert("RGB"))
+
+    loader = torch.utils.data.DataLoader(_Tiles(), batch_size=EMBED_BATCH_SIZE, num_workers=EMBED_NUM_WORKERS, pin_memory=True, shuffle=False)
+    autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    embs = []
+    with torch.no_grad():
+        for x in loader:
+            x = x.to(device, non_blocking=True)
+            with autocast:
+                embs.append(model.probe_features((x - mean) / std).float().cpu().numpy())
+    embs = np.concatenate(embs).astype(np.float32)
+    pooled = {sid: embs[slide_ids == sid].mean(0) for sid in np.unique(slide_ids)}
+    def stack(slist):
+        return np.stack([pooled[s] for s in slist]), np.asarray([label_of[s] for s in slist])
+    Xtr, ytr = stack(splits["train"]["slides"])
+    Xva, yva = stack(splits["val"]["slides"])
+    clf = LogisticRegression(C=SURGEN_LR_C, max_iter=SURGEN_LR_MAX_ITER).fit(Xtr, ytr)
+    return float(roc_auc_score(yva, clf.predict_proba(Xva)[:, 1])), time.monotonic() - started_at
+
+
+def inline_crc_survival(model, mean, std, device, transform):
+    import io
+    import numpy as np
+    import pyarrow.parquet as pq
+    from PIL import Image
+    from sksurv.linear_model import CoxnetSurvivalAnalysis
+    from sksurv.metrics import concordance_index_censored
+
+    started_at = time.monotonic()
+    splits = json.loads((PROBE_DATA_SPLITS / "crc_survival.json").read_text())
+    needed = set(splits["train"]["slide_ids"]) | set(splits["val"]["slide_ids"])
+    tbl = pq.read_table(DATASET_ROOTS["crc_survival"] / "patches.parquet")
+    slide_col = tbl.column("slide_id").to_numpy(zero_copy_only=False)
+    keep = np.isin(slide_col, list(needed))
+    byts = [b.as_py() for b in tbl.column("image").filter(keep)]
+    sids = slide_col[keep]
+
+    class _Patches(torch.utils.data.Dataset):
+        def __len__(self): return len(byts)
+        def __getitem__(self, i): return transform(Image.open(io.BytesIO(byts[i])).convert("RGB"))
+
+    loader = torch.utils.data.DataLoader(_Patches(), batch_size=EMBED_BATCH_SIZE, num_workers=EMBED_NUM_WORKERS, pin_memory=True, shuffle=False)
+    autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    embs = []
+    with torch.no_grad():
+        for batch in loader:
+            x = batch.to(device, non_blocking=True)
+            with autocast:
+                embs.append(model.probe_features((x - mean) / std).float().cpu().numpy())
+    embs = np.concatenate(embs).astype(np.float32)
+    pooled = {}
+    for sid, vec in zip(sids, embs):
+        pooled.setdefault(sid, []).append(vec)
+    pooled = {sid: np.mean(np.stack(vs), axis=0) for sid, vs in pooled.items()}
+
+    def stack(split):
+        s = splits[split]
+        x = np.stack([pooled[sid] for sid in s["slide_ids"]])
+        y = np.array(list(zip([bool(e) for e in s["events"]], s["days"])), dtype=[("event", bool), ("days", float)])
+        return x, y
+
+    train_x, train_y = stack("train")
+    val_x, val_y = stack("val")
+    head = CoxnetSurvivalAnalysis(l1_ratio=CRC_SURVIVAL_COX_L1_RATIO, alphas=[CRC_SURVIVAL_COX_ALPHA], max_iter=100000, fit_baseline_model=True)
+    head.fit(train_x, train_y)
+    risk = head.predict(val_x)
+    return float(concordance_index_censored(val_y["event"], val_y["days"], risk)[0]), time.monotonic() - started_at
 
 
 # KNN probe over frozen embeddings; best k is selected on the validation split.
@@ -505,28 +780,37 @@ def inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels):
 # Worker entry point launched by queue_probe_job(); owns model loading and probe aggregation.
 def run_probe_job(request_path):
     from torchvision import transforms
-    from model import DinoV2ViT
+    from model import DinoV2ViT, load_hoptimus0_checkpoint, load_openmidnight_checkpoint
 
     probe_started_at = time.monotonic()
     request = json.loads(Path(request_path).read_text())
     classification = list(request["classification_datasets"])
     segmentation = list(request["segmentation_datasets"])
+    slide = list(request["slide_datasets"])
+    auc = list(request["auc_datasets"])
+    survival = list(request["survival_datasets"])
+    robustness = list(request["robustness_datasets"])
     print(
         f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
         f"start: {request['job_id']}  checkpoint: {request['checkpoint_path']}",
         flush=True,
     )
-    checkpoint = torch.load(request["checkpoint_path"], map_location="cpu", weights_only=False)
-    cfg = checkpoint["config"]
+    checkpoint = None if "config" in request else torch.load(request["checkpoint_path"], map_location="cpu", weights_only=False)
+    cfg = request["config"] if "config" in request else checkpoint["config"]
     DATASET_ROOTS.clear()
     DATASET_ROOTS.update({k: Path(v) for k, v in cfg["probe"]["dataset_roots"].items()})
-    # Recipes can compare live model weights or EMA weights without changing probe code.
-    state_key = {"ema": "model_ema", "model": "model"}[str(cfg["probe"]["model_weights"])]
-    model_state = checkpoint[state_key]
-    del checkpoint
     device = torch.device("cuda")
     model = DinoV2ViT(variant=cfg["model"]["type"]).to(device).eval()
-    model.load_state_dict(model_state, strict=True)
+    if cfg["model"]["type"] == "openmidnight_vitg14_reg":
+        load_openmidnight_checkpoint(model, request["checkpoint_path"])
+    elif cfg["model"]["type"] == "hoptimus0_vitg14_reg":
+        load_hoptimus0_checkpoint(model, request["checkpoint_path"])
+    else:
+        # Recipes can compare live model weights or EMA weights without changing probe code.
+        state_key = {"ema": "model_ema", "model": "model"}[str(cfg["probe"]["model_weights"])]
+        model.load_state_dict(checkpoint[state_key], strict=True)
+    del checkpoint
+    model.to(device)
     for param in model.parameters():
         param.requires_grad = False
     mean = torch.tensor(cfg["data"]["mean"], device=device).view(1, 3, 1, 1)
@@ -544,7 +828,7 @@ def run_probe_job(request_path):
     def run_segmentation():
         for dataset in segmentation:
             print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_seg_start: {dataset}", flush=True)
-            jaccard, seg_wall = inline_pannuke_jaccard(model, mean, std, device)
+            jaccard, seg_wall = SEGMENTATION_RUNNERS[dataset](model, mean, std, device)
             seg_jaccards[dataset] = jaccard
             print(
                 f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
@@ -555,13 +839,15 @@ def run_probe_job(request_path):
     seg_future = seg_executor.submit(run_segmentation) if seg_executor is not None else None
 
     inline_metrics = {}
-    for dataset in classification:
+    cls_and_slide = classification + slide
+    for dataset in cls_and_slide:
         # Classification probes share embeddings, then evaluate KNN, SimpleShot, and linear heads.
         embed_started = time.monotonic()
-        train_embs, train_labels = embed_classification_dataset(model, mean, std, dataset, "train", device, transform)
-        val_embs, val_labels = embed_classification_dataset(model, mean, std, dataset, "val", device, transform)
+        embed = embed_slide_dataset if dataset in slide else embed_classification_dataset
+        train_embs, train_labels = embed(model, mean, std, dataset, "train", device, transform)
+        val_embs, val_labels = embed(model, mean, std, dataset, "val", device, transform)
         knn_best_k, knn_best_f1, knn_all = inline_knn_val_f1(train_embs, train_labels, val_embs, val_labels, KNN_K_VALS)
-        fewshot_per_shot = inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels, FEWSHOT_SHOTS, FEWSHOT_TRIALS, FEWSHOT_SEED + CLASSIFICATION_DATASETS.index(dataset))
+        fewshot_per_shot = inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels, FEWSHOT_SHOTS, FEWSHOT_TRIALS, FEWSHOT_SEED + cls_and_slide.index(dataset))
         linear_f1 = inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels)
         inline_metrics[dataset] = {
             "linear_val_f1": linear_f1,
@@ -578,6 +864,32 @@ def run_probe_job(request_path):
             flush=True,
         )
 
+    auc_metrics = {}
+    for dataset in auc:
+        print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_auc_start: {dataset}", flush=True)
+        score, wall = {"surgen": inline_surgen_ras_auc}[dataset](model, mean, std, device, transform)
+        auc_metrics[dataset] = score
+        print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_auc_done: {dataset}  auc={score:.4f}  wall={wall:.2f}s", flush=True)
+
+    survival_metrics = {}
+    for dataset in survival:
+        print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_survival_start: {dataset}", flush=True)
+        score, wall = {"crc_survival": inline_crc_survival}[dataset](model, mean, std, device, transform)
+        survival_metrics[dataset] = score
+        print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_survival_done: {dataset}  cindex={score:.4f}  wall={wall:.2f}s", flush=True)
+
+    rob_indices = {}
+    for dataset in robustness:
+        print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_robustness_start: {dataset}", flush=True)
+        subset_indices, wall = {"pathorob": inline_pathorob}[dataset](model, mean, std, device, transform)
+        rob_indices[dataset] = {**subset_indices, "mean": float(sum(subset_indices.values()) / len(subset_indices))}
+        print(
+            f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
+            f"inline_robustness_done: {dataset}  {'  '.join(f'{k}={v:.4f}' for k, v in subset_indices.items())}  "
+            f"mean={rob_indices[dataset]['mean']:.4f}  wall={wall:.2f}s",
+            flush=True,
+        )
+
     if seg_future is not None:
         # .result() re-raises any exception from the segmentation thread so the probe job fails loudly.
         seg_future.result()
@@ -586,31 +898,62 @@ def run_probe_job(request_path):
     # Aggregate per-dataset metrics into the result file consumed by train.py.
     metrics = {}
     results = {}
-    for dataset in classification:
+    per_dataset_score = {}
+    for dataset in cls_and_slide:
         metrics[f"probe_{dataset}_linear_val_f1"] = inline_metrics[dataset]["linear_val_f1"]
         metrics[f"probe_{dataset}_knn_val_f1"] = inline_metrics[dataset]["knn_val_f1"]
         metrics[f"probe_{dataset}_fewshot_val_f1"] = inline_metrics[dataset]["fewshot_val_f1"]
+        per_dataset_score[dataset] = (
+            inline_metrics[dataset]["linear_val_f1"]
+            + inline_metrics[dataset]["knn_val_f1"]
+            + inline_metrics[dataset]["fewshot_val_f1"]
+        ) / 3.0
         results[dataset] = inline_metrics[dataset]
     for dataset in segmentation:
         metrics[f"probe_{dataset}_seg_val_jaccard"] = seg_jaccards[dataset]
+        per_dataset_score[dataset] = seg_jaccards[dataset]
         results[dataset] = {"seg_val_jaccard": seg_jaccards[dataset]}
+    for dataset in auc:
+        metrics[f"probe_{dataset}_val_auc"] = auc_metrics[dataset]
+        per_dataset_score[dataset] = auc_metrics[dataset]
+        results[dataset] = {"val_auc": auc_metrics[dataset]}
+    for dataset in survival:
+        metrics[f"probe_{dataset}_val_cindex"] = survival_metrics[dataset]
+        per_dataset_score[dataset] = survival_metrics[dataset]
+        results[dataset] = {"val_cindex": survival_metrics[dataset]}
+    for dataset in robustness:
+        for sub, idx in rob_indices[dataset].items():
+            if sub != "mean":
+                metrics[f"probe_{dataset}_{sub}_robustness_index"] = idx
+        metrics[f"probe_{dataset}_robustness_index"] = rob_indices[dataset]["mean"]
+        per_dataset_score[dataset] = rob_indices[dataset]["mean"]
+        results[dataset] = rob_indices[dataset]
+    for dataset, score in per_dataset_score.items():
+        metrics[f"probe_{dataset}_score"] = score
 
-    # Mean probe score is the main model-selection signal across classification and segmentation tasks.
-    if len(classification) > 0:
-        metrics["linear_mean_f1"] = sum(metrics[f"probe_{d}_linear_val_f1"] for d in classification) / len(classification)
-        metrics["knn_mean_f1"] = sum(metrics[f"probe_{d}_knn_val_f1"] for d in classification) / len(classification)
-        metrics["fewshot_mean_f1"] = sum(metrics[f"probe_{d}_fewshot_val_f1"] for d in classification) / len(classification)
-    if len(segmentation) > 0:
+    if cls_and_slide:
+        metrics["linear_mean_f1"] = sum(metrics[f"probe_{d}_linear_val_f1"] for d in cls_and_slide) / len(cls_and_slide)
+        metrics["knn_mean_f1"] = sum(metrics[f"probe_{d}_knn_val_f1"] for d in cls_and_slide) / len(cls_and_slide)
+        metrics["fewshot_mean_f1"] = sum(metrics[f"probe_{d}_fewshot_val_f1"] for d in cls_and_slide) / len(cls_and_slide)
+    if segmentation:
         metrics["seg_mean_jaccard"] = sum(metrics[f"probe_{d}_seg_val_jaccard"] for d in segmentation) / len(segmentation)
+    if auc:
+        metrics["auc_mean"] = sum(metrics[f"probe_{d}_val_auc"] for d in auc) / len(auc)
+    if survival:
+        metrics["survival_mean_cindex"] = sum(metrics[f"probe_{d}_val_cindex"] for d in survival) / len(survival)
+    if robustness:
+        metrics["robustness_mean"] = sum(metrics[f"probe_{d}_robustness_index"] for d in robustness) / len(robustness)
 
-    task_means = [metrics[k] for k in ("linear_mean_f1", "knn_mean_f1", "fewshot_mean_f1", "seg_mean_jaccard") if k in metrics]
-    metrics["mean_probe_score"] = sum(task_means) / len(task_means)
+    headline = [per_dataset_score[d] for d in MEAN_PROBE_DATASETS]
+    metrics["mean_probe_score"] = sum(headline) / len(headline)
 
     print(
         f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
         f"result: mean_probe_score={metrics['mean_probe_score']:.6f}  "
         f"linear={metrics.get('linear_mean_f1')}  knn={metrics.get('knn_mean_f1')}  "
         f"fewshot={metrics.get('fewshot_mean_f1')}  seg={metrics.get('seg_mean_jaccard')}  "
+        f"auc={metrics.get('auc_mean')}  survival={metrics.get('survival_mean_cindex')}  "
+        f"robustness={metrics.get('robustness_mean')}  "
         f"wall: {time.monotonic() - probe_started_at:.2f}s",
         flush=True,
     )
@@ -627,6 +970,10 @@ def run_probe_job(request_path):
                 "checkpoint_path": request["checkpoint_path"],
                 "classification_datasets": classification,
                 "segmentation_datasets": segmentation,
+                "slide_datasets": slide,
+                "auc_datasets": auc,
+                "survival_datasets": survival,
+                "robustness_datasets": robustness,
                 "metrics": metrics,
                 "results": results,
             },

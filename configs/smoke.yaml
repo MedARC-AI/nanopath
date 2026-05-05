@@ -61,17 +61,33 @@ probe:
   model_weights: ema
   count: 1
   datasets:
-    - bach
     - bracs
     - break_his
     - mhist
     - pcam
   segmentation_datasets:
     - pannuke
+    - monusac
+    - consep
+  slide_datasets:
+    - her2
+    - ucla_lung
+  auc_datasets:
+    - surgen
+  survival_datasets:
+    - crc_survival
+  robustness_datasets:
+    - pathorob
   dataset_roots:
-    bach: /block/eva-data/bach
     bracs: /block/eva-data/bracs
     break_his: /block/eva-data/breakhis
+    consep: /block/eva-data/consep
+    crc_survival: /data/crc-survival
+    her2: /data/her2-tumor-roi
     mhist: /block/eva-data/mhist
+    monusac: /block/eva-data/monusac
     pcam: /block/eva-data/patch_camelyon
     pannuke: /block/thunder-data/pannuke
+    pathorob: /block/pathorob
+    surgen: /data/surgen
+    ucla_lung: /data/ucla-lung
