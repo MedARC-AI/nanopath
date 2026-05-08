@@ -23,7 +23,13 @@ The official test H5 files may be downloaded for completeness, but `probe.py` ne
 
 ## Implementation
 
-`ClassificationDataset(..., dataset="pcam")` samples fixed train and validation subsets with `PCAM_SUBSET_SEED = 1337`, embeds those images, and runs the same linear / KNN / SimpleShot probe heads as the other tile classifiers.
+`ClassificationDataset(..., dataset="pcam")` samples fixed train and validation subsets with `PCAM_SUBSET_SEED = 1337`, embeds those images, and fits three heads on cached embeddings:
+
+- AdamW linear probe: LR ∈ {1e-3, 1e-4, 1e-5}, weight decay 1e-4, batch size 64, 200 epochs; report the best val macro F1 across all LR × epoch checkpoints
+- cosine KNN: k ∈ {1, 3, 5, 10, 20, 30, 40, 50}, k selected by val F1
+- SimpleShot few-shot: shots ∈ {1, 2, 4, 8, 16}, 500 random support-set trials per shot with per-example majority vote; the few-shot scalar is the mean val F1 across shots
+
+The dataset score is the mean of the three validation macro F1 scores.
 
 ## Difference From Original Usage
 

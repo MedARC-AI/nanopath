@@ -27,7 +27,13 @@ Only train and val are read by `probe.py`. Train and val are a deterministic spl
 
 ## Implementation
 
-The probe embeds MHIST RGB images with the frozen backbone, then runs the same linear / KNN / SimpleShot heads as the other tile classifiers. The dataset score is the mean validation macro F1 across those three heads.
+The probe embeds MHIST RGB images with the frozen backbone, then fits three heads on cached embeddings:
+
+- AdamW linear probe: LR ∈ {1e-3, 1e-4, 1e-5}, weight decay 1e-4, batch size 64, 200 epochs; report the best val macro F1 across all LR × epoch checkpoints
+- cosine KNN: k ∈ {1, 3, 5, 10, 20, 30, 40, 50}, k selected by val F1
+- SimpleShot few-shot: shots ∈ {1, 2, 4, 8, 16}, 500 random support-set trials per shot with per-example majority vote; the few-shot scalar is the mean val F1 across shots
+
+The dataset score is the mean of the three validation macro F1 scores.
 
 ## Difference From Original Usage
 

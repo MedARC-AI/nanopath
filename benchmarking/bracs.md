@@ -26,9 +26,9 @@ Only train and val are read by `probe.py`. The seven labels follow the BRACS ROI
 
 The image adapter reads relative PNG paths from `benchmarking/bracs.json`. Frozen embeddings are reused for:
 
-- AdamW linear probe
-- cosine KNN
-- SimpleShot few-shot probe
+- AdamW linear probe: LR ∈ {1e-3, 1e-4, 1e-5}, weight decay 1e-4, batch size 64, 200 epochs; report the best val macro F1 across all LR × epoch checkpoints
+- cosine KNN: k ∈ {1, 3, 5, 10, 20, 30, 40, 50}, k selected by val F1
+- SimpleShot few-shot: shots ∈ {1, 2, 4, 8, 16}, 500 random support-set trials per shot with per-example majority vote; the few-shot scalar is the mean val F1 across shots
 
 The dataset score is the mean of the three validation macro F1 scores.
 

@@ -25,7 +25,7 @@ Only train and val are read by `probe.py`.
 
 ## Implementation
 
-`prepare.py` downloads fold-0 train NDPIs and extracts a deterministic 20x, 512 px, 0-overlap tissue grid into per-slide parquet caches, then concatenates those rows into `tiles.parquet`. A `pathobench_20x_512_v1` marker makes older capped or differently tiled caches fail verification and regenerate. `probe.py` embeds every cached tile once with a no-crop square resize, mean-pools tile embeddings per slide, then sweeps a balanced logistic linear probe across the three slide folds and reports AUROC.
+`prepare.py` downloads fold-0 train NDPIs and extracts a deterministic 20x, 512 px, 0-overlap tissue grid into per-slide parquet caches, then concatenates those rows into `tiles.parquet`. A `pathobench_20x_512_v1` marker makes older capped or differently tiled caches fail verification and regenerate. `probe.py` embeds every cached tile once with a no-crop square resize, mean-pools tile embeddings per slide, then for each fold fits a balanced logistic linear probe (`sklearn.linear_model.LogisticRegression`, `class_weight="balanced"`, `max_iter=5000`) over `C ∈ {0.001, 0.01, 0.1, 0.5, 1.0, 10.0, 100.0}`, averages val AUROC across the three folds at each `C`, and reports the best mean.
 
 ## Difference From Original Usage
 
