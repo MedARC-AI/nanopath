@@ -28,9 +28,9 @@ This is not the full 8-subtype, all-magnification BreaKHis task. Following the E
 
 `probe.py` loads relative image paths from `benchmarking/break_his.json`, embeds each RGB image with the frozen backbone after resize-256 / center-crop-224 preprocessing, and fits three heads on cached embeddings:
 
-- AdamW linear classifier with LR sweep over `1e-3`, `1e-4`, `1e-5`
-- cosine KNN with validation-selected `k`
-- SimpleShot-style few-shot classifier over 1, 2, 4, 8, and 16 shots
+- AdamW linear probe: LR ∈ {1e-3, 1e-4, 1e-5}, weight decay 1e-4, batch size 64, 200 epochs; report the best val macro F1 across all LR × epoch checkpoints
+- cosine KNN: k ∈ {1, 3, 5, 10, 20, 30, 40, 50}, k selected by val F1
+- SimpleShot few-shot: shots ∈ {1, 2, 4, 8, 16}, 500 random support-set trials per shot with per-example majority vote; the few-shot scalar is the mean val F1 across shots
 
 The dataset score is `mean(linear_val_f1, knn_val_f1, fewshot_val_f1)`.
 

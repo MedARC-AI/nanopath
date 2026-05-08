@@ -22,7 +22,7 @@ PathoBench fold 0 has 68 train slides and 17 test slides. Nanopath runs determin
 
 ## Implementation
 
-`prepare.py` downloads the PathDB SVS files named by `her2.json`, extracts a full deterministic 20x, 512 px, 0-overlap tissue grid into `root/tiles/<slide_id>/*.jpg`, and keeps raw slides under `root/raw` for resumable setup. `probe.py` embeds every cached tile once with a no-crop square resize, mean-pools tile embeddings per slide, then sweeps a balanced logistic linear probe across the three slide folds and reports AUROC.
+`prepare.py` downloads the PathDB SVS files named by `her2.json`, extracts a full deterministic 20x, 512 px, 0-overlap tissue grid into `root/tiles/<slide_id>/*.jpg`, and keeps raw slides under `root/raw` for resumable setup. `probe.py` embeds every cached tile once with a no-crop square resize, mean-pools tile embeddings per slide, then for each fold fits a balanced logistic linear probe (`sklearn.linear_model.LogisticRegression`, `class_weight="balanced"`, `max_iter=5000`) over `C ∈ {0.001, 0.01, 0.1, 0.5, 1.0, 10.0, 100.0}`, averages val AUROC across the three folds at each `C`, and reports the best mean.
 
 ## Difference From Original Usage
 

@@ -65,10 +65,10 @@ The dominant bottlenecks are PanNuke segmentation, HER2/UCLA tile embedding, BRA
 
 | dataset | task | tissue / organ | train units | val units | train tiles/images | val tiles/images | H-optimus time | source | Nanopath adaptation |
 |---|---|---|---:|---:|---:|---:|---:|---|---|
-| `break_his` | tile classification | breast | 936 images | 196 images | 936 | 196 | 20.6s | BreaKHis 40X / EVA-Thunder | Patient-disjoint 4-subtype 40X split; no test scoring |
-| `bracs` | ROI classification | breast | 3657 images | 312 images | 3657 | 312 | 184.9s | BRACS ROI FTP | Frozen-embedding linear/KNN/few-shot; no official test scoring |
-| `mhist` | tile classification | colorectal polyps | 1743 images | 432 images | 1743 | 432 | 28.3s | MHIST | Official train partition split internally; official test not read |
-| `pcam` | tile classification | lymph node metastasis | 3072 images | 768 images | 3072 | 768 | 63.9s | PCam Zenodo | Fixed train/valid subset; official test not read |
+| `break_his` | tile classification (~700×460 microscope captures) | breast | 936 images | 196 images | 936 | 196 | 20.6s | BreaKHis 40X / EVA-Thunder | Patient-disjoint 4-subtype 40X split; no test scoring |
+| `bracs` | ROI classification (variable-size WSI crops) | breast | 3657 ROIs | 312 ROIs | 3657 | 312 | 184.9s | BRACS ROI FTP | Frozen-embedding linear/KNN/few-shot; no official test scoring |
+| `mhist` | tile classification (224 px patches) | colorectal polyps | 1743 images | 432 images | 1743 | 432 | 28.3s | MHIST | Official train partition split internally; official test not read |
+| `pcam` | tile classification (96 px patches) | lymph node metastasis | 3072 images | 768 images | 3072 | 768 | 63.9s | PCam Zenodo | Fixed train/valid subset; official test not read |
 | `monusac` | segmentation | multi-organ nuclei | ~31 slides/fold | ~15 slides/fold | 209 total images | 3 folds | 88.6s | MoNuSAC train set | Deterministic 3-fold slide split of train package; no test data |
 | `consep` | segmentation | colorectal nuclei | 18 ROIs/fold | 9 ROIs/fold | 27 total images | 3 folds | 17.4s | CoNSeP | Deterministic 3-fold split of official Train folder; Test folder not read |
 | `pannuke` | segmentation | multi-organ nuclei | Fold1 | Fold2 | 2656 images | 2523 images | 428.8s | PanNuke folds | Fixed Fold1/Fold2 protocol; Fold3 not scored |
