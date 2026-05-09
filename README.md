@@ -4,7 +4,7 @@
 
 `nanopath` is a super lean experimental harness for training tile-level computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). It runs on a single GPU, the code is minimal/hackable, and covers the full pretraining pipeline using the public TCGA dataset (12k WSIs) and built-in downstream probes spanning classification, segmentation, slide-level mutation/response, survival, and robustness.
 
-This repository is intentionally made to be compatible with [autoresearch](https://github.com/karpathy/autoresearch)-style pursuits. We will continuously update our codebase and [Leaderboard](#leaderboard) to reflect the best performing model. The maintained training recipe (`configs/leader.yaml`) targets a single-H100 run with the 12-dataset downstream probe suite evaluated at the end; exact wall time needs remeasurement after the latest slide-probe retile.
+This repository is intentionally made to be compatible with [autoresearch](https://github.com/karpathy/autoresearch)-style pursuits. We will continuously update our codebase and [Leaderboard](#leaderboard) to reflect the best performing model. The maintained training recipe (`configs/leader.yaml`) targets a single-H100 run with the 12-dataset downstream probe suite evaluated at the end; after the uncapped PathoBench-style retile, the final probe wall is about 31 minutes for DINOv2-S and about 50 minutes for ViT-G baselines.
 
 **Want to get involved? Join us in the [MedARC Discord](https://discord.gg/tVR4TWnRM9) (find us in #path-fm)!**
 
@@ -20,8 +20,8 @@ wandb login
 # MedARC cluster: verify the shared parquet/probe roots + DINOv2 weights
 python prepare.py configs/smoke.yaml download=False
 # Off-cluster: edit dataset paths in the YAML first, then fetch data + weights.
-# Some raw probe sources are large; MHIST/CoNSeP use our HF probe mirror
-# and print upstream access-term notices before fetching.
+# Some raw probe sources are large; MHIST/CoNSeP/SurGen use our HF probe mirror
+# and print upstream access-term/provenance notices before fetching.
 # python prepare.py configs/smoke.yaml download=True
 
 # smoke test: short training plus the full configured probe suite
@@ -45,13 +45,13 @@ A successful model training prints periodic train lines, logs to wandb, and ends
 
 ![Nanopath progress plot](imgs/progress_plot.png)
 
-Score is final `mean_probe_score`: the unweighted mean of the 12 dataset columns below. Tile classification datasets use the mean of linear / KNN / SimpleShot F1; PathoBench-derived slide classification datasets use balanced logistic linear-probe AUROC; segmentation datasets use macro Jaccard; SurGen uses AUROC; CRC survival uses Harrell's c-index; and PathoROB uses its robustness index. Historical six-probe rows were removed because they are not comparable to the current expanded benchmark. The baseline rows below are now stale because slide/survival/robustness probes were tightened to uncapped PathoBench-style tissue grids and no-crop patch evaluation after those runs. See `benchmarking/` for the full benchmark notes and test-split policy.
+Score is final `mean_probe_score`: the unweighted mean of the 12 dataset columns below. Tile classification datasets use the mean of linear / KNN / SimpleShot F1; PathoBench-derived slide classification datasets use balanced logistic linear-probe AUROC; segmentation datasets use macro Jaccard; SurGen uses AUROC; CRC survival uses Harrell's c-index; and PathoROB uses its robustness index. Historical six-probe rows were removed because they are not comparable to the current expanded benchmark. See `benchmarking/` for the full benchmark notes and test-split policy.
 
 | # | mean | break_his | bracs | mhist | pcam | monusac | consep | pannuke | her2 | ucla_lung | surgen | crc_survival | pathorob | Description | wandb | Date | Contributors |
 |---|-----:|----------:|------:|------:|-----:|--------:|-------:|--------:|-----:|----------:|-------:|-------------:|---------:|-------------|-------|------|--------------|
-| 1 | **stale: 0.6130** | 0.7490 | 0.5534 | 0.7516 | 0.8830 | 0.3313 | 0.2218 | 0.4131 | 0.7570 | 0.6373 | 0.6500 | 0.5292 | 0.8791 | Untouched H-optimus-0 ViT-G/14-reg baseline before the uncapped PathoBench retile (`baselines/hoptimus0_baseline.py`) | n/a | May 8 2026 | Bioptimus |
-| 2 | stale: 0.5654 | 0.5241 | 0.4867 | 0.7566 | 0.7888 | 0.3033 | 0.2255 | 0.4046 | 0.7510 | 0.6455 | 0.5998 | 0.5820 | 0.7176 | Untouched OpenMidnight ViT-G/14-reg baseline before the uncapped PathoBench retile (`baselines/openmidnight_baseline.py`) | n/a | May 8 2026 | @PaulScotti |
-| 3 | stale: 0.5497 | 0.4967 | 0.4942 | 0.7610 | 0.7836 | 0.2470 | 0.2117 | 0.3604 | 0.7265 | 0.6078 | 0.6230 | 0.5378 | 0.7466 | Untouched Meta `dinov2_vits14_reg` baseline before the uncapped PathoBench retile (`baselines/dinov2_small_baseline.py`) | n/a | May 8 2026 | @tmabraham |
+| 1 | **0.6209** | 0.7490 | 0.5534 | 0.7516 | 0.8830 | 0.3349 | 0.2218 | 0.4153 | 0.7692 | 0.7004 | 0.6487 | 0.5313 | 0.8926 | Untouched H-optimus-0 ViT-G/14-reg baseline (`baselines/hoptimus0_baseline.py`) | n/a | May 9 2026 | Bioptimus |
+| 2 | 0.5681 | 0.5241 | 0.4867 | 0.7566 | 0.7888 | 0.2994 | 0.2255 | 0.4005 | 0.7348 | 0.6993 | 0.5990 | 0.5583 | 0.7438 | Untouched OpenMidnight ViT-G/14-reg baseline (`baselines/openmidnight_baseline.py`) | n/a | May 9 2026 | @PaulScotti |
+| 3 | 0.5454 | 0.4967 | 0.4942 | 0.7610 | 0.7836 | 0.2367 | 0.2042 | 0.3607 | 0.7407 | 0.5827 | 0.6079 | 0.5221 | 0.7543 | Untouched Meta `dinov2_vits14_reg` baseline (`baselines/dinov2_small_baseline.py`) | n/a | May 9 2026 | @tmabraham |
 
 ### How to submit to the leaderboard
 
@@ -68,7 +68,7 @@ Anything not explicitly fixed below (e.g., model architecture, training objectiv
 Every leaderboard run is verified on the organizer's compute (1 80GB H100 gpu), bounded by two possible caps:
 
 - **`train.max_train_flops` ≤ 1e18 training FLOPs**, measured directly from aten op shapes via `torch.utils.flop_counter.FlopCounterMode` on the first step (forward + backward + opt.step) and reused thereafter since per-step shapes are fixed. This counts everything that touches the GPU during a step — student backbone, EMA teacher forward, projection heads, masking, etc. — not just the backbone.
-- **≤45 min. training on a single 80 GB H100 before the final probe window**, enforced by SLURM. `submit/train_1gpu.sbatch` runs with `--signal=USR1@900`, so SLURM sends `SIGUSR1` 15 minutes before the `--time` wall; `train.py`'s SIGUSR1 handler catches it as a clean stop signal, cuts training, and uses the remaining window for the final checkpoint save + downstream probe suite. The final probe window is being remeasured after the uncapped PathoBench-style retile.
+- **≤45 min. training on a single 80 GB H100 before the final probe window**, enforced by SLURM. `submit/train_1gpu.sbatch` runs with `--signal=USR1@900`, so SLURM sends `SIGUSR1` 15 minutes before the `--time` wall; `train.py`'s SIGUSR1 handler catches it as a clean stop signal, cuts training, and uses the remaining window for the final checkpoint save + downstream probe suite. The current full-grid final probe is ~31 minutes for DINOv2-S and ~50 minutes for ViT-G baselines, dominated by SurGen.
 
 The above limits force submissions to be **simultaneously compute efficient and systems efficient**.
 
@@ -126,7 +126,7 @@ python prepare.py configs/leader.yaml download=False
 
 **Prerequisites**
 - ~120 GB free wherever `data.dataset_dir` lives for the parquet shards (cluster default: `/data/nanopath_parquet`).
-- Probe data disk varies by suite: the checked-in cluster paths are shared; off-cluster, expect large one-time downloads and preprocessing for PanNuke, UCLA Lung, HER2, CRC survival, and MoNuSAC. SurGen's official CZI regeneration path is multi-hour, so normal setup pulls our pre-extracted HF parquet cache instead. Reruns skip already-populated roots.
+- Probe data disk varies by suite: the checked-in cluster paths are shared; off-cluster, expect large one-time downloads and preprocessing for PanNuke, UCLA Lung, HER2, CRC survival, and MoNuSAC. SurGen's official CZI regeneration path is multi-hour, so normal setup pulls our pre-extracted ~102 GB HF parquet cache instead. Reruns skip already-populated roots.
 - ~330 MB free under `~/.cache/torch/hub/checkpoints/` for DINOv2 weights.
 - `wget` on PATH for the BRACS FTP mirror. Python-side WSI/probe dependencies are installed by `uv sync`.
 
@@ -158,7 +158,7 @@ To publish a new variant of the dataset, push the resulting shards to a fresh HF
 
 ## Running
 
-Smoke (single GPU, short training plus the full probe suite, validates the train+probe path; H100 probe wall needs remeasurement after the uncapped slide-task retile):
+Smoke (single GPU, short training plus the full probe suite, validates the train+probe path; H100 probe wall is ~31-50 minutes for the remeasured baselines):
 
 ```bash
 sbatch submit/train_1gpu.sbatch configs/smoke.yaml

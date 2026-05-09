@@ -37,6 +37,6 @@ The original PathoROB benchmark includes multiple robustness settings. Nanopath 
 
 | model | wall |
 |---|---:|
-| DINOv2-S | remeasure |
-| OpenMidnight | remeasure |
-| H-optimus-0 | remeasure |
+| DINOv2-S | 69.9s |
+| OpenMidnight | 101.4s |
+| H-optimus-0 | 99.4s |

@@ -41,42 +41,42 @@ The full suite is designed for the final H100 probe window for the standard smal
 - The same loaded frozen backbone serves every probe in one subprocess, avoiding repeated model load overhead.
 - Test splits are not read by `probe.py`, which keeps the benchmark iterative and avoids consuming official test labels during model development.
 
-Recent H100 timings from the untouched baselines. Slide, survival, and robustness rows marked `remeasure` changed after the uncapped PathoBench-style retile and no-crop patch transform, so the previous leaderboard rows are stale until those baselines are rerun. Wall time varies with concurrent jobs and OS page cache.
+Recent H100 timings from the untouched baselines after the uncapped PathoBench-style retile and no-crop patch transform. Wall time varies with concurrent jobs and OS page cache.
 
 | dataset | DINOv2-S | OpenMidnight | H-optimus-0 |
 |---|---:|---:|---:|
-| `bracs` | 209.8s | 185.9s | 184.9s |
-| `break_his` | 24.7s | 21.1s | 20.6s |
-| `mhist` | 18.4s | 29.1s | 28.3s |
-| `pcam` | 42.8s | 60.4s | 63.9s |
-| `pannuke` | 262.6s | 517.8s | 428.8s |
-| `monusac` | 24.9s | 90.9s | 88.6s |
-| `consep` | 5.8s | 17.5s | 17.4s |
-| `her2` | remeasure | remeasure | remeasure |
-| `ucla_lung` | remeasure | remeasure | remeasure |
-| `surgen` | remeasure | remeasure | remeasure |
-| `crc_survival` | remeasure | remeasure | remeasure |
-| `pathorob` | remeasure | remeasure | remeasure |
-| **probe wall** | **remeasure** | **remeasure** | **remeasure** |
+| `bracs` | 165.9s | 160.1s | 169.5s |
+| `break_his` | 18.8s | 19.7s | 19.4s |
+| `mhist` | 13.1s | 28.4s | 26.9s |
+| `pcam` | 25.8s | 52.3s | 51.6s |
+| `pannuke` | 160.1s | 296.8s | 284.2s |
+| `monusac` | 23.8s | 86.9s | 87.2s |
+| `consep` | 5.0s | 16.9s | 17.2s |
+| `her2` | 64.2s | 81.6s | 80.4s |
+| `ucla_lung` | 26.2s | 64.2s | 60.2s |
+| `surgen` | 1267.6s | 2239.0s | 2201.9s |
+| `crc_survival` | 191.6s | 274.9s | 275.5s |
+| `pathorob` | 69.9s | 101.4s | 99.4s |
+| **probe wall** | **1844.1s** | **3033.4s** | **2996.0s** |
 
-The dominant bottlenecks are PanNuke segmentation, HER2/UCLA tile embedding, BRACS head fitting, and SurGen slide embedding. PanNuke is expensive but partially hidden by overlap; BRACS, HER2, UCLA Lung, SurGen, CRC survival, and PathoROB sit on the main sequential path.
+The dominant bottleneck is SurGen slide embedding from the uncapped 1.17M-tile cache. PanNuke segmentation, BRACS fitting, CRC survival, PathoROB, HER2, and UCLA Lung are secondary; several of these overlap, but SurGen, CRC survival, and PathoROB sit on the main sequential path.
 
 ## Dataset Summary
 
 | dataset | task | tissue / organ | train units | val units | train tiles/images | val tiles/images | H-optimus time | source | Nanopath adaptation |
 |---|---|---|---:|---:|---:|---:|---:|---|---|
-| `break_his` | tile classification (~700×460 microscope captures) | breast | 936 images | 196 images | 936 | 196 | 20.6s | BreaKHis 40X / EVA-Thunder | Patient-disjoint 4-subtype 40X split; no test scoring |
-| `bracs` | ROI classification (variable-size WSI crops) | breast | 3657 ROIs | 312 ROIs | 3657 | 312 | 184.9s | BRACS ROI FTP | Frozen-embedding linear/KNN/few-shot; no official test scoring |
-| `mhist` | tile classification (224 px patches) | colorectal polyps | 1743 images | 432 images | 1743 | 432 | 28.3s | MHIST | Official train partition split internally; official test not read |
-| `pcam` | tile classification (96 px patches) | lymph node metastasis | 3072 images | 768 images | 3072 | 768 | 63.9s | PCam Zenodo | Fixed train/valid subset; official test not read |
-| `monusac` | segmentation | multi-organ nuclei | ~31 slides/fold | ~15 slides/fold | 209 total images | 3 folds | 88.6s | MoNuSAC train set | Deterministic 3-fold slide split of train package; no test data |
-| `consep` | segmentation | colorectal nuclei | 18 ROIs/fold | 9 ROIs/fold | 27 total images | 3 folds | 17.4s | CoNSeP | Deterministic 3-fold split of official Train folder; Test folder not read |
-| `pannuke` | segmentation | multi-organ nuclei | Fold1 | Fold2 | 2656 images | 2523 images | 428.8s | PanNuke folds | Fixed Fold1/Fold2 protocol; Fold3 not scored |
-| `her2` | slide response classification | breast | ~45 slides/fold | ~23 slides/fold | full 20x/512 grid | 3 folds | remeasure | PathoBench `herroi/response` / HER2-Tumor-ROIs | 3-fold balanced logistic AUROC over fold-0 train using all cached tiles; 17-slide test fold held out |
-| `ucla_lung` | slide progression classification | lung | 60 slides/fold | 30 slides/fold | full 20x/512 grid | 3 folds | remeasure | PathoBench `ucla_lung/progression_regression` / IDR idr0082 | 3-fold balanced logistic AUROC over fold-0 train using the full tissue grid; 22-slide test fold held out |
-| `surgen` | mutation classification | colorectal | ~207 slides/fold | ~104 slides/fold | full 20x/512 grid | 3 folds | remeasure | PathoBench SR386 / SurGen, mirrored as pre-extracted HF parquet | 3-fold validation over PathoBench fold-0 train; fold-0 test sealed |
-| `crc_survival` | survival | colorectal | ~91 slides/fold | ~45 slides/fold | full 20x/512 grid | 3 folds | remeasure | PathoBench PFS_VALENTINO / BioStudies | 3-fold Coxnet `l1_ratio={0.5,1.0}`, `alpha={0.03,0.1}` validation over fold-0 train; PathoBench test held out |
-| `pathorob` | robustness | breast lymph node + esophagus | n/a | n/a | 22402 + 16300 patches | n/a | remeasure | PathoROB HF datasets | Robustness index over camelyon/tolkach_esca; TCGA subset excluded |
+| `break_his` | tile classification (~700×460 microscope captures) | breast | 936 images | 196 images | 936 | 196 | 19.4s | BreaKHis 40X / EVA-Thunder | Patient-disjoint 4-subtype 40X split; no test scoring |
+| `bracs` | ROI classification (variable-size WSI crops) | breast | 3657 ROIs | 312 ROIs | 3657 | 312 | 169.5s | BRACS ROI FTP | Frozen-embedding linear/KNN/few-shot; no official test scoring |
+| `mhist` | tile classification (224 px patches) | colorectal polyps | 1743 images | 432 images | 1743 | 432 | 26.9s | MHIST | Official train partition split internally; official test not read |
+| `pcam` | tile classification (96 px patches) | lymph node metastasis | 3072 images | 768 images | 3072 | 768 | 51.6s | PCam Zenodo | Fixed train/valid subset; official test not read |
+| `monusac` | segmentation | multi-organ nuclei | ~31 slides/fold | ~15 slides/fold | 209 total images | 3 folds | 87.2s | MoNuSAC train set | Deterministic 3-fold slide split of train package; no test data |
+| `consep` | segmentation | colorectal nuclei | 18 ROIs/fold | 9 ROIs/fold | 27 total images | 3 folds | 17.2s | CoNSeP | Deterministic 3-fold split of official Train folder; Test folder not read |
+| `pannuke` | segmentation | multi-organ nuclei | Fold1 | Fold2 | 2656 images | 2523 images | 284.2s | PanNuke folds | Fixed Fold1/Fold2 protocol; Fold3 not scored |
+| `her2` | slide response classification | breast | ~45 slides/fold | ~23 slides/fold | full 20x/512 grid | 3 folds | 80.4s | PathoBench `herroi/response` / HER2-Tumor-ROIs | 3-fold balanced logistic AUROC over fold-0 train using all cached tiles; 17-slide test fold held out |
+| `ucla_lung` | slide progression classification | lung | 60 slides/fold | 30 slides/fold | full 20x/512 grid | 3 folds | 60.2s | PathoBench `ucla_lung/progression_regression` / IDR idr0082 | 3-fold balanced logistic AUROC over fold-0 train using the full tissue grid; 22-slide test fold held out |
+| `surgen` | mutation classification | colorectal | ~207 slides/fold | ~104 slides/fold | 1,167,089 cached tiles | 3 folds | 2201.9s | PathoBench SR386 / SurGen, mirrored as pre-extracted HF parquet | 3-fold validation over PathoBench fold-0 train; fold-0 test sealed |
+| `crc_survival` | survival | colorectal | ~91 slides/fold | ~45 slides/fold | full 20x/512 grid | 3 folds | 275.5s | PathoBench PFS_VALENTINO / BioStudies | 3-fold Coxnet `l1_ratio={0.5,1.0}`, `alpha={0.03,0.1}` validation over fold-0 train; PathoBench test held out |
+| `pathorob` | robustness | breast lymph node + esophagus | n/a | n/a | 22402 + 16300 patches | n/a | 99.4s | PathoROB HF datasets | Robustness index over camelyon/tolkach_esca; TCGA subset excluded |
 
 ## Files
 

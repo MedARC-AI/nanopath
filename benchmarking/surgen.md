@@ -21,7 +21,7 @@ wildtype = PathoBench ras_mutant_binary label 0
 
 | split | slides | labels | cached tiles |
 |---|---:|---|---:|
-| train pool | 311 | 201 wildtype / 110 mutated | full 20x/512 tissue grid |
+| train pool | 311 | 201 wildtype / 110 mutated | 1,167,089 |
 | per-fold train | 207-208 | reused | reused |
 | per-fold val | 103-104 | reused | reused |
 | test | 78 | 50 wildtype / 28 mutated | 0 |
@@ -30,7 +30,7 @@ Only train and val are read by `probe.py`.
 
 ## Implementation
 
-`prepare.py` normally downloads the canonical pre-extracted cache from `medarc/nanopath`: `data/surgen-*.parquet`, `labels.csv`, and `tiling_version.txt`. The local regeneration helper `fetch_surgen_from_official_sources()` streams each fold-0 train CZI, extracts a full deterministic 20x, 512 px, 0-overlap tissue grid, writes one resumable parquet under `slides/` per WSI, then concatenates the slide parquets into the HF-mirrored parquet shards. `probe.py` embeds the cached tiles once with a no-crop square resize, mean-pools embeddings by slide, sweeps `sklearn.linear_model.LogisticRegression` over `C={0.001,0.01,0.1,1,10,100}` across the three folds, and reports mean validation AUROC at the best mean `C`. The sweep keeps this small-slide, high-dimensional probe from depending too much on one regularization setting.
+`prepare.py` normally downloads the canonical pre-extracted cache from `medarc/nanopath`: 16 `data/surgen-*.parquet` shards, `labels.csv`, and `tiling_version.txt` totaling about 102 GiB. The local regeneration helper `fetch_surgen_from_official_sources()` streams each fold-0 train CZI, extracts a full deterministic 20x, 512 px, 0-overlap tissue grid, writes one resumable parquet under `slides/` per WSI, then concatenates the slide parquets into the HF-mirrored parquet shards. `probe.py` embeds the cached tiles once with a no-crop square resize, mean-pools embeddings by slide, sweeps `sklearn.linear_model.LogisticRegression` over `C={0.001,0.01,0.1,1,10,100}` across the three folds, and reports mean validation AUROC at the best mean `C`. The sweep keeps this small-slide, high-dimensional probe from depending too much on one regularization setting.
 
 ## Difference From Original Usage
 
@@ -40,10 +40,8 @@ The HF cache is not a new data source or a changed protocol; it is the output of
 
 ## Runtime
 
-SurGen must be remeasured after the full-grid retile and no-crop slide transform.
-
 | model | wall |
 |---|---:|
-| DINOv2-S | remeasure |
-| OpenMidnight | remeasure |
-| H-optimus-0 | remeasure |
+| DINOv2-S | 1267.6s |
+| OpenMidnight | 2239.0s |
+| H-optimus-0 | 2201.9s |

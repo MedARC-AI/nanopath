@@ -35,6 +35,6 @@ PathoBench reports macro one-vs-rest AUROC for this task; with fold 0's two-clas
 
 | model | wall |
 |---|---:|
-| DINOv2-S | remeasure |
-| OpenMidnight | remeasure |
-| H-optimus-0 | remeasure |
+| DINOv2-S | 26.2s |
+| OpenMidnight | 64.2s |
+| H-optimus-0 | 60.2s |

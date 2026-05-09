@@ -29,10 +29,8 @@ PathoBench's survival tasks report Harrell's c-index, so Nanopath's Coxnet-sweep
 
 ## Runtime
 
-CRC survival must be remeasured after the full-grid retile and no-crop slide transform.
-
 | model | wall |
 |---|---:|
-| DINOv2-S | remeasure |
-| OpenMidnight | remeasure |
-| H-optimus-0 | remeasure |
+| DINOv2-S | 191.6s |
+| OpenMidnight | 274.9s |
+| H-optimus-0 | 275.5s |

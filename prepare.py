@@ -273,11 +273,11 @@ def http_download(url, dst):
     tmp = dst.with_name(dst.name + ".part")
     expected = None
     while expected is None or tmp.stat().st_size < expected:
-        offset = tmp.stat().st_size if tmp.exists() else 0
-        headers = {"User-Agent": "nanopath", **({"Range": f"bytes={offset}-"} if offset else {})}
-        req = urllib.request.Request(url, headers=headers)
-        before = offset
+        before = tmp.stat().st_size if tmp.exists() else 0
         for attempt in range(20):
+            offset = tmp.stat().st_size if tmp.exists() else 0
+            headers = {"User-Agent": "nanopath", **({"Range": f"bytes={offset}-"} if offset else {})}
+            req = urllib.request.Request(url, headers=headers)
             try:
                 with urllib.request.urlopen(req, timeout=120) as r:
                     resumed = bool(r.headers.get("Content-Range"))
@@ -502,9 +502,9 @@ def fetch_her2(root):
     version.chmod(0o664)
 
 
-# PathoBench SR386 RAS mutation probe. We stream CZI files from the
-# official EBI BioStudies FTP mirror, extract the full 20x/512 tissue grid,
-# then delete raw CZI.
+# PathoBench SR386 RAS mutation probe. Normal setup pulls our pre-extracted
+# HF parquet mirror; this official-source path rebuilds that mirror by streaming
+# CZI files, caching one parquet per slide, then deleting raw CZI.
 SURGEN_EBI_BASE = "https://ftp.ebi.ac.uk/biostudies/fire/S-BIAD/285/S-BIAD1285/Files/SR386_WSIs"
 SURGEN_TILING_VERSION = PATHOBENCH_TILING_VERSION
 SURGEN_THUMB_SCALE = 0.01
@@ -566,10 +566,12 @@ def fetch_surgen(root):
     (root / "data").mkdir(parents=True, exist_ok=True)
     snapshot_download(repo_id=HF_REPO_ID, repo_type="dataset", local_dir=str(root), allow_patterns=["probes/surgen/*"], max_workers=workers)
     src = root / HF_PROBE_PREFIX / "surgen"
+    for f in (root / "data").glob("surgen-*.parquet"):
+        f.unlink()
     for f in sorted(src.glob("surgen-*.parquet")):
-        shutil.move(str(f), root / "data" / f.name)
-    shutil.move(str(src / "labels.csv"), root / "labels.csv")
-    shutil.move(str(src / "tiling_version.txt"), root / "tiling_version.txt")
+        os.replace(f, root / "data" / f.name)
+    os.replace(src / "labels.csv", root / "labels.csv")
+    os.replace(src / "tiling_version.txt", root / "tiling_version.txt")
     shutil.rmtree(root / HF_PROBE_PREFIX)
 
 
@@ -601,7 +603,10 @@ def fetch_surgen_from_official_sources(root):
     chunk = (len(cohort) + SURGEN_HF_SHARDS - 1) // SURGEN_HF_SHARDS
     for i in range(0, len(cohort), chunk):
         table = pa.concat_tables([pq.read_table(slide_cache / f"{sid}.parquet") for sid, *_ in cohort[i : i + chunk]])
-        pq.write_table(table, out_data / f"surgen-{i // chunk:05d}.parquet", compression="none", row_group_size=PARQUET_ROW_GROUP_SIZE)
+        out = out_data / f"surgen-{i // chunk:05d}.parquet"
+        tmp = out.with_suffix(".parquet.part")
+        pq.write_table(table, tmp, compression="none", row_group_size=PARQUET_ROW_GROUP_SIZE)
+        os.replace(tmp, out)
     labels = sorted((sid, ras) for sid, ras, *_ in cohort)
     (root / "labels.csv").write_text("slide_id,ras\n" + "\n".join(f"{s},{r}" for s, r in labels) + "\n")
     version.write_text(SURGEN_TILING_VERSION + "\n")

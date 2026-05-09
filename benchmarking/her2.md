@@ -30,10 +30,8 @@ PathoBench defines external fold metadata for treatment-response evaluation, run
 
 ## Runtime
 
-HER2 must be remeasured after the 20x/512 retile and no-crop slide transform.
-
 | model | wall |
 |---|---:|
-| DINOv2-S | remeasure |
-| OpenMidnight | remeasure |
-| H-optimus-0 | remeasure |
+| DINOv2-S | 64.2s |
+| OpenMidnight | 81.6s |
+| H-optimus-0 | 80.4s |
