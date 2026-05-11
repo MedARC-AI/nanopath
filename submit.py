@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Dependency-free nanopath -> labless bridge. Run from the nanopath repo root
 # after train.py finishes; it writes output_dir/labless_submission.json,
-# prepends a LOG.md entry, and posts the same payload to labless.
+# posts the same payload to labless, and prepends a LOG.md entry after success.
 
 from __future__ import annotations
 
@@ -92,11 +92,11 @@ def main() -> int:
 
     dry_run = truthy(opts.get("dry_run", "false"))
     update_log = truthy(opts.get("update_log", "false" if dry_run else "true"))
-    if update_log:
-        append_log(Path(opts.get("log_path", "LOG.md")).expanduser(), payload)
-        print(f"updated {opts.get('log_path', 'LOG.md')}")
 
     if dry_run:
+        if update_log:
+            append_log(Path(opts.get("log_path", "LOG.md")).expanduser(), payload)
+            print(f"updated {opts.get('log_path', 'LOG.md')}")
         print(json.dumps({"dry_run": True, "status": status, "metric": metric_value, "submission": str(submission_path)}, indent=2))
         return 0
 
@@ -104,13 +104,17 @@ def main() -> int:
         (opts.get("api_url") or API_URL).rstrip("/") + f"/api/nano-projects/{opts.get('project', PROJECT_SLUG)}/submissions",
         data=json.dumps(payload).encode(),
         method="POST",
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "labless-submit/0.1"},
     )
     if os.environ.get("LABLESS_SUBMIT_TOKEN"):
         req.add_header("Authorization", f"Bearer {os.environ['LABLESS_SUBMIT_TOKEN']}")
     with urllib.request.urlopen(req, timeout=30) as response:
         body = response.read().decode()
-    print(json.dumps(json.loads(body) if body else {"ok": True}, indent=2, sort_keys=True))
+    result = json.loads(body) if body else {"ok": True}
+    if update_log:
+        append_log(Path(opts.get("log_path", "LOG.md")).expanduser(), payload)
+        print(f"updated {opts.get('log_path', 'LOG.md')}")
+    print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
 

@@ -1,5 +1,23 @@
 # Experiment log
 
+<!-- labless:efa0e77c54 -->
+## 2026-05-11 - dinov2-vits14-reg-kde (labless) (@PaulScotti)
+
+- status: `completed`
+- metric: `mean_probe_score=0.5543`
+- tier: `smoke`
+- hardware: `host:login-2.sophont-n.cgen`
+- command: `python train.py /admin/home/paul/nanopath-labless/configs/smoke.yaml`
+- submission_id: `efa0e77c54`
+
+fresh labless integration smoke validation on branch labless
+
+Artifacts:
+- summary: `/data/paul/nanopath/leader/labless-smoke-20260511-172015/summary.json`
+- metrics: `/data/paul/nanopath/leader/labless-smoke-20260511-172015/metrics.jsonl`
+- submission: `/data/paul/nanopath/leader/labless-smoke-20260511-172015/labless_submission.json`
+- slurm_log: `/admin/home/paul/nanopath-labless/slurm/51543.out`
+
 Running notes on what has been tried in nanopath, with links to wandb where possible. Append new entries at the top or let `submit.py` prepend a labless entry. Negative results are valuable! Record them so the next contributor doesn't redo a known dead end.
 
 - _add yours here_
