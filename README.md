@@ -29,7 +29,7 @@ sbatch submit/train_1gpu.sbatch configs/smoke.yaml
 # or directly on a GPU machine: python train.py configs/smoke.yaml
 
 # publish any completed run to the live labless plot
-python submit.py output_dir=/data/$USER/nanopath/leader/smoke contributor=@yourgithub notes="what changed"
+./labless/submit_to_labless.py output_dir=/data/$USER/nanopath/leader/smoke contributor=@yourgithub notes="what changed"
 
 # train and evaluate the maintained Nanopath recipe
 sbatch submit/train_1gpu.sbatch configs/leader.yaml
@@ -43,6 +43,16 @@ For non-MedARC cluster users, run `python prepare.py configs/leader.yaml downloa
 `pyproject.toml` pins `torch` / `torchvision` against the CUDA 12.9 wheel index. If your GPU/driver needs a different CUDA build (e.g. cu118 for older A100/V100 setups), edit the `torch` and `torchvision` lines in `pyproject.toml` before `uv sync`.
 
 A successful model training prints periodic train lines, logs to wandb, and ends with a final summary in `metrics.jsonl`. `configs/smoke.yaml` is simply meant to train briefly and then exercise the same downstream probe machinery as full runs; use `configs/leader.yaml` for leaderboard-scale runs.
+
+## Labless
+
+Submit completed or failed runs to the live tracker:
+
+```bash
+./labless/submit_to_labless.py output_dir=/data/$USER/nanopath/leader/my-run contributor=@yourgithub notes="what changed and why"
+```
+
+The script reads `summary.json` and `metrics.jsonl`, writes `labless_submission.json` into the run directory, posts the payload to `api.labless.dev`, and appends `LOG.md` only after the remote submission succeeds. The labless website and plot update automatically; new completed runs stay `pending` until maintainer validation. See `labless/README.md` for the full integration notes.
 
 ## Leaderboard
 
@@ -66,7 +76,7 @@ Score is final `mean_probe_score`: the unweighted mean of the 11 dataset columns
 `configs/leader.yaml` is the maintained Nanopath training recipe, and its old six-probe score has been removed until it is re-run on this 11-probe benchmark. Submit any completed or failed run to labless:
 
 ```bash
-python submit.py output_dir=/data/$USER/nanopath/leader/my-run contributor=@yourgithub wandb_url=https://wandb.ai/... notes="what changed and why"
+./labless/submit_to_labless.py output_dir=/data/$USER/nanopath/leader/my-run contributor=@yourgithub wandb_url=https://wandb.ai/... notes="what changed and why"
 ```
 
 Completed submissions require `summary.json` and `metrics.jsonl`; failed runs can be submitted with `status=failed failure_reason="..."`. To become the validated leader you must outperform the existing top `mean_probe_score` by at least 0.01. [@PaulScotti](https://github.com/PaulScotti) will train a new model using your code on his 1 80GB H100, using a different rng seed and striving to reduce the submission to the smallest practical diff against the current codebase. If it still improves `mean_probe_score` by at least 0.01, we will update the README & leaderboard accordingly. **You don't need an H100 yourself to submit** — train on whatever hardware you have access to, publish the run, and Paul handles H100 verification.
@@ -112,7 +122,7 @@ You can initialize the model using DINOv2 checkpoint (trained on natural images)
 - `prepare.py` — data prep: verify or download HF tile mirror + probe datasets + any pretrained weights.
 - `probe.py` — downstream probes (KNN, few-shot, linear, segmentation, slide AUROC, survival, robustness).
 - `submit/train_1gpu.sbatch` — SLURM launcher for single-GPU training.
-- `submit.py` + `labless.yaml` — package a completed run and post it to the live labless tracker.
+- `labless/submit_to_labless.py` + `labless.yaml` — package a completed run and post it to the live labless tracker.
 - `download_TCGA.sh` — manual utility, run by hand if you want the full 12K TCGA open-access SVS slide set (~13 TB) for forking the tile-extraction recipe. Not invoked by `prepare.py` and not needed for any standard training workflow.
 - `LOG.md` — running notes on what has been tried, including negative results.
 - `pyproject.toml` + `uv.lock` — Python dependency spec consumed by `uv sync`.

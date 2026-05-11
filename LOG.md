@@ -18,7 +18,7 @@ Artifacts:
 - submission: `/data/paul/nanopath/leader/labless-smoke-20260511-172015/labless_submission.json`
 - slurm_log: `/admin/home/paul/nanopath-labless/slurm/51543.out`
 
-Running notes on what has been tried in nanopath, with links to wandb where possible. Append new entries at the top or let `submit.py` prepend a labless entry. Negative results are valuable! Record them so the next contributor doesn't redo a known dead end.
+Running notes on what has been tried in nanopath, with links to wandb where possible. Append new entries at the top or let `labless/submit_to_labless.py` prepend a labless entry. Negative results are valuable! Record them so the next contributor doesn't redo a known dead end.
 
 - _add yours here_
 

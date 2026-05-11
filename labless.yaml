@@ -1,5 +1,5 @@
 # labless manifest for the public nanopath experiment loop. The website and
-# submit.py use this to keep the metric, locked paths, run tiers, and artifacts
+# submit_to_labless.py use this to keep the metric, locked paths, run tiers, and artifacts
 # aligned with the README leaderboard policy.
 version: 1
 slug: nanopath
