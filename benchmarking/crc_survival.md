@@ -21,7 +21,7 @@ Nanopath vendors `crc_survival.json`, derived from PathoBench PFS_VALENTINO fold
 
 ## Implementation
 
-`prepare.py` downloads the PathoBench label TSV, downloads fold-0 train VALENTINO TIFFs, and extracts a full deterministic 20x, 512 px, 0-overlap tissue grid into `patches.parquet`. `probe.py` embeds each patch once with a no-crop square resize, mean-pools patch embeddings by slide, standardizes features within each training fold, sweeps `sksurv.linear_model.CoxnetSurvivalAnalysis` over `l1_ratio={0.5,1.0}` and `alpha={0.03,0.1}`, and reports mean validation Harrell's c-index at the best mean Coxnet setting. Exact `l1_ratio=0.0` is omitted because Coxnet requires a positive `l1_ratio`; lower-alpha substitutes were slow and numerically fragile for 1536-dimensional giant-model embeddings. This mirrors the classifier probes' validation-selected hyperparameter sweeps while keeping one Cox implementation.
+`prepare.py` downloads the PathoBench label TSV, downloads fold-0 train VALENTINO TIFFs, and extracts a full deterministic 20x, 512 px, 0-overlap tissue grid into `patches.parquet`. `probe.py` embeds each patch once with a no-crop square resize, mean-pools patch embeddings by slide, and sweeps `sksurv.linear_model.CoxnetSurvivalAnalysis` over `l1_ratio={0.5,1.0}` and PathoBench's `alpha={0.01,0.02,0.07}` grid without extra fold-wise feature standardization, matching PathoBench's raw pooled-feature head more closely. It reports mean validation Harrell's c-index at the best mean Coxnet setting. Exact `l1_ratio=0.0` is omitted because Coxnet requires a positive `l1_ratio`; this mirrors the classifier probes' validation-selected hyperparameter sweeps while keeping one Cox implementation.
 
 ## Difference From Original Usage
 
@@ -31,6 +31,7 @@ PathoBench's survival tasks report Harrell's c-index, so Nanopath's Coxnet-sweep
 
 | model | wall |
 |---|---:|
-| DINOv2-S | 191.6s |
-| OpenMidnight | 274.9s |
-| H-optimus-0 | 275.5s |
+| DINOv2-S | 173.7s |
+| OpenMidnight | 262.2s |
+| H-optimus-0 | 263.0s |
+| GenBio-PathFM | 708.2s |

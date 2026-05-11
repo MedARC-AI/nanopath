@@ -37,6 +37,7 @@ The original PathoROB benchmark includes multiple robustness settings. Nanopath 
 
 | model | wall |
 |---|---:|
-| DINOv2-S | 69.9s |
-| OpenMidnight | 101.4s |
-| H-optimus-0 | 99.4s |
+| DINOv2-S | 28.3s |
+| OpenMidnight | 72.2s |
+| H-optimus-0 | 74.5s |
+| GenBio-PathFM | 198.4s |

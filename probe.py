@@ -1,39 +1,36 @@
 # Inline downstream probes. mean_probe_score = the unweighted mean of one scalar
 # per headline dataset: break_his, bracs, mhist, pcam, monusac, consep,
-# pannuke, her2, ucla_lung, surgen, crc_survival, pathorob. Tile classification
-# datasets score the mean of linear, KNN, and SimpleShot F1; PathoBench-derived
-# slide classification and SurGen score AUROC; CRC survival scores Harrell's
-# c-index; PathoROB scores its robustness index; segmentation datasets score
-# macro Jaccard from the MaskTransformer head below.
+# pannuke, ucla_lung, surgen, crc_survival, pathorob. Tile classification
+# datasets score the mean of linear, KNN, and 16-shot SimpleShot F1
+# majority-voted over 1000 deterministic support sets.
+# PathoBench-derived slide classification and SurGen score AUROC; CRC survival
+# scores Harrell's c-index; PathoROB scores its robustness index; segmentation
+# datasets score macro Jaccard from the MaskTransformer head below.
 #
 # train.py snapshots a probe checkpoint at each FLOP milestone and runs
 # this file as a subprocess (`python probe.py req.json`); training pauses, the
 # subprocess writes a result JSON, collect_probe_results ingests it back into
-# wandb + metrics.jsonl. Inside the subprocess, two threads share one GPU and
-# one loaded DinoV2ViT: the main thread loops classification datasets (for
-# each, embed train+val with the frozen backbone once, then run all three heads
-# on cached embeddings), then runs the slide/robustness/survival probes while a
-# background thread runs segmentation. Putting both on one GPU helps because
-# classification-style probes spend a lot of time in Python/CPU code which leaves
-# the GPU free to crunch segmentation.
+# wandb + metrics.jsonl. Inside the subprocess, one loaded frozen backbone serves
+# every probe. DINO-style backbones overlap segmentation in a background thread
+# because classification heads spend enough time in Python/sklearn to leave GPU
+# slack; GenBio runs segmentation sequentially because its channel-wise ViT-G
+# path is GPU-bound and concurrent PanNuke makes the whole run slower.
 #
-# Rough per-task wall on H100 baselines. Slide tasks need remeasurement after
-# switching to uncapped PathoBench-style 20x tissue grids and no-crop tile eval.
-#   bracs       ~160-210s
-#   break_his   ~20-23s
-#   mhist       ~14-29s
-#   pcam        ~43-64s      fixed 3072 train / 768 val subset of official H5 files
-#   her2        remeasure    full HER2-Tumor-ROIs tissue grid, mean-pooled
-#   ucla_lung   remeasure    full IDR idr0082 tissue grid, mean-pooled
-#   surgen      remeasure    full SR386 tissue grid -> mean-pool -> logistic regression
-#   crc_survival remeasure   full PFS_VALENTINO grid -> mean-pool -> Coxnet sweep
-#   pathorob    ~20-69s      camelyon + tolkach_esca patch sets
-#   monusac     ~24-92s      3 train-derived folds, features extracted once
-#   consep      ~5-20s       3 train-derived folds, features extracted once
-#   PanNuke     ~263-518s    the train/val npy folds are mmap'd from disk, so
+# Rough per-task wall on H100 baselines after the probe-revamp benchmark.
+#   bracs       ~161-183s
+#   break_his   ~15-21s
+#   mhist       ~12-28s
+#   pcam        ~28-50s      fixed 3072 train / 768 val subset of official H5 files
+#   ucla_lung   ~32-140s     full IDR idr0082 tissue grid, mean-pooled
+#   surgen      ~235-1137s   deterministic SR386 sub-bags -> mean-pool -> logistic regression
+#   crc_survival ~174-708s   full PFS_VALENTINO grid -> mean-pool -> Coxnet sweep
+#   pathorob    ~28-198s     camelyon + tolkach_esca patch sets
+#   monusac     ~25-93s      3 train-derived folds, features extracted once
+#   consep      ~5-19s       3 train-derived folds, features extracted once
+#   PanNuke     ~165-319s    the train/val npy folds are mmap'd from disk, so
 #                            wall depends a lot on whether the OS page cache is warm
-# Segmentation runs in parallel with the classification/slide/robustness/survival
-# loop, so probe wall is roughly max(seg total, other probes) plus a small tail.
+# DINO-style backbones overlap segmentation with the main loop; GenBio runs it
+# after the main loop to avoid GPU contention.
 
 import json
 import os
@@ -73,20 +70,20 @@ LINEAR_PROBE_EPOCHS = 200
 LINEAR_PROBE_BATCH_SIZE = 64
 PCAM_SUBSET_SEED = 1337
 PCAM_SUBSET_SIZES = {"train": 3072, "val": 768}
-FEWSHOT_SHOTS = [1, 2, 4, 8, 16]
-FEWSHOT_TRIALS = 500
-FEWSHOT_SEED = 1337
+FEWSHOT_SHOT = 16
+FEWSHOT_SUPPORT_SETS = 1000
+FEWSHOT_SUPPORT_CHUNK = 64
 KNN_K_VALS = [1, 3, 5, 10, 20, 30, 40, 50]
 KNN_CHUNK_SIZE = 4096
 CLASSIFICATION_DATASETS = ["bracs", "break_his", "mhist", "pcam"]
 SEGMENTATION_DATASETS = ["pannuke", "monusac", "consep"]
-SLIDE_DATASETS = ["her2", "ucla_lung"]
+SLIDE_DATASETS = ["ucla_lung"]
 AUC_DATASETS = ["surgen"]
 SURVIVAL_DATASETS = ["crc_survival"]
 ROBUSTNESS_DATASETS = ["pathorob"]
 MEAN_PROBE_DATASETS = [
     "break_his", "bracs", "mhist", "pcam", "monusac", "consep",
-    "pannuke", "her2", "ucla_lung", "surgen", "crc_survival", "pathorob",
+    "pannuke", "ucla_lung", "surgen", "crc_survival", "pathorob",
 ]
 TASK_FIELDS = {
     "classification_datasets": ("datasets", CLASSIFICATION_DATASETS),
@@ -96,10 +93,13 @@ TASK_FIELDS = {
     "survival_datasets": ("survival_datasets", SURVIVAL_DATASETS),
     "robustness_datasets": ("robustness_datasets", ROBUSTNESS_DATASETS),
 }
-SURGEN_LR_CS = (0.001, 0.01, 0.1, 1.0, 10.0, 100.0)
+SURGEN_LR_CS = (0.001, 0.01, 0.1, 0.5, 1.0, 10.0, 100.0)
 SURGEN_LR_MAX_ITER = 5000
+SURGEN_LR_SOLVER = "liblinear"
+SURGEN_TILES_PER_SLIDE = 768
+SURGEN_ROW_GROUP_SIZE = 64
 SLIDE_LR_CS = (0.001, 0.01, 0.1, 0.5, 1.0, 10.0, 100.0)
-CRC_SURVIVAL_COX_ALPHAS = (0.03, 0.1)
+CRC_SURVIVAL_COX_ALPHAS = (0.01, 0.02, 0.07)
 CRC_SURVIVAL_COX_L1_RATIOS = (0.5, 1.0)
 PATHOROB_SUBSETS = {"camelyon": 11, "tolkach_esca": 46}
 # Module-level so dataset adapters can read roots without threading cfg through every call.
@@ -273,7 +273,7 @@ class ClassificationDataset(torch.utils.data.Dataset):
         return self.transform(img), self.labels[idx]
 
 
-# Mean-pool tile embeddings to one vector per slide for HER2 response and UCLA Lung.
+# Mean-pool cached PathoBench-style tile embeddings to one vector per slide.
 def embed_slide_dataset(model, mean, std, dataset, split, device, transform):
     import io
     import numpy as np
@@ -284,28 +284,21 @@ def embed_slide_dataset(model, mean, std, dataset, split, device, transform):
     slides, labels = [], []
     for name in split_names:
         s = spec[name]
-        slides += list(s["slide_ids"] if dataset == "ucla_lung" else s["slides"])
+        slides += list(s["slide_ids"])
         labels += [int(v) for v in s["labels"]]
     labels = np.asarray(labels, dtype=np.int64)
     paths, slide_idx = [], []
-    if dataset == "ucla_lung":
-        import pyarrow.parquet as pq
-        slide_to_i = {s: i for i, s in enumerate(slides)}
-        table = pq.read_table(DATASET_ROOTS[dataset] / "tiles.parquet")
-        for sid, jpg in zip(table.column("slide_id").to_pylist(), table.column("jpeg").to_pylist()):
-            if sid in slide_to_i:
-                paths.append(jpg); slide_idx.append(slide_to_i[sid])
-    else:
-        for i, sid in enumerate(slides):
-            tiles = sorted((DATASET_ROOTS[dataset] / "tiles" / sid).glob("*.jpg"))
-            for tile in tiles:
-                paths.append(tile); slide_idx.append(i)
+    import pyarrow.parquet as pq
+    slide_to_i = {s: i for i, s in enumerate(slides)}
+    table = pq.read_table(DATASET_ROOTS[dataset] / "tiles.parquet")
+    for sid, jpg in zip(table.column("slide_id").to_pylist(), table.column("jpeg").to_pylist()):
+        if sid in slide_to_i:
+            paths.append(jpg); slide_idx.append(slide_to_i[sid])
 
     class _Tiles(torch.utils.data.Dataset):
         def __len__(self): return len(paths)
         def __getitem__(self, i):
-            src = Image.open(io.BytesIO(paths[i])) if dataset == "ucla_lung" else Image.open(paths[i])
-            return transform(src.convert("RGB")), slide_idx[i]
+            return transform(Image.open(io.BytesIO(paths[i])).convert("RGB")), slide_idx[i]
 
     loader = torch.utils.data.DataLoader(_Tiles(), batch_size=EMBED_BATCH_SIZE, shuffle=False, num_workers=EMBED_NUM_WORKERS, pin_memory=True)
     sums, counts = None, torch.zeros(len(slides), dtype=torch.long)
@@ -639,7 +632,6 @@ def inline_pathorob(model, mean, std, device, transform):
 def inline_surgen_ras_auc(model, mean, std, device, transform):
     import io
     import numpy as np
-    import pyarrow as pa
     import pyarrow.parquet as pq
     from PIL import Image
     from sklearn.linear_model import LogisticRegression
@@ -650,38 +642,68 @@ def inline_surgen_ras_auc(model, mean, std, device, transform):
     pool_slides = list(splits["train"]["slides"]) + list(splits["val"]["slides"])
     pool_labels = np.asarray([int(v) for split in ("train", "val") for v in splits[split]["labels"]], dtype=np.int64)
     label_of = dict(zip(pool_slides, pool_labels))
-    table = pa.concat_tables([pq.read_table(f) for f in sorted((DATASET_ROOTS["surgen"] / "data").glob("surgen-*.parquet"))])
-    slide_ids_all = np.array(table.column("slide_id").to_pylist(), dtype=object)
-    keep = np.isin(slide_ids_all, list(label_of))
-    jpeg_bytes = [b for b, k in zip(table.column("jpeg").to_pylist(), keep) if k]
-    slide_ids = slide_ids_all[keep]
+    files = sorted((DATASET_ROOTS["surgen"] / "data").glob("surgen-*.parquet"))
+    # Prepared rows follow a raster scan; spaced row groups preserve slide coverage without reading the full 102 GB cache.
+    row_groups = defaultdict(list)
+    for fi, f in enumerate(files):
+        pf = pq.ParquetFile(f)
+        for rg in range(pf.num_row_groups):
+            stats = pf.metadata.row_group(rg).column(1).statistics
+            sids = [stats.min] if stats.min == stats.max else set(pf.read_row_group(rg, columns=["slide_id"]).column("slide_id").to_pylist())
+            for sid in sids:
+                if sid in label_of:
+                    row_groups[sid].append((fi, rg))
+    groups_per_slide = (SURGEN_TILES_PER_SLIDE + SURGEN_ROW_GROUP_SIZE - 1) // SURGEN_ROW_GROUP_SIZE
+    keep_groups = defaultdict(set)
+    for sid in pool_slides:
+        groups = row_groups[sid]
+        take = range(len(groups)) if len(groups) <= groups_per_slide else np.linspace(0, len(groups) - 1, groups_per_slide, dtype=np.int64)
+        for i in take:
+            fi, rg = groups[int(i)]
+            keep_groups[fi].add(rg)
+    selected_groups = [(fi, rg) for fi in sorted(keep_groups) for rg in sorted(keep_groups[fi])]
 
-    class _Tiles(torch.utils.data.Dataset):
-        def __len__(self): return len(jpeg_bytes)
-        def __getitem__(self, i): return transform(Image.open(io.BytesIO(jpeg_bytes[i])).convert("RGB"))
+    class _Tiles(torch.utils.data.IterableDataset):
+        def __iter__(self):
+            worker = torch.utils.data.get_worker_info()
+            if worker is None:
+                groups = selected_groups
+            else:
+                per = (len(selected_groups) + worker.num_workers - 1) // worker.num_workers
+                groups = selected_groups[worker.id * per : (worker.id + 1) * per]
+            cur_fi, pf = None, None
+            for fi, rg in groups:
+                if fi != cur_fi:
+                    cur_fi, pf = fi, pq.ParquetFile(files[fi])
+                table = pf.read_row_group(rg, columns=["jpeg", "slide_id"])
+                for b, sid in zip(table.column("jpeg").to_pylist(), table.column("slide_id").to_pylist()):
+                    if sid in label_of:
+                        yield transform(Image.open(io.BytesIO(b)).convert("RGB")), sid
 
-    loader = torch.utils.data.DataLoader(_Tiles(), batch_size=EMBED_BATCH_SIZE, num_workers=EMBED_NUM_WORKERS, pin_memory=True, shuffle=False)
+    loader = torch.utils.data.DataLoader(_Tiles(), batch_size=EMBED_BATCH_SIZE, num_workers=EMBED_NUM_WORKERS, pin_memory=True)
     autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
-    embs = []
+    sums, counts, tiles = {}, defaultdict(int), 0
     with torch.no_grad():
-        for x in loader:
+        for x, sids in loader:
             x = x.to(device, non_blocking=True)
             with autocast:
-                embs.append(model.probe_features((x - mean) / std).float().cpu().numpy())
-    embs = np.concatenate(embs).astype(np.float32)
-    pooled = {sid: embs[slide_ids == sid].mean(0) for sid in np.unique(slide_ids)}
-    X = np.stack([pooled[s] for s in pool_slides])
+                batch = model.probe_features((x - mean) / std).float().cpu().numpy()
+            for sid, vec in zip(sids, batch):
+                sums[sid] = sums.get(sid, 0.0) + vec.astype(np.float64)
+                counts[sid] += 1
+                tiles += 1
+    X = np.stack([sums[s] / counts[s] for s in pool_slides]).astype(np.float32)
     folds = []
     for tr, va in stratified_folds(pool_labels):
         auc_per_c = {}
         for c in SURGEN_LR_CS:
-            clf = LogisticRegression(C=c, max_iter=SURGEN_LR_MAX_ITER).fit(X[tr], pool_labels[tr])
+            clf = LogisticRegression(C=c, class_weight="balanced", max_iter=SURGEN_LR_MAX_ITER, random_state=0, solver=SURGEN_LR_SOLVER, dual=X.shape[0] < X.shape[1]).fit(X[tr], pool_labels[tr])
             auc_per_c[str(c)] = float(roc_auc_score(pool_labels[va], clf.predict_proba(X[va])[:, 1]))
         best_c = max(auc_per_c, key=auc_per_c.get)
         folds.append({"val_auc": auc_per_c[best_c], "best_c": float(best_c), "val_auc_per_c": auc_per_c})
     auc_per_c = {str(c): float(np.mean([f["val_auc_per_c"][str(c)] for f in folds])) for c in SURGEN_LR_CS}
     best_c = max(auc_per_c, key=auc_per_c.get)
-    return {"val_auc": auc_per_c[best_c], "best_c": float(best_c), "val_auc_per_c": auc_per_c, "fold_scores": [float(f["val_auc_per_c"][best_c]) for f in folds], "folds": folds}, time.monotonic() - started_at
+    return {"val_auc": auc_per_c[best_c], "best_c": float(best_c), "val_auc_per_c": auc_per_c, "fold_scores": [float(f["val_auc_per_c"][best_c]) for f in folds], "folds": folds, "tiles": tiles, "tiles_per_slide_cap": SURGEN_TILES_PER_SLIDE}, time.monotonic() - started_at
 
 
 def inline_crc_survival(model, mean, std, device, transform):
@@ -722,19 +744,16 @@ def inline_crc_survival(model, mean, std, device, transform):
         pooled.setdefault(sid, []).append(vec)
     pooled = {sid: np.mean(np.stack(vs), axis=0) for sid, vs in pooled.items()}
 
-    X = np.stack([pooled[sid] for sid in pool_slides])
+    X = np.stack([pooled[sid] for sid in pool_slides]).astype(np.float64)
     y = np.array(list(zip(pool_events, pool_days)), dtype=[("event", bool), ("days", float)])
     folds = []
     for tr, va in stratified_folds(pool_events.astype(np.int64)):
-        train_mean, train_std = X[tr].mean(0), X[tr].std(0)
-        train_std[train_std == 0] = 1.0
-        Xtr, Xva = (X[tr] - train_mean) / train_std, (X[va] - train_mean) / train_std
         cindex_per_cox = {}
         for l1_ratio in CRC_SURVIVAL_COX_L1_RATIOS:
             for alpha in CRC_SURVIVAL_COX_ALPHAS:
                 head = CoxnetSurvivalAnalysis(l1_ratio=l1_ratio, alphas=[alpha], max_iter=100000, fit_baseline_model=False)
-                head.fit(Xtr, y[tr])
-                risk = head.predict(Xva)
+                head.fit(X[tr], y[tr])
+                risk = head.predict(X[va])
                 cindex_per_cox[f"{l1_ratio}:{alpha}"] = float(concordance_index_censored(y[va]["event"], y[va]["days"], risk)[0])
         best = max(cindex_per_cox, key=cindex_per_cox.get)
         l1_ratio, alpha = (float(x) for x in best.split(":"))
@@ -769,42 +788,46 @@ def inline_knn_val_f1(train_embs, train_labels, val_embs, val_labels, k_vals):
     return best_k, f1_per_k[best_k], f1_per_k
 
 
-# SimpleShot-style few-shot probe: class prototypes from random support sets, voted over trials.
-def inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels, shots, trials, seed):
+# THUNDER SimpleShot: 1000 16-shot support sets, centered prototypes, cosine NN,
+# then per-query majority vote across support-set predictions.
+def inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels, shot, seed):
     import numpy as np
     from sklearn.metrics import f1_score
 
     train_embs = train_embs.astype(np.float32, copy=False)
     val_embs = val_embs.astype(np.float32, copy=False)
-    label_to_idx = defaultdict(list)
-    for i, label in enumerate(train_labels):
-        label_to_idx[int(label)].append(i)
-    sorted_labels = sorted(label_to_idx)
+    labels = np.asarray(sorted(np.unique(train_labels)), dtype=np.int64)
+    class_indices = [np.flatnonzero(train_labels == label) for label in labels]
     rng = np.random.default_rng(seed)
-    f1_per_shot = {}
-    for shot in shots:
-        # Many trials reduce support-set noise; final prediction is a per-example majority vote.
-        trial_preds = np.zeros((trials, len(val_labels)), dtype=np.int64)
-        for trial in range(trials):
-            support_idx = []
-            support_lbl = []
-            for label in sorted_labels:
-                picks = rng.choice(label_to_idx[label], size=shot, replace=False)
-                support_idx.extend(picks.tolist())
-                support_lbl.extend([label] * shot)
+    support_sets = np.stack([np.concatenate([rng.choice(idxs, shot, replace=False) for idxs in class_indices]) for _ in range(FEWSHOT_SUPPORT_SETS)])
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        train_t = torch.from_numpy(train_embs).to(device)
+        val_t = torch.from_numpy(val_embs).to(device)
+        labels_t = torch.from_numpy(labels).to(device)
+        support_sets_t = torch.from_numpy(support_sets).to(device)
+        votes = []
+        with torch.no_grad():
+            for start in range(0, FEWSHOT_SUPPORT_SETS, FEWSHOT_SUPPORT_CHUNK):
+                support = train_t[support_sets_t[start : start + FEWSHOT_SUPPORT_CHUNK]]
+                mean = support.mean(dim=1)
+                cls = (support - mean[:, None]).reshape(len(support), len(labels), shot, -1).mean(dim=2)
+                cls = F.normalize(cls, dim=-1, eps=1e-12)
+                val = F.normalize(val_t[None] - mean[:, None], dim=-1, eps=1e-12)
+                votes.append(labels_t[torch.einsum("bvd,bcd->bvc", val, cls).argmax(dim=-1)].cpu().numpy())
+        votes = np.concatenate(votes, axis=0)
+    else:
+        votes = np.empty((FEWSHOT_SUPPORT_SETS, len(val_labels)), dtype=np.int64)
+        for i, support_idx in enumerate(support_sets):
             support = train_embs[support_idx]
-            support_lbl_arr = np.asarray(support_lbl)
-            mean = support.mean(axis=0)
-            support_centered = support - mean
-            cls_embs = np.stack([support_centered[support_lbl_arr == l].mean(axis=0) for l in sorted_labels])
-            cls_n = cls_embs / np.maximum(np.linalg.norm(cls_embs, axis=1, keepdims=True), 1e-12)
-            val_centered = val_embs - mean
-            val_n = val_centered / np.maximum(np.linalg.norm(val_centered, axis=1, keepdims=True), 1e-12)
-            sim = val_n @ cls_n.T
-            trial_preds[trial] = np.asarray(sorted_labels)[sim.argmax(axis=1)]
-        final = np.array([np.bincount(trial_preds[:, i]).argmax() for i in range(trial_preds.shape[1])])
-        f1_per_shot[shot] = float(f1_score(val_labels, final, average="macro"))
-    return f1_per_shot
+            mean = support.mean(axis=0, keepdims=True)
+            cls = (support - mean).reshape(len(labels), shot, -1).mean(axis=1)
+            cls = cls / np.maximum(np.linalg.norm(cls, axis=1, keepdims=True), 1e-12)
+            val = val_embs - mean
+            val = val / np.maximum(np.linalg.norm(val, axis=1, keepdims=True), 1e-12)
+            votes[i] = labels[(val @ cls.T).argmax(axis=1)]
+    preds = np.asarray([np.bincount(votes[:, i], minlength=int(labels.max()) + 1).argmax() for i in range(votes.shape[1])])
+    return float(f1_score(val_labels, preds, average="macro"))
 
 
 # Linear probe: train a small classifier on frozen embeddings and keep the best validation F1.
@@ -839,15 +862,15 @@ def inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels, seed=SE
 
 def classification_head_metrics(train_embs, train_labels, val_embs, val_labels, seed):
     knn_best_k, knn_best_f1, knn_all = inline_knn_val_f1(train_embs, train_labels, val_embs, val_labels, KNN_K_VALS)
-    fewshot_per_shot = inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels, FEWSHOT_SHOTS, FEWSHOT_TRIALS, seed)
+    fewshot_f1 = inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels, FEWSHOT_SHOT, seed)
     linear_f1 = inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels, seed)
     return {
         "linear_val_f1": linear_f1,
         "knn_best_k": knn_best_k,
         "knn_val_f1": knn_best_f1,
         "knn_val_f1_per_k": {int(k): float(v) for k, v in knn_all.items()},
-        "fewshot_val_f1": float(sum(fewshot_per_shot.values()) / len(fewshot_per_shot)),
-        "fewshot_val_f1_per_shot": {int(s): float(v) for s, v in fewshot_per_shot.items()},
+        "fewshot_val_f1": fewshot_f1,
+        "fewshot_val_f1_per_shot": {FEWSHOT_SHOT: fewshot_f1},
     }
 
 
@@ -873,22 +896,21 @@ def slide_linear_auc_metrics(embs, labels):
 def mean_classification_head_metrics(fold_metrics):
     import numpy as np
     knn_all = {k: float(np.mean([m["knn_val_f1_per_k"][k] for m in fold_metrics])) for k in KNN_K_VALS}
-    fewshot_all = {s: float(np.mean([m["fewshot_val_f1_per_shot"][s] for m in fold_metrics])) for s in FEWSHOT_SHOTS}
+    fewshot_f1 = float(np.mean([m["fewshot_val_f1_per_shot"][FEWSHOT_SHOT] for m in fold_metrics]))
     return {
         "linear_val_f1": float(np.mean([m["linear_val_f1"] for m in fold_metrics])),
         "knn_best_k": max(knn_all, key=knn_all.get),
         "knn_val_f1": float(max(knn_all.values())),
         "knn_val_f1_per_k": knn_all,
-        "fewshot_val_f1": float(np.mean(list(fewshot_all.values()))),
-        "fewshot_val_f1_per_shot": fewshot_all,
+        "fewshot_val_f1": fewshot_f1,
+        "fewshot_val_f1_per_shot": {FEWSHOT_SHOT: fewshot_f1},
         "folds": fold_metrics,
     }
 
 
 # Worker entry point launched by queue_probe_job(); owns model loading and probe aggregation.
 def run_probe_job(request_path):
-    from torchvision import transforms
-    from model import DinoV2ViT, load_hoptimus0_checkpoint, load_openmidnight_checkpoint
+    from model import DinoV2ViT, load_genbio_pathfm, load_hoptimus0_checkpoint, load_openmidnight_checkpoint, probe_transforms
 
     probe_started_at = time.monotonic()
     request = json.loads(Path(request_path).read_text())
@@ -908,31 +930,30 @@ def run_probe_job(request_path):
     DATASET_ROOTS.clear()
     DATASET_ROOTS.update({k: Path(v) for k, v in cfg["probe"]["dataset_roots"].items()})
     device = torch.device("cuda")
-    model = DinoV2ViT(variant=cfg["model"]["type"]).to(device).eval()
-    if cfg["model"]["type"] == "openmidnight_vitg14_reg":
-        load_openmidnight_checkpoint(model, request["checkpoint_path"])
-    elif cfg["model"]["type"] == "hoptimus0_vitg14_reg":
-        load_hoptimus0_checkpoint(model, request["checkpoint_path"])
+    if cfg["model"]["type"] == "genbio_pathfm":
+        # GenBio uses a different ViT (RoPE, patch=16, in_chans=1), so it isn't a DinoV2ViT variant.
+        model = load_genbio_pathfm(request["checkpoint_path"]).to(device).eval()
     else:
-        # Recipes can compare live model weights or EMA weights without changing probe code.
-        state_key = {"ema": "model_ema", "model": "model"}[str(cfg["probe"]["model_weights"])]
-        model.load_state_dict(checkpoint[state_key], strict=True)
+        model = DinoV2ViT(variant=cfg["model"]["type"]).to(device).eval()
+        if cfg["model"]["type"] == "openmidnight_vitg14_reg":
+            load_openmidnight_checkpoint(model, request["checkpoint_path"])
+        elif cfg["model"]["type"] == "hoptimus0_vitg14_reg":
+            load_hoptimus0_checkpoint(model, request["checkpoint_path"])
+        else:
+            # Recipes can compare live model weights or EMA weights without changing probe code.
+            state_key = {"ema": "model_ema", "model": "model"}[str(cfg["probe"]["model_weights"])]
+            model.load_state_dict(checkpoint[state_key], strict=True)
     del checkpoint
     model.to(device)
     for param in model.parameters():
         param.requires_grad = False
     mean = torch.tensor(cfg["data"]["mean"], device=device).view(1, 3, 1, 1)
     std = torch.tensor(cfg["data"]["std"], device=device).view(1, 3, 1, 1)
-    transform = transforms.Compose([transforms.Resize(256, antialias=True), transforms.CenterCrop(224), transforms.ToTensor()])
-    patch_transform = transforms.Compose([transforms.Resize((224, 224), antialias=True), transforms.ToTensor()])
+    transform, patch_transform = probe_transforms(cfg["model"]["type"])
 
-    # Segmentation overlaps with the classification loop on the same GPU and the
-    # same loaded DinoV2ViT. Both paths only read the backbone (no .train()/.eval()
-    # flips, all backbone forwards are no_grad), and PanNuke trains its own
-    # MaskTransformer head with its own optimizer, so sharing the module is safe.
-    # CUDA kernels still serialize on the default stream; the win comes from
-    # overlapping CPU-side work (PIL decode, NumPy SimpleShot, sklearn F1) with
-    # PanNuke's GPU work, plus segmentation's mmap'd PanNuke loads.
+    # Small backbones benefit from overlapping CPU-heavy classification fitting
+    # with segmentation. GenBio is already GPU-bound (3 channel-wise ViT-G
+    # passes + 4608-d features), so run segmentation sequentially there.
     seg_results = {}
     def run_segmentation():
         for dataset in segmentation:
@@ -944,7 +965,8 @@ def run_probe_job(request_path):
                 f"inline_seg_done: {dataset}  jaccard={seg_results[dataset]['seg_val_jaccard']:.4f}  wall={seg_wall:.2f}s",
                 flush=True,
             )
-    seg_executor = ThreadPoolExecutor(max_workers=1) if segmentation else None
+    parallel_segmentation = bool(segmentation) and cfg["model"]["type"] != "genbio_pathfm"
+    seg_executor = ThreadPoolExecutor(max_workers=1) if parallel_segmentation else None
     seg_future = seg_executor.submit(run_segmentation) if seg_executor is not None else None
 
     inline_metrics = {}
@@ -953,7 +975,7 @@ def run_probe_job(request_path):
         embed_started = time.monotonic()
         train_embs, train_labels = embed_classification_dataset(model, mean, std, dataset, "train", device, transform)
         val_embs, val_labels = embed_classification_dataset(model, mean, std, dataset, "val", device, transform)
-        inline_metrics[dataset] = classification_head_metrics(train_embs, train_labels, val_embs, val_labels, FEWSHOT_SEED + classification.index(dataset))
+        inline_metrics[dataset] = classification_head_metrics(train_embs, train_labels, val_embs, val_labels, SEG_SPLIT_SEED + classification.index(dataset))
         print(
             f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
             f"inline_done: {dataset}  linear_f1={inline_metrics[dataset]['linear_val_f1']:.4f}  knn_f1={inline_metrics[dataset]['knn_val_f1']:.4f}  "
@@ -999,6 +1021,8 @@ def run_probe_job(request_path):
         # .result() re-raises any exception from the segmentation thread so the probe job fails loudly.
         seg_future.result()
         seg_executor.shutdown()
+    elif segmentation:
+        run_segmentation()
 
     # Aggregate per-dataset metrics into the result file consumed by train.py.
     metrics = {}

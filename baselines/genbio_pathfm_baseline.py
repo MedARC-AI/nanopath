@@ -1,4 +1,4 @@
-# Run the full frozen-probe suite on the untouched OpenMidnight ViT-G checkpoint.
+# Run the full frozen-probe suite on the untouched GenBio-PathFM ViT-G checkpoint.
 # Defaults to the MedARC cluster checkpoint path; pass checkpoint_path=/path off-cluster.
 
 import json
@@ -18,10 +18,12 @@ from probe import TASK_FIELDS, completed_probe_summary, prepare_probe_state
 
 
 def main():
-    usage = "usage: python baselines/openmidnight_baseline.py [config.yaml] [checkpoint_path=/path] [output_dir=/path]"
+    usage = "usage: python baselines/genbio_pathfm_baseline.py [config.yaml] [checkpoint_path=/path] [output_dir=/path]"
     config_path = REPO_DIR / "configs" / "leader.yaml"
-    checkpoint_path = Path("/data/OpenMidnight_ckpts/openmidnight_checkpoint.pth")
-    output_dir = Path(os.path.expandvars("/data/$USER/nanopath/baselines/openmidnight"))
+    # checkpoint_path points at the HF repo directory: load_genbio_pathfm reads
+    # config.json + modeling_genbio_pathfm.py + model.pth from it.
+    checkpoint_path = Path("/data/genbio-pathfm")
+    output_dir = Path(os.path.expandvars("/data/$USER/nanopath/baselines/genbio_pathfm"))
     for arg in sys.argv[1:]:
         if arg.endswith((".yaml", ".yml")):
             config_path = Path(arg)
@@ -37,11 +39,15 @@ def main():
 
     cfg = yaml.safe_load(os.path.expandvars(config_path.read_text()))
     cfg["config_path"] = str(config_path.resolve())
-    cfg["project"]["name"] = "baseline-openmidnight"
+    cfg["project"]["name"] = "baseline-genbio-pathfm"
     cfg["project"]["family"] = "baseline"
-    cfg["project"]["recipe_id"] = "openmidnight-vitg14-reg-untouched"
+    cfg["project"]["recipe_id"] = "genbio-pathfm-vitg16-rope-untouched"
     cfg["project"]["output_dir"] = str(output_dir)
-    cfg["model"]["type"] = "openmidnight_vitg14_reg"
+    # Per-channel ImageNet-style stats from /data/genbio-pathfm/config.json (image_mean/image_std);
+    # GenBio normalizes RGB then internally splits channels into 3 single-channel inputs.
+    cfg["data"]["mean"] = [0.697, 0.575, 0.728]
+    cfg["data"]["std"] = [0.188, 0.240, 0.187]
+    cfg["model"]["type"] = "genbio_pathfm"
     cfg["probe"]["enabled"] = True
     cfg["probe"]["model_weights"] = "ema"
     cfg["probe"]["count"] = 1
@@ -59,7 +65,7 @@ def main():
         "checkpoint_path": str(checkpoint_path),
         "request_path": str(state["paths"]["probe_dir"] / "step_0000000.request.json"),
         "result_path": str(state["paths"]["results_dir"] / "step_0000000.json"),
-        "job_id": f"{os.environ.get('SLURM_JOB_ID', 'local')}-openmidnight",
+        "job_id": f"{os.environ.get('SLURM_JOB_ID', 'local')}-genbio-pathfm",
         "config": cfg,
         **{key: list(state["data"][key]) for key in TASK_FIELDS},
     }
@@ -85,7 +91,7 @@ def main():
         "recipe_id": cfg["project"]["recipe_id"],
         "config_path": cfg["config_path"],
         "checkpoint_path": str(checkpoint_path),
-        "backbone_activated_params": 1_134_777_344,
+        "backbone_activated_params": 1_133_686_784,
         "steps_completed": 0,
         "train_flops": 0,
         "total_wall_seconds": time.monotonic() - started_at,

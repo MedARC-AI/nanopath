@@ -32,5 +32,6 @@ MoNuSAC is a challenge dataset with held-out evaluation data. Nanopath does not 
 | model | wall |
 |---|---:|
 | DINOv2-S | 24.9s |
-| OpenMidnight | 90.9s |
-| H-optimus-0 | 88.6s |
+| OpenMidnight | 92.6s |
+| H-optimus-0 | 91.5s |
+| GenBio-PathFM | 34.5s |

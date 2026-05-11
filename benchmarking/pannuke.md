@@ -35,6 +35,7 @@ PanNuke is one of the most expensive tasks, but it runs in a background thread a
 
 | model | wall |
 |---|---:|
-| DINOv2-S | 262.6s |
-| OpenMidnight | 517.8s |
-| H-optimus-0 | 428.8s |
+| DINOv2-S | 165.3s |
+| OpenMidnight | 319.4s |
+| H-optimus-0 | 309.5s |
+| GenBio-PathFM | 279.8s |

@@ -1,0 +1,60 @@
+# labless manifest for the public nanopath experiment loop. The website and
+# submit.py use this to keep the metric, locked paths, run tiers, and artifacts
+# aligned with the README leaderboard policy.
+version: 1
+slug: nanopath
+title: nanopath
+repo: MedARC-AI/nanopath
+default_branch: labless
+summary: Single-GPU pathology foundation-model hill climbing.
+
+metric:
+  name: mean_probe_score
+  direction: maximize
+  source: summary.json
+  json_path: final_probe_score
+  baseline: 0.5284
+  current_leader: 0.6284
+  improvement_threshold: 0.01
+
+plot:
+  x: submitted_at
+  y: mean_probe_score
+  baseline_label: untouched DINOv2-S
+  include_failed: true
+  pending_can_be_best: false
+
+rules:
+  allowed_to_change:
+    - train.py
+    - model.py
+    - dataloader.py
+    - configs/*.yaml
+  locked_paths:
+    - probe.py
+    - benchmarking/**
+  max_train_flops: 1e18
+  max_wallclock_1xh100_minutes: 60
+  max_backbone_params: 150000000
+  pretraining_data: TCGA tiles only
+
+run_tiers:
+  smoke:
+    command: python train.py configs/smoke.yaml output_dir=$OUTPUT_DIR
+    approval: auto_ingest
+  pilot:
+    command: python train.py configs/smoke.yaml output_dir=$OUTPUT_DIR
+    approval: maintainer_required
+  full:
+    command: python train.py configs/leader.yaml output_dir=$OUTPUT_DIR
+    approval: maintainer_required
+  replicate:
+    command: edit train.seed in configs/leader.yaml, then python train.py configs/leader.yaml output_dir=$OUTPUT_DIR
+    approval: maintainer_required
+
+artifacts:
+  metrics: metrics.jsonl
+  summary: summary.json
+  submission: labless_submission.json
+  logs: slurm/*.out
+  wandb_dir: /data/$USER/nanopath/wandb

@@ -1,5 +1,5 @@
 # Run the full frozen-probe suite on the untouched H-optimus-0 ViT-G checkpoint.
-# Uses H-optimus normalization and the same probe.py worker as training runs.
+# Defaults to the MedARC cluster checkpoint path; pass checkpoint_path=/path off-cluster.
 
 import json
 import os
@@ -33,6 +33,7 @@ def main():
                 output_dir = Path(os.path.expandvars(value))
             else:
                 raise SystemExit(usage)
+    print(f"checkpoint_path={checkpoint_path} (override with checkpoint_path=/path if not using MedARC defaults)", flush=True)
 
     cfg = yaml.safe_load(os.path.expandvars(config_path.read_text()))
     cfg["config_path"] = str(config_path.resolve())

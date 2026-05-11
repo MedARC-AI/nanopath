@@ -36,6 +36,7 @@ CoNSeP is often used with its official Train/Test split. Nanopath uses only repe
 
 | model | wall |
 |---|---:|
-| DINOv2-S | 5.8s |
-| OpenMidnight | 17.5s |
-| H-optimus-0 | 17.4s |
+| DINOv2-S | 5.1s |
+| OpenMidnight | 11.7s |
+| H-optimus-0 | 18.5s |
+| GenBio-PathFM | 5.9s |

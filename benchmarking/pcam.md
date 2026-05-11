@@ -2,7 +2,7 @@
 
 ## Role In Nanopath
 
-`pcam` is a lymph-node metastasis tile-classification probe derived from PatchCamelyon. It contributes one scalar to `mean_probe_score`: the mean of linear, KNN, and SimpleShot validation macro F1.
+`pcam` is a lymph-node metastasis tile-classification probe derived from PatchCamelyon. It contributes one scalar to `mean_probe_score`: the mean of linear, KNN, and 16-shot SimpleShot validation macro F1.
 
 ## Source
 
@@ -23,22 +23,23 @@ The official test H5 files may be downloaded for completeness, but `probe.py` ne
 
 ## Implementation
 
-`ClassificationDataset(..., dataset="pcam")` samples fixed train and validation subsets with `PCAM_SUBSET_SEED = 1337`, embeds those images, and fits three heads on cached embeddings:
+`ClassificationDataset(..., dataset="pcam")` samples fixed train and validation subsets with `PCAM_SUBSET_SEED = 1337`, embeds those images with model-native preprocessing from `model.py::probe_transforms`, and fits three heads on cached embeddings:
 
 - AdamW linear probe: LR ∈ {1e-3, 1e-4, 1e-5}, weight decay 1e-4, batch size 64, 200 epochs; report the best val macro F1 across all LR × epoch checkpoints
 - cosine KNN: k ∈ {1, 3, 5, 10, 20, 30, 40, 50}, k selected by val F1
-- SimpleShot few-shot: shots ∈ {1, 2, 4, 8, 16}, 500 random support-set trials per shot with per-example majority vote; the few-shot scalar is the mean val F1 across shots
+- SimpleShot few-shot: 1000 deterministic 16-shot support sets per class, support/query embeddings centered by each support-set mean, class prototypes from class-specific centered support means, cosine nearest-centroid prediction, then per-query majority vote
 
-The dataset score is the mean of the three validation macro F1 scores.
+The dataset score is `mean(linear_val_f1, knn_val_f1, fewshot_val_f1)`.
 
 ## Difference From Original Usage
 
-Thunder lists the full official train/valid/test sets for PCam. Nanopath deliberately uses a small deterministic train/valid subset from those official H5 files so the full 12-dataset probe remains inside the final H100 window. This is a runtime adaptation, not an exact full-sample Thunder PCam run.
+Thunder lists the full official train/valid/test sets for PCam. Nanopath deliberately uses a small deterministic train/valid subset from those official H5 files so the full 11-dataset probe remains inside the final H100 window. This is a runtime adaptation, not an exact full-sample Thunder PCam run.
 
 ## Runtime
 
 | model | wall |
 |---|---:|
-| DINOv2-S | 42.8s |
-| OpenMidnight | 60.4s |
-| H-optimus-0 | 63.9s |
+| DINOv2-S | 27.8s |
+| OpenMidnight | 48.6s |
+| H-optimus-0 | 50.0s |
+| GenBio-PathFM | 43.1s |

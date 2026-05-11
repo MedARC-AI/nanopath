@@ -2,9 +2,9 @@
 
 ![nanopath logo](imgs/nanopath_logo.png)
 
-`nanopath` is a super lean experimental harness for training tile-level computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). It runs on a single GPU, the code is minimal/hackable, and covers the full pretraining pipeline using the public TCGA dataset (12k WSIs) and built-in downstream probes spanning classification, segmentation, slide-level mutation/response, survival, and robustness.
+`nanopath` is a super lean experimental harness for training tile-level computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). It runs on a single GPU, the code is minimal/hackable, and covers the full pretraining pipeline using the public TCGA dataset (12k WSIs) and built-in downstream probes spanning classification, segmentation, slide-level mutation/progression, survival, and robustness.
 
-This repository is intentionally made to be compatible with [autoresearch](https://github.com/karpathy/autoresearch)-style pursuits. We will continuously update our codebase and [Leaderboard](#leaderboard) to reflect the best performing model. The maintained training recipe (`configs/leader.yaml`) targets a single-H100 run with the 12-dataset downstream probe suite evaluated at the end; after the uncapped PathoBench-style retile, the final probe wall is about 31 minutes for DINOv2-S and about 50 minutes for ViT-G baselines.
+This repository is intentionally made to be compatible with [autoresearch](https://github.com/karpathy/autoresearch)-style pursuits and the [labless nanopath tracker](https://labless.dev/nano-projects/nanopath). We will continuously update our codebase and [Leaderboard](#leaderboard) to reflect the best performing model. The maintained training recipe (`configs/leader.yaml`) targets a single-H100 run with the 11-dataset downstream probe suite evaluated at the end.
 
 **Want to get involved? Join us in the [MedARC Discord](https://discord.gg/tVR4TWnRM9) (find us in #path-fm)!**
 
@@ -28,6 +28,9 @@ python prepare.py configs/smoke.yaml download=False
 sbatch submit/train_1gpu.sbatch configs/smoke.yaml
 # or directly on a GPU machine: python train.py configs/smoke.yaml
 
+# publish any completed run to the live labless plot
+python submit.py output_dir=/data/$USER/nanopath/leader/smoke contributor=@yourgithub notes="what changed"
+
 # train and evaluate the maintained Nanopath recipe
 sbatch submit/train_1gpu.sbatch configs/leader.yaml
 # or directly on a GPU machine: python train.py configs/leader.yaml
@@ -43,19 +46,30 @@ A successful model training prints periodic train lines, logs to wandb, and ends
 
 ## Leaderboard
 
-![Nanopath progress plot](imgs/progress_plot.png)
+[![Nanopath progress plot](https://api.labless.dev/api/nano-projects/nanopath/plot.svg)](https://labless.dev/nano-projects/nanopath)
 
-Score is final `mean_probe_score`: the unweighted mean of the 12 dataset columns below. Tile classification datasets use the mean of linear / KNN / SimpleShot F1; PathoBench-derived slide classification datasets use balanced logistic linear-probe AUROC; segmentation datasets use macro Jaccard; SurGen uses AUROC; CRC survival uses Harrell's c-index; and PathoROB uses its robustness index. Historical six-probe rows were removed because they are not comparable to the current expanded benchmark. See `benchmarking/` for the full benchmark notes and test-split policy.
+The live labless plot includes completed and failed submissions, hardware, repo diff metadata, metrics, artifacts, and validation status.
 
-| # | mean | break_his | bracs | mhist | pcam | monusac | consep | pannuke | her2 | ucla_lung | surgen | crc_survival | pathorob | Description | wandb | Date | Contributors |
-|---|-----:|----------:|------:|------:|-----:|--------:|-------:|--------:|-----:|----------:|-------:|-------------:|---------:|-------------|-------|------|--------------|
-| 1 | **0.6209** | 0.7490 | 0.5534 | 0.7516 | 0.8830 | 0.3349 | 0.2218 | 0.4153 | 0.7692 | 0.7004 | 0.6487 | 0.5313 | 0.8926 | Untouched H-optimus-0 ViT-G/14-reg baseline (`baselines/hoptimus0_baseline.py`) | n/a | May 9 2026 | Bioptimus |
-| 2 | 0.5681 | 0.5241 | 0.4867 | 0.7566 | 0.7888 | 0.2994 | 0.2255 | 0.4005 | 0.7348 | 0.6993 | 0.5990 | 0.5583 | 0.7438 | Untouched OpenMidnight ViT-G/14-reg baseline (`baselines/openmidnight_baseline.py`) | n/a | May 9 2026 | @PaulScotti |
-| 3 | 0.5454 | 0.4967 | 0.4942 | 0.7610 | 0.7836 | 0.2367 | 0.2042 | 0.3607 | 0.7407 | 0.5827 | 0.6079 | 0.5221 | 0.7543 | Untouched Meta `dinov2_vits14_reg` baseline (`baselines/dinov2_small_baseline.py`) | n/a | May 9 2026 | @tmabraham |
+Score is final `mean_probe_score`: the unweighted mean of the 11 dataset columns below. Tile classification datasets use the mean of linear / KNN / 16-shot SimpleShot F1, with SimpleShot majority-voted over 1000 deterministic support sets; PathoBench-derived slide classification datasets use balanced logistic linear-probe AUROC; segmentation datasets use macro Jaccard; SurGen uses AUROC; CRC survival uses Harrell's c-index; and PathoROB uses its robustness index. Probe heads consume each model's native feature dimension (e.g. 384d DINOv2-S, 1536d DINOv2-G / ViT-G baselines, 4608d GenBio-PathFM). Historical rows before this 11-probe revision are not comparable to the current benchmark. See `benchmarking/` for the full benchmark notes and test-split policy.
+
+| # | mean | break_his | bracs | mhist | pcam | monusac | consep | pannuke | ucla_lung | surgen | crc_survival | pathorob | Description | wandb | Date | Contributors |
+|---|-----:|----------:|------:|------:|-----:|--------:|-------:|--------:|----------:|-------:|-------------:|---------:|-------------|-------|------|--------------|
+| 1 | **0.6284** | 0.7173 | 0.5997 | 0.7937 | 0.9122 | 0.3361 | 0.2309 | 0.4234 | 0.7680 | 0.6375 | 0.5529 | 0.9412 | Untouched GenBio-PathFM ViT-G/16 baseline (`baselines/genbio_pathfm_baseline.py`) | n/a | May 11 2026 | GenBio AI |
+| 2 | 0.6161 | 0.7505 | 0.5619 | 0.7935 | 0.9078 | 0.3350 | 0.2218 | 0.4213 | 0.7004 | 0.6584 | 0.5343 | 0.8926 | Untouched H-optimus-0 ViT-G/14-reg baseline (`baselines/hoptimus0_baseline.py`) | n/a | May 11 2026 | Bioptimus |
+| 3 | 0.5615 | 0.6272 | 0.5617 | 0.8003 | 0.7749 | 0.2587 | 0.2173 | 0.3775 | 0.6000 | 0.6174 | 0.5428 | 0.7985 | Untouched Meta `dinov2_vitg14_reg` baseline (`baselines/dinov2_giant_baseline.py`) | n/a | May 11 2026 | Meta |
+| 4 | 0.5499 | 0.5396 | 0.4860 | 0.7517 | 0.7765 | 0.2806 | 0.2255 | 0.3997 | 0.6993 | 0.6091 | 0.5371 | 0.7438 | Untouched OpenMidnight ViT-G/14-reg baseline (`baselines/openmidnight_baseline.py`) | n/a | May 11 2026 | @PaulScotti |
+| 5 | 0.5284 | 0.4647 | 0.5099 | 0.7717 | 0.7939 | 0.2183 | 0.2241 | 0.3600 | 0.5827 | 0.6225 | 0.5100 | 0.7543 | Untouched Meta `dinov2_vits14_reg` baseline (`baselines/dinov2_small_baseline.py`) | n/a | May 11 2026 | @tmabraham |
+| 6 | 0.4283 | 0.3349 | 0.2875 | 0.5819 | 0.7214 | 0.2688 | 0.2285 | 0.3072 | 0.6922 | 0.5648 | 0.5341 | 0.1905 | Seed-0 random Meta `dinov2_vits14_reg` architecture baseline (`baselines/dinov2_random_baseline.py`) | n/a | May 11 2026 | @tmabraham |
 
 ### How to submit to the leaderboard
 
-The current `configs/leader.yaml` is the maintained Nanopath training recipe, but its old six-probe score has been removed until it is re-run on this 12-probe benchmark. To get on the leaderboard you must outperform the existing top leaderboard `mean_probe_score` by at least 0.01. If you do so, open a PR to this repo with a description of your changes (please keep only the minimal necessary code changes that improve performance) and share your wandb run/report. [@PaulScotti](https://github.com/PaulScotti) will train a new model using your code on his 1 80GB H100, using a different rng seed and striving to reduce the submission to the smallest practical diff against the current codebase. If it still improves `mean_probe_score` by at least 0.01, we will update the README & leaderboard accordingly. **You don't need an H100 yourself to submit** — train on whatever hardware you have access to, share the run if you think it's a winner, and Paul handles H100 verification.
+`configs/leader.yaml` is the maintained Nanopath training recipe, and its old six-probe score has been removed until it is re-run on this 11-probe benchmark. Submit any completed or failed run to labless:
+
+```bash
+python submit.py output_dir=/data/$USER/nanopath/leader/my-run contributor=@yourgithub wandb_url=https://wandb.ai/... notes="what changed and why"
+```
+
+Completed submissions require `summary.json` and `metrics.jsonl`; failed runs can be submitted with `status=failed failure_reason="..."`. To become the validated leader you must outperform the existing top `mean_probe_score` by at least 0.01. [@PaulScotti](https://github.com/PaulScotti) will train a new model using your code on his 1 80GB H100, using a different rng seed and striving to reduce the submission to the smallest practical diff against the current codebase. If it still improves `mean_probe_score` by at least 0.01, we will update the README & leaderboard accordingly. **You don't need an H100 yourself to submit** — train on whatever hardware you have access to, publish the run, and Paul handles H100 verification.
 
 We also strongly welcome PRs that simplify the codebase — either by reducing lines of code (excluding commented-out lines intended for readability) or by reducing complexity (e.g. replacing the cosine LR scheduler with a constant LR) — without regressing `mean_probe_score`.
 
@@ -68,7 +82,7 @@ Anything not explicitly fixed below (e.g., model architecture, training objectiv
 Every leaderboard run is verified on the organizer's compute (1 80GB H100 gpu), bounded by two possible caps:
 
 - **`train.max_train_flops` ≤ 1e18 training FLOPs**, measured directly from aten op shapes via `torch.utils.flop_counter.FlopCounterMode` on the first step (forward + backward + opt.step) and reused thereafter since per-step shapes are fixed. This counts everything that touches the GPU during a step — student backbone, EMA teacher forward, projection heads, masking, etc. — not just the backbone.
-- **≤45 min. training on a single 80 GB H100 before the final probe window**, enforced by SLURM. `submit/train_1gpu.sbatch` runs with `--signal=USR1@900`, so SLURM sends `SIGUSR1` 15 minutes before the `--time` wall; `train.py`'s SIGUSR1 handler catches it as a clean stop signal, cuts training, and uses the remaining window for the final checkpoint save + downstream probe suite. The current full-grid final probe is ~31 minutes for DINOv2-S and ~50 minutes for ViT-G baselines, dominated by SurGen.
+- **≤45 min. training on a single 80 GB H100 before the final probe window**, enforced by SLURM. `submit/train_1gpu.sbatch` runs with `--signal=USR1@900`, so SLURM sends `SIGUSR1` 15 minutes before the `--time` wall; `train.py`'s SIGUSR1 handler catches it as a clean stop signal, cuts training, and uses the remaining window for the final checkpoint save + downstream probe suite.
 
 The above limits force submissions to be **simultaneously compute efficient and systems efficient**.
 
@@ -98,6 +112,7 @@ You can initialize the model using DINOv2 checkpoint (trained on natural images)
 - `prepare.py` — data prep: verify or download HF tile mirror + probe datasets + any pretrained weights.
 - `probe.py` — downstream probes (KNN, few-shot, linear, segmentation, slide AUROC, survival, robustness).
 - `submit/train_1gpu.sbatch` — SLURM launcher for single-GPU training.
+- `submit.py` + `labless.yaml` — package a completed run and post it to the live labless tracker.
 - `download_TCGA.sh` — manual utility, run by hand if you want the full 12K TCGA open-access SVS slide set (~13 TB) for forking the tile-extraction recipe. Not invoked by `prepare.py` and not needed for any standard training workflow.
 - `LOG.md` — running notes on what has been tried, including negative results.
 - `pyproject.toml` + `uv.lock` — Python dependency spec consumed by `uv sync`.
@@ -121,13 +136,13 @@ python prepare.py configs/leader.yaml download=False
 
 **What `download=True` does**
 1. **TCGA tiles**: `huggingface_hub.snapshot_download` (filtered to `shard-*.parquet`) pulls the 200 parquet shards (~120 GB total, `{path: string, jpeg: binary}` rows with 64-row row groups) from [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) into `data.dataset_dir`.
-2. **Probe datasets**: for each empty configured root, fetches/unpacks and, where needed, pre-extracts the probe data. BRACS, BreaKHis, PCam, PanNuke, UCLA Lung, HER2, CRC survival, PathoROB, and MoNuSAC come from their official public sources. MHIST, CoNSeP, and SurGen use the [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) probe mirror for portable noninteractive setup; before fetching MHIST or CoNSeP, `prepare.py` prints that users must satisfy the official upstream form/access terms first. Slide-level probes cache uncapped 20x/512 tissue grids (`tiles/`, `tiles.parquet`, `surgen-*.parquet`, or `patches.parquet`) so `probe.py` never opens raw WSIs.
+2. **Probe datasets**: for each empty configured root, fetches/unpacks and, where needed, pre-extracts the probe data. BRACS, BreaKHis, PCam, PanNuke, UCLA Lung, CRC survival, PathoROB, and MoNuSAC come from their official public sources. MHIST, CoNSeP, and SurGen use the [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) probe mirror for portable noninteractive setup; before fetching MHIST or CoNSeP, `prepare.py` prints that users must satisfy the official upstream form/access terms first. Slide-level probes cache 20x/512 tissue grids (`tiles.parquet`, `surgen-*.parquet`, or `patches.parquet`) so `probe.py` never opens raw WSIs; SurGen prepares the full grid but streams a deterministic raster-spaced sub-bag for runtime.
 3. **DINOv2 backbone weights**: `torch.hub.load_state_dict_from_url` fetches the Meta checkpoint for `model.type` from `dl.fbaipublicfiles.com` into `~/.cache/torch/hub/checkpoints/`.
 
 **Prerequisites**
 - ~120 GB free wherever `data.dataset_dir` lives for the parquet shards (cluster default: `/data/nanopath_parquet`).
-- Probe data disk varies by suite: the checked-in cluster paths are shared; off-cluster, expect large one-time downloads and preprocessing for PanNuke, UCLA Lung, HER2, CRC survival, and MoNuSAC. SurGen's official CZI regeneration path is multi-hour, so normal setup pulls our pre-extracted ~102 GB HF parquet cache instead. Reruns skip already-populated roots.
-- ~330 MB free under `~/.cache/torch/hub/checkpoints/` for DINOv2 weights.
+- Probe data disk varies by suite: the checked-in cluster paths are shared; off-cluster, expect large one-time downloads and preprocessing for PanNuke, UCLA Lung, CRC survival, and MoNuSAC. SurGen's official CZI regeneration path is multi-hour, so normal setup pulls our pre-extracted ~102 GB HF parquet cache instead. Reruns skip already-populated roots.
+- ~330 MB free under `~/.cache/torch/hub/checkpoints/` for DINOv2-S/B weights, or ~4.6 GB if you run the DINOv2-G baseline.
 - `wget` on PATH for the BRACS FTP mirror. Python-side WSI/probe dependencies are installed by `uv sync`.
 
 ### Regenerating the tile dataset from raw SVS
@@ -158,7 +173,7 @@ To publish a new variant of the dataset, push the resulting shards to a fresh HF
 
 ## Running
 
-Smoke (single GPU, short training plus the full probe suite, validates the train+probe path; H100 probe wall is ~31-50 minutes for the remeasured baselines):
+Smoke (single GPU, short training plus the full probe suite, validates the train+probe path):
 
 ```bash
 sbatch submit/train_1gpu.sbatch configs/smoke.yaml
@@ -169,6 +184,18 @@ Untouched DINOv2-S baseline (no training, full probe only):
 
 ```bash
 python baselines/dinov2_small_baseline.py configs/leader.yaml output_dir=/data/$USER/nanopath/baselines/dinov2-small
+```
+
+Untouched DINOv2-G baseline (no training, full probe only):
+
+```bash
+python baselines/dinov2_giant_baseline.py configs/leader.yaml output_dir=/data/$USER/nanopath/baselines/dinov2-giant
+```
+
+Random DINOv2-S baseline (same architecture as DINOv2-S, seed-0 random weights, full probe only):
+
+```bash
+python baselines/dinov2_random_baseline.py configs/leader.yaml output_dir=/data/$USER/nanopath/baselines/dinov2-random
 ```
 
 Untouched OpenMidnight baseline (no training, full probe only):
@@ -183,6 +210,14 @@ Untouched H-optimus-0 baseline (no training, full probe only):
 python baselines/hoptimus0_baseline.py configs/leader.yaml output_dir=/data/$USER/nanopath/baselines/hoptimus0
 ```
 
+Untouched GenBio-PathFM baseline (no training, full probe only):
+
+```bash
+python baselines/genbio_pathfm_baseline.py configs/leader.yaml output_dir=/data/$USER/nanopath/baselines/genbio_pathfm
+```
+
+OpenMidnight, H-optimus-0, and GenBio-PathFM scripts default to MedARC cluster checkpoint paths; pass `checkpoint_path=/your/path` when running elsewhere.
+
 Maintained Nanopath recipe (full train+probe)
 
 ```bash
@@ -195,6 +230,7 @@ sbatch submit/train_1gpu.sbatch configs/leader.yaml
 ## Outputs
 
 - run outputs: `project.output_dir` (default is `/data/$USER/nanopath/leader/...`). Final probe results log to `metrics.jsonl`.
+- labless submission payload: `project.output_dir/labless_submission.json`.
 - wandb: `/data/$USER/nanopath/wandb`.
 - parquet tile shards: `data.dataset_dir` (defaults to `/data/nanopath_parquet`).
 - probe datasets: `probe.dataset_roots` (defaults to shared `/block/...` and `/data/...` paths on the MedARC cluster).

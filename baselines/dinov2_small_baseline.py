@@ -18,10 +18,10 @@ from model import DinoV2ViT, load_dinov2_pretrained
 from probe import completed_probe_summary, prepare_probe_state, queue_probe_job
 
 
-def main():
-    usage = "usage: python baselines/dinov2_small_baseline.py [config.yaml] [output_dir=/path]"
+def run_dinov2_baseline(script, project, recipe_id, variant, output_default, pretrained=True, seed=0):
+    usage = f"usage: python baselines/{script} [config.yaml] [output_dir=/path]"
     config_path = REPO_DIR / "configs" / "leader.yaml"
-    output_dir = Path(os.path.expandvars("/data/$USER/nanopath/baselines/dinov2-small"))
+    output_dir = Path(os.path.expandvars(output_default))
     for arg in sys.argv[1:]:
         if arg.endswith((".yaml", ".yml")):
             config_path = Path(arg)
@@ -33,11 +33,11 @@ def main():
 
     cfg = yaml.safe_load(os.path.expandvars(config_path.read_text()))
     cfg["config_path"] = str(config_path.resolve())
-    cfg["project"]["name"] = "baseline-dinov2-small"
+    cfg["project"]["name"] = project
     cfg["project"]["family"] = "baseline"
-    cfg["project"]["recipe_id"] = "dinov2-vits14-reg-no-continued-pretraining"
+    cfg["project"]["recipe_id"] = recipe_id
     cfg["project"]["output_dir"] = str(output_dir)
-    cfg["model"]["type"] = "dinov2_vits14_reg"
+    cfg["model"]["type"] = variant
     cfg["probe"]["enabled"] = True
     cfg["probe"]["model_weights"] = "ema"
     cfg["probe"]["count"] = 1
@@ -46,7 +46,15 @@ def main():
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True)
     started_at = time.monotonic()
-    model = load_dinov2_pretrained(DinoV2ViT(variant="dinov2_vits14_reg"))
+    torch.manual_seed(seed)
+    model = DinoV2ViT(variant=variant)
+    if pretrained:
+        model = load_dinov2_pretrained(model)
+    else:
+        # The loader normally overwrites these token/pos parameters; initialize
+        # them here so the random baseline is not partly zero by construction.
+        for p in (model.cls_token, model.register_tokens, model.pos_embed, model.mask_token):
+            torch.nn.init.trunc_normal_(p, std=0.02)
     weights = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
     state = prepare_probe_state(cfg, output_dir)
     queue_probe_job(state, {"model": weights, "model_ema": weights, "step": 0, "config": cfg}, 0, 0, 1.0)
@@ -79,6 +87,17 @@ def main():
         checkpoint_path.unlink()
     print(f"baseline metrics: {output_dir / 'metrics.jsonl'}")
     print(f"mean_probe_score: {event['mean_probe_score']:.6f}")
+
+
+def main():
+    run_dinov2_baseline(
+        "dinov2_small_baseline.py",
+        "baseline-dinov2-small",
+        "dinov2-vits14-reg-no-continued-pretraining",
+        "dinov2_vits14_reg",
+        "/data/$USER/nanopath/baselines/dinov2-small",
+        pretrained=True,
+    )
 
 
 if __name__ == "__main__":

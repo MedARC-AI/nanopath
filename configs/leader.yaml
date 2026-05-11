@@ -74,7 +74,6 @@ probe:
     - monusac
     - consep
   slide_datasets:
-    - her2
     - ucla_lung
   auc_datasets:
     - surgen
@@ -90,7 +89,6 @@ probe:
     break_his: /block/eva-data/breakhis
     consep: /block/eva-data/consep
     crc_survival: /data/crc-survival
-    her2: /data/her2-tumor-roi
     mhist: /block/eva-data/mhist
     monusac: /block/eva-data/monusac
     pcam: /block/eva-data/patch_camelyon

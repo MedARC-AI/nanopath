@@ -2,7 +2,7 @@
 
 ## Role In Nanopath
 
-`break_his` is a breast histology tile-classification probe. It contributes one scalar to `mean_probe_score`: the mean of linear, KNN, and SimpleShot validation macro F1.
+`break_his` is a breast histology tile-classification probe. It contributes one scalar to `mean_probe_score`: the mean of linear, KNN, and 16-shot SimpleShot validation macro F1.
 
 ## Source
 
@@ -26,11 +26,11 @@ This is not the full 8-subtype, all-magnification BreaKHis task. Following the E
 
 ## Implementation
 
-`probe.py` loads relative image paths from `benchmarking/break_his.json`, embeds each RGB image with the frozen backbone after resize-256 / center-crop-224 preprocessing, and fits three heads on cached embeddings:
+`probe.py` loads relative image paths from `benchmarking/break_his.json`, embeds each RGB image with model-native preprocessing from `model.py::probe_transforms`, and fits three heads on cached embeddings:
 
 - AdamW linear probe: LR ∈ {1e-3, 1e-4, 1e-5}, weight decay 1e-4, batch size 64, 200 epochs; report the best val macro F1 across all LR × epoch checkpoints
 - cosine KNN: k ∈ {1, 3, 5, 10, 20, 30, 40, 50}, k selected by val F1
-- SimpleShot few-shot: shots ∈ {1, 2, 4, 8, 16}, 500 random support-set trials per shot with per-example majority vote; the few-shot scalar is the mean val F1 across shots
+- SimpleShot few-shot: 1000 deterministic 16-shot support sets per class, support/query embeddings centered by each support-set mean, class prototypes from class-specific centered support means, cosine nearest-centroid prediction, then per-query majority vote
 
 The dataset score is `mean(linear_val_f1, knn_val_f1, fewshot_val_f1)`.
 
@@ -44,6 +44,7 @@ Recent H100 timings:
 
 | model | wall |
 |---|---:|
-| DINOv2-S | 24.7s |
-| OpenMidnight | 21.1s |
-| H-optimus-0 | 20.6s |
+| DINOv2-S | 15.1s |
+| OpenMidnight | 20.7s |
+| H-optimus-0 | 20.4s |
+| GenBio-PathFM | 14.6s |
