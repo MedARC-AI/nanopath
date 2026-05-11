@@ -1,5 +1,5 @@
 # Run the full frozen-probe suite on the untouched H-optimus-0 ViT-G checkpoint.
-# Uses H-optimus normalization and the same probe.py worker as training runs.
+# Defaults to the MedARC cluster checkpoint path; pass checkpoint_path=/path off-cluster.
 
 import json
 import os
@@ -12,9 +12,24 @@ from pathlib import Path
 REPO_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_DIR))
 
+import torch
 import yaml
 
+from model import DinoV2ViT
 from probe import TASK_FIELDS, completed_probe_summary, prepare_probe_state
+
+HOPTIMUS0_VITG14_REG = (1536, 40, 24, 16, "swiglu", False, None)
+
+
+def load_probe_model(checkpoint_path, device):
+    model = DinoV2ViT("hoptimus0_vitg14_reg", variant_cfg=HOPTIMUS0_VITG14_REG)
+    state = {}
+    for key, value in torch.load(checkpoint_path, map_location="cpu", weights_only=False).items():
+        key = key.replace("reg_token", "register_tokens").replace("mlp.fc1", "mlp.w12").replace("mlp.fc2", "mlp.w3")
+        state[key] = value
+    state["mask_token"] = model.mask_token.detach().cpu().clone()
+    model.load_state_dict(state, strict=True)
+    return model.to(device).eval()
 
 
 def main():
@@ -33,6 +48,7 @@ def main():
                 output_dir = Path(os.path.expandvars(value))
             else:
                 raise SystemExit(usage)
+    print(f"checkpoint_path={checkpoint_path} (override with checkpoint_path=/path if not using MedARC defaults)", flush=True)
 
     cfg = yaml.safe_load(os.path.expandvars(config_path.read_text()))
     cfg["config_path"] = str(config_path.resolve())
@@ -46,6 +62,8 @@ def main():
     cfg["probe"]["enabled"] = True
     cfg["probe"]["model_weights"] = "ema"
     cfg["probe"]["count"] = 1
+    cfg["probe"]["model_loader"] = "baselines.hoptimus0_baseline:load_probe_model"
+    cfg["probe"]["transform_policy"] = "resize_crop_224"
 
     if output_dir.exists():
         shutil.rmtree(output_dir)

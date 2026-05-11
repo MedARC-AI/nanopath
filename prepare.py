@@ -446,62 +446,6 @@ def fetch_ucla_lung(root):
     version.chmod(0o664)
 
 
-def _tile_her2_slide(args):
-    slide_id, src, dst = args
-    if dst.exists():
-        n = sum(1 for _ in dst.glob("*.jpg"))
-        if n > 0:
-            return slide_id, n
-        shutil.rmtree(dst)
-    dst.mkdir(parents=True, exist_ok=True)
-    slide = openslide.OpenSlide(str(src))
-    rows = _openslide_grid_rows(slide, slide_id)
-    for n, row in enumerate(rows):
-        (dst / f"{n:06d}.jpg").write_bytes(row["jpeg"])
-    slide.close()
-    return slide_id, len(rows)
-
-
-# HER2-Tumor-ROIs response probe. TCIA PathDB exposes direct SVS URLs, so we
-# download only the PathoBench fold_0 train-derived train/val slides, tile them,
-# and leave the raw SVS files cached under root/raw for resumable setup.
-HER2_PATHDB_COLLECTION_ID = 533
-HER2_TILING_VERSION = PATHOBENCH_TILING_VERSION
-
-
-def _her2_urls():
-    urls, page = {}, 0
-    while True:
-        with urllib.request.urlopen(f"https://pathdb.cancerimagingarchive.net/listofimages/{HER2_PATHDB_COLLECTION_ID}?_format=json&page={page}") as r:
-            data = json.load(r)
-        if not data:
-            return urls
-        for item in data:
-            urls[item["imageid"][0]["value"]] = item["field_wsiimage"][0]["url"]
-        page += 1
-
-
-def fetch_her2(root):
-    splits = json.loads((Path(__file__).resolve().parent / "benchmarking" / "her2.json").read_text())
-    slides = list(splits["train"]["slides"]) + list(splits["val"]["slides"])
-    urls, raw_dir = _her2_urls(), root / "raw"
-    raw_dir.mkdir(parents=True, exist_ok=True)
-    version = root / "tiling_version.txt"
-    if (not version.exists() or version.read_text().strip() != HER2_TILING_VERSION) and (root / "tiles").exists():
-        shutil.rmtree(root / "tiles")
-    workers = int(os.environ.get("PREPARE_WORKERS", min(16, os.cpu_count() or 8)))
-    with mp.Pool(workers) as pool:
-        for i, name in enumerate(pool.imap_unordered(_http_download_if_needed, [(urls[sid], raw_dir / f"{sid}.svs") for sid in slides]), start=1):
-            if i % 8 == 0 or i == len(slides):
-                print(f"  [{i}/{len(slides)}] raw {name}", flush=True)
-    args = [(sid, raw_dir / f"{sid}.svs", root / "tiles" / sid) for sid in slides]
-    with mp.Pool(workers) as pool:
-        for i, (sid, n) in enumerate(pool.imap_unordered(_tile_her2_slide, args), start=1):
-            print(f"  [{i}/{len(args)}] {sid}: {n} tiles", flush=True)
-    version.write_text(HER2_TILING_VERSION + "\n")
-    version.chmod(0o664)
-
-
 # PathoBench SR386 RAS mutation probe. Normal setup pulls our pre-extracted
 # HF parquet mirror; this official-source path rebuilds that mirror by streaming
 # CZI files, caching one parquet per slide, then deleting raw CZI.
@@ -732,7 +676,6 @@ FETCHERS = {
     "break_his": fetch_break_his,
     "consep": fetch_consep,
     "crc_survival": fetch_crc_survival,
-    "her2": fetch_her2,
     "mhist": fetch_mhist,
     "monusac": fetch_monusac,
     "pcam": fetch_pcam,
@@ -775,11 +718,6 @@ def is_populated(name, p):
         got = set(pq.read_table(p / "tiles.parquet", columns=["slide_id"]).column("slide_id").to_pylist()) if (p / "tiles.parquet").exists() else set()
         version = p / "tiling_version.txt"
         return version.exists() and version.read_text().strip() == UCLA_LUNG_TILING_VERSION and expected <= got
-    if name == "her2":
-        splits = json.loads((bench / "her2.json").read_text())
-        slides = list(splits["train"]["slides"]) + list(splits["val"]["slides"])
-        version = p / "tiling_version.txt"
-        return version.exists() and version.read_text().strip() == HER2_TILING_VERSION and all(any((p / "tiles" / sid).glob("*.jpg")) for sid in slides)
     if name == "surgen":
         splits = json.loads((bench / "surgen.json").read_text())
         expected = set(splits["train"]["slides"] + splits["val"]["slides"])
@@ -863,7 +801,7 @@ def main():
         raise SystemExit("\n".join(lines))
 
     # Stage 3 — Meta's pretrained weights for the model variant in cfg
-    # (dinov2_vits14_reg ~84 MB, dinov2_vitb14_reg ~330 MB) live in
+    # (dinov2_vits14_reg ~84 MB, dinov2_vitb14_reg ~330 MB, giant ~4 GB) live in
     # ~/.cache/torch/hub/checkpoints. model.py:load_dinov2_pretrained streams
     # them on the first forward pass, but pulling them at prep time means
     # train.py never blocks on the network.

@@ -1,4 +1,4 @@
-# DinoV2ViT: clean ViT + 4 register tokens that loads Meta's `dinov2_vit{s,b}14_reg`
+# DinoV2ViT: clean ViT + 4 register tokens that loads Meta's `dinov2_vit{s,b,g}14_reg`
 # pretrained weights via state_dict (no xformers, no dinov2 codebase imports).
 # Attention runs on `F.scaled_dot_product_attention` so we get FlashAttention-2
 # on H100 bf16 with no third-party kernel dependency. Module names below match
@@ -12,15 +12,22 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torchvision import transforms
 
 
 # (dim, depth, heads, pretrain_grid, ffn, pos_has_cls, weight URL) for each supported variant.
 DINOV2_VARIANTS = {
     "dinov2_vits14_reg": (384, 12, 6, 37, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vits14/dinov2_vits14_reg4_pretrain.pth"),
     "dinov2_vitb14_reg": (768, 12, 12, 37, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitb14/dinov2_vitb14_reg4_pretrain.pth"),
-    "openmidnight_vitg14_reg": (1536, 40, 24, 16, "swiglu", True, None),
-    "hoptimus0_vitg14_reg": (1536, 40, 24, 16, "swiglu", False, None),
+    "dinov2_vitg14_reg": (1536, 40, 24, 37, "swiglu", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitg14/dinov2_vitg14_reg4_pretrain.pth"),
 }
+
+
+def probe_transforms():
+    # Default for Nanopath-trained checkpoints; baseline scripts override this in their request config.
+    transform = transforms.Compose([transforms.Resize((224, 224), antialias=True), transforms.ToTensor()])
+    # Keep the two return slots because probe.py separates tile-image and slide/patch-bag probes.
+    return transform, transform
 
 
 # Stochastic depth: keep_prob bernoulli on the residual branch, scaled to preserve mean.
@@ -96,11 +103,11 @@ class Block(nn.Module):
 # (cls_token, register_tokens, pos_embed (1, 1+37^2, dim), mask_token (1, dim), patch_embed.proj,
 # blocks.{i}.{norm1,norm2,attn.qkv,attn.proj,ls1,ls2,mlp.fc1,mlp.fc2}, norm).
 # Pos embed is bicubically interpolated at runtime to the current patch grid.
-# Meta DINOv2 includes a cls pos and uses 37x37 patches; ViT-G baselines use 16x16.
+    # Meta DINOv2 includes a cls pos and uses 37x37 patches; variant_cfg can override this for probes.
 class DinoV2ViT(nn.Module):
-    def __init__(self, variant="dinov2_vits14_reg", drop_path_rate=0.0):
+    def __init__(self, variant="dinov2_vits14_reg", drop_path_rate=0.0, variant_cfg=None):
         super().__init__()
-        dim, depth, heads, pretrain_grid, ffn, pos_has_cls, _ = DINOV2_VARIANTS[variant]
+        dim, depth, heads, pretrain_grid, ffn, pos_has_cls, _ = variant_cfg or DINOV2_VARIANTS[variant]
         mlp_ratio, patch, registers = 4.0, 14, 4
         self.variant = variant
         self.patch_size, self.registers, self.embed_dim = patch, registers, dim
@@ -171,32 +178,6 @@ class DinoV2ViT(nn.Module):
 def load_dinov2_pretrained(model):
     *_, url = DINOV2_VARIANTS[model.variant]
     state = torch.hub.load_state_dict_from_url(url, progress=False, map_location="cpu")
-    model.load_state_dict(state, strict=True)
-    return model
-
-
-def load_openmidnight_checkpoint(model, path="/data/OpenMidnight_ckpts/openmidnight_checkpoint.pth"):
-    raw = torch.load(path, map_location="cpu", weights_only=False)["teacher"]
-    state = {}
-    for key, value in raw.items():
-        if "dino" in key or "ibot" in key:
-            continue
-        key = key.removeprefix("backbone.")
-        if key.startswith("blocks."):
-            _, _, block, rest = key.split(".", 3)
-            key = f"blocks.{block}.{rest}"
-        state[key] = value
-    model.load_state_dict(state, strict=True)
-    return model
-
-
-def load_hoptimus0_checkpoint(model, path="/data/H-optimus-0/pytorch_model.bin"):
-    raw = torch.load(path, map_location="cpu", weights_only=False)
-    state = {}
-    for key, value in raw.items():
-        key = key.replace("reg_token", "register_tokens").replace("mlp.fc1", "mlp.w12").replace("mlp.fc2", "mlp.w3")
-        state[key] = value
-    state["mask_token"] = model.mask_token.detach().cpu().clone()
     model.load_state_dict(state, strict=True)
     return model
 
