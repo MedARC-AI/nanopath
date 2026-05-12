@@ -24,7 +24,7 @@ python prepare.py configs/smoke.yaml download=False
 # and print upstream access-term/provenance notices before fetching.
 # python prepare.py configs/smoke.yaml download=True
 
-# smoke test: short training plus the full configured probe suite
+# smoke test: short training plus the fixed full probe suite
 sbatch submit/train_1gpu.sbatch configs/smoke.yaml
 # or directly on a GPU machine: python train.py configs/smoke.yaml
 
@@ -35,7 +35,7 @@ sbatch submit/train_1gpu.sbatch configs/leader.yaml
 
 If you are a MedARC volunteer on our shared cluster, the checked-in configs already point at `/data/nanopath_parquet` for the tile shards and the shared `/block/...` and `/data/...` roots for the probe datasets.
 
-For non-MedARC cluster users, run `python prepare.py configs/leader.yaml download=True` to download our 4M-tile dataset (200 parquet shards, ~120 GB) from our [nanopath HF dataset](https://huggingface.co/datasets/medarc/nanopath), fetch/prepare the configured probe datasets, and fetch relevant pretrained weights for the configured `model.type`. You do not need the original TCGA SVS files to train.
+For non-MedARC cluster users, run `python prepare.py configs/leader.yaml download=True` to download our 4M-tile dataset (200 parquet shards, ~120 GB) from our [nanopath HF dataset](https://huggingface.co/datasets/medarc/nanopath), fetch/prepare the fixed probe datasets, and fetch relevant pretrained weights for the configured `model.type`. You do not need the original TCGA SVS files to train.
 
 `pyproject.toml` pins `torch` / `torchvision` against the CUDA 12.9 wheel index. If your GPU/driver needs a different CUDA build (e.g. cu118 for older A100/V100 setups), edit the `torch` and `torchvision` lines in `pyproject.toml` before `uv sync`.
 
@@ -45,20 +45,75 @@ A successful model training prints periodic train lines, logs to wandb, and ends
 
 ![Nanopath progress plot](imgs/progress_plot.png)
 
-Score is final `mean_probe_score`: the unweighted mean of the 11 dataset columns below. Tile classification datasets use the mean of linear / KNN / 16-shot SimpleShot F1, with SimpleShot majority-voted over 1000 deterministic support sets; PathoBench-derived slide classification datasets use balanced logistic linear-probe AUROC; segmentation datasets use macro Jaccard; SurGen uses AUROC; CRC survival uses Harrell's c-index; and PathoROB uses its robustness index. Probe heads consume each model's native feature dimension (e.g. 384d DINOv2-S, 1536d DINOv2-G / ViT-G baselines, 4608d GenBio-PathFM). Historical rows before this 11-probe revision are not comparable to the current benchmark. See `benchmarking/` for the full benchmark notes and test-split policy.
+Score is final `mean_probe_score` under the current 11-dataset definition. The compact leaderboard tables keep the high-level comparison readable: `linear`, `knn`, and `16-shot` are the means of those heads across the four tile-classification datasets, while `segmentation` is the mean of MoNuSAC / CoNSeP / PanNuke. Detailed per-dataset values are broken out below instead of forcing one very wide table. SimpleShot majority-votes over 1000 deterministic support sets; PathoBench-derived slide classification datasets use balanced logistic linear-probe AUROC; segmentation datasets use macro Jaccard; SurGen uses AUROC; BoehmK survival uses Harrell's c-index; and PathoROB uses its robustness index. Probe heads consume each model's native feature dimension (e.g. 384d DINOv2-S, 1536d DINOv2-G / ViT-G baselines, 4608d GenBio-PathFM). The baseline rows combine May 11, 2026 full-suite metrics with May 12, 2026 BoehmK survival-only reruns; the TCGA-pretrained DINOv2-S row is the full-FLOP `v18_s4242` checkpoint reprobed on May 12, 2026. See `benchmarking/` for the full benchmark notes and test-split policy.
 
-| # | mean | break_his | bracs | mhist | pcam | monusac | consep | pannuke | ucla_lung | surgen | crc_survival | pathorob | Description | wandb | Date | Contributors |
-|---|-----:|----------:|------:|------:|-----:|--------:|-------:|--------:|----------:|-------:|-------------:|---------:|-------------|-------|------|--------------|
-| 1 | **0.6284** | 0.7173 | 0.5997 | 0.7937 | 0.9122 | 0.3361 | 0.2309 | 0.4234 | 0.7680 | 0.6375 | 0.5529 | 0.9412 | Untouched GenBio-PathFM ViT-G/16 baseline (`baselines/genbio_pathfm_baseline.py`) | n/a | May 11 2026 | GenBio AI |
-| 2 | 0.6161 | 0.7505 | 0.5619 | 0.7935 | 0.9078 | 0.3350 | 0.2218 | 0.4213 | 0.7004 | 0.6584 | 0.5343 | 0.8926 | Untouched H-optimus-0 ViT-G/14-reg baseline (`baselines/hoptimus0_baseline.py`) | n/a | May 11 2026 | Bioptimus |
-| 3 | 0.5615 | 0.6272 | 0.5617 | 0.8003 | 0.7749 | 0.2587 | 0.2173 | 0.3775 | 0.6000 | 0.6174 | 0.5428 | 0.7985 | Untouched Meta `dinov2_vitg14_reg` baseline (`baselines/dinov2_giant_baseline.py`) | n/a | May 11 2026 | Meta |
-| 4 | 0.5541 | 0.5694 | 0.4885 | 0.7517 | 0.7765 | 0.2886 | 0.2228 | 0.4078 | 0.6993 | 0.6091 | 0.5371 | 0.7438 | Untouched OpenMidnight ViT-G/14-reg baseline (`baselines/openmidnight_baseline.py`) | n/a | May 11 2026 | @PaulScotti |
-| 5 | 0.5284 | 0.4647 | 0.5099 | 0.7717 | 0.7939 | 0.2183 | 0.2241 | 0.3600 | 0.5827 | 0.6225 | 0.5100 | 0.7543 | Untouched Meta `dinov2_vits14_reg` baseline (`baselines/dinov2_small_baseline.py`) | n/a | May 11 2026 | @tmabraham |
-| 6 | 0.4283 | 0.3349 | 0.2875 | 0.5819 | 0.7214 | 0.2688 | 0.2285 | 0.3072 | 0.6922 | 0.5648 | 0.5341 | 0.1905 | Seed-0 random Meta `dinov2_vits14_reg` architecture baseline (`baselines/dinov2_random_baseline.py`) | n/a | May 11 2026 | @tmabraham |
+### Nanopath models
+
+| # | Description | final score | linear | knn | 16-shot | segmentation | progression | mutation | survival | robustness | Contributors |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 1 | DINOv2-S/14-reg leader recipe trained on TCGA to 1e18 FLOPs (`v18_s4242`) | 0.5563 | 0.7656 | 0.7046 | 0.6667 | 0.3000 | 0.6644 | 0.5843 | 0.5070 | 0.6142 | @PaulScotti |
+
+### Baselines
+
+| # | Name | Description | final score | linear | knn | 16-shot | segmentation | progression | mutation | survival | robustness |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | GenBio-PathFM | Untouched GenBio-PathFM ViT-G/16 baseline | **0.6268** | 0.8076 | 0.7626 | 0.6970 | 0.3301 | 0.7680 | 0.6375 | 0.5349 | 0.9412 |
+| 2 | H-optimus-0 | Untouched H-optimus-0 ViT-G/14-reg baseline | 0.6190 | 0.7995 | 0.7676 | 0.6931 | 0.3261 | 0.7004 | 0.6584 | 0.5661 | 0.8926 |
+| 3 | DINOv2-giant | Untouched Meta `dinov2_vitg14_reg` baseline | 0.5627 | 0.7689 | 0.7208 | 0.5834 | 0.2845 | 0.6000 | 0.6174 | 0.5562 | 0.7985 |
+| 4 | OpenMidnight | Untouched OpenMidnight ViT-G/14-reg baseline | 0.5494 | 0.7926 | 0.7135 | 0.4335 | 0.3064 | 0.6993 | 0.6091 | 0.4861 | 0.7438 |
+| 5 | DINOv2-small | Untouched Meta `dinov2_vits14_reg` baseline | 0.5304 | 0.6968 | 0.6249 | 0.5834 | 0.2675 | 0.5827 | 0.6225 | 0.5321 | 0.7543 |
+| 6 | DINOv2-small random | Seed-0 random Meta `dinov2_vits14_reg` architecture baseline | 0.4268 | 0.5237 | 0.5066 | 0.4139 | 0.2682 | 0.6922 | 0.5648 | 0.5176 | 0.1905 |
+
+Tile-classification details. Each dataset score is the mean of linear, KNN, and 16-shot SimpleShot macro F1.
+
+| Dataset | Name | lin. | knn | 16-shot | dataset score |
+|---|---|---:|---:|---:|---:|
+| break_his | GenBio-PathFM | 0.7321 | 0.7032 | 0.7165 | 0.7173 |
+| break_his | H-optimus-0 | 0.7318 | 0.7738 | 0.7459 | 0.7505 |
+| break_his | DINOv2-giant | 0.7003 | 0.6991 | 0.4823 | 0.6272 |
+| break_his | DINOv2-small w TCGA pretraining | 0.7124 | 0.6558 | 0.6949 | 0.6877 |
+| break_his | OpenMidnight | 0.6865 | 0.6529 | 0.3689 | 0.5694 |
+| break_his | DINOv2-small | 0.5462 | 0.4207 | 0.4274 | 0.4647 |
+| break_his | DINOv2-small random | 0.3555 | 0.3398 | 0.3093 | 0.3349 |
+| bracs | GenBio-PathFM | 0.6971 | 0.6262 | 0.4759 | 0.5997 |
+| bracs | H-optimus-0 | 0.6470 | 0.5578 | 0.4811 | 0.5619 |
+| bracs | DINOv2-giant | 0.6643 | 0.5521 | 0.4688 | 0.5617 |
+| bracs | DINOv2-small w TCGA pretraining | 0.6225 | 0.5417 | 0.4924 | 0.5522 |
+| bracs | OpenMidnight | 0.6872 | 0.5271 | 0.2513 | 0.4885 |
+| bracs | DINOv2-small | 0.5787 | 0.5026 | 0.4484 | 0.5099 |
+| bracs | DINOv2-small random | 0.3515 | 0.3334 | 0.1775 | 0.2875 |
+| mhist | GenBio-PathFM | 0.8691 | 0.8141 | 0.6980 | 0.7937 |
+| mhist | H-optimus-0 | 0.8804 | 0.8266 | 0.6734 | 0.7935 |
+| mhist | DINOv2-giant | 0.8519 | 0.8262 | 0.7227 | 0.8003 |
+| mhist | DINOv2-small w TCGA pretraining | 0.8424 | 0.7997 | 0.6702 | 0.7708 |
+| mhist | OpenMidnight | 0.8618 | 0.8130 | 0.5801 | 0.7517 |
+| mhist | DINOv2-small | 0.8263 | 0.7993 | 0.6894 | 0.7717 |
+| mhist | DINOv2-small random | 0.6109 | 0.5973 | 0.5375 | 0.5819 |
+| pcam | GenBio-PathFM | 0.9320 | 0.9069 | 0.8976 | 0.9122 |
+| pcam | H-optimus-0 | 0.9387 | 0.9123 | 0.8722 | 0.9078 |
+| pcam | DINOv2-giant | 0.8593 | 0.8058 | 0.6597 | 0.7749 |
+| pcam | DINOv2-small w TCGA pretraining | 0.8852 | 0.8213 | 0.8094 | 0.8387 |
+| pcam | OpenMidnight | 0.9348 | 0.8608 | 0.5339 | 0.7765 |
+| pcam | DINOv2-small | 0.8359 | 0.7773 | 0.7686 | 0.7939 |
+| pcam | DINOv2-small random | 0.7768 | 0.7559 | 0.6315 | 0.7214 |
+
+Non-tile task details. The survival column is `boehmk_pfs` Harrell's c-index.
+
+| Name | monusac | consep | pannuke | ucla_lung | surgen | survival | pathorob |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| GenBio-PathFM | 0.3361 | 0.2309 | 0.4234 | 0.7680 | 0.6375 | 0.5349 | 0.9412 |
+| H-optimus-0 | 0.3350 | 0.2218 | 0.4213 | 0.7004 | 0.6584 | 0.5661 | 0.8926 |
+| DINOv2-giant | 0.2587 | 0.2173 | 0.3775 | 0.6000 | 0.6174 | 0.5562 | 0.7985 |
+| DINOv2-small w TCGA pretraining | 0.2835 | 0.2204 | 0.3960 | 0.6644 | 0.5843 | 0.5070 | 0.6142 |
+| OpenMidnight | 0.2886 | 0.2228 | 0.4078 | 0.6993 | 0.6091 | 0.4861 | 0.7438 |
+| DINOv2-small | 0.2183 | 0.2241 | 0.3600 | 0.5827 | 0.6225 | 0.5321 | 0.7543 |
+| DINOv2-small random | 0.2688 | 0.2285 | 0.3072 | 0.6922 | 0.5648 | 0.5176 | 0.1905 |
+
+Baseline rows were measured on May 11, 2026 with BoehmK survival rerun on May 12, 2026; the Nanopath row uses checkpoint `/data/paul/nanopath/leader/v18_s4242/latest.pt`, reprobed on May 12, 2026.
 
 ### How to submit to the leaderboard
 
-The current `configs/leader.yaml` is the maintained Nanopath training recipe, but its old six-probe score has been removed until it is re-run on this 11-probe benchmark. To get on the leaderboard you must outperform the existing top leaderboard `mean_probe_score` by at least 0.01. If you do so, open a PR to this repo with a description of your changes (please keep only the minimal necessary code changes that improve performance) and share your wandb run/report. [@PaulScotti](https://github.com/PaulScotti) will train a new model using your code on his 1 80GB H100, using a different rng seed and striving to reduce the submission to the smallest practical diff against the current codebase. If it still improves `mean_probe_score` by at least 0.01, we will update the README & leaderboard accordingly. **You don't need an H100 yourself to submit** — train on whatever hardware you have access to, share the run if you think it's a winner, and Paul handles H100 verification.
+The current `configs/leader.yaml` is the maintained Nanopath training recipe. To get on the leaderboard you must outperform the existing top Nanopath `mean_probe_score` by at least 0.01. If you do so, open a PR to this repo with a description of your changes (please keep only the minimal necessary code changes that improve performance) and share your wandb run/report. [@PaulScotti](https://github.com/PaulScotti) will train a new model using your code on his 1 80GB H100, using a different rng seed and striving to reduce the submission to the smallest practical diff against the current codebase. If it still improves `mean_probe_score` by at least 0.01, we will update the README & leaderboard accordingly. **You don't need an H100 yourself to submit** — train on whatever hardware you have access to, share the run if you think it's a winner, and Paul handles H100 verification.
 
 We also strongly welcome PRs that simplify the codebase — either by reducing lines of code (excluding commented-out lines intended for readability) or by reducing complexity (e.g. replacing the cosine LR scheduler with a constant LR) — without regressing `mean_probe_score`.
 
@@ -124,12 +179,12 @@ python prepare.py configs/leader.yaml download=False
 
 **What `download=True` does**
 1. **TCGA tiles**: `huggingface_hub.snapshot_download` (filtered to `shard-*.parquet`) pulls the 200 parquet shards (~120 GB total, `{path: string, jpeg: binary}` rows with 64-row row groups) from [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) into `data.dataset_dir`.
-2. **Probe datasets**: for each empty configured root, fetches/unpacks and, where needed, pre-extracts the probe data. BRACS, BreaKHis, PCam, PanNuke, UCLA Lung, CRC survival, PathoROB, and MoNuSAC come from their official public sources. MHIST, CoNSeP, and SurGen use the [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) probe mirror for portable noninteractive setup; before fetching MHIST or CoNSeP, `prepare.py` prints that users must satisfy the official upstream form/access terms first. Slide-level probes cache 20x/512 tissue grids (`tiles.parquet`, `surgen-*.parquet`, or `patches.parquet`) so `probe.py` never opens raw WSIs; SurGen prepares the full grid but streams a deterministic raster-spaced sub-bag for runtime.
+2. **Probe datasets**: for each empty configured root, fetches/unpacks and, where needed, pre-extracts the probe data. BRACS, BreaKHis, PCam, PanNuke, UCLA Lung, PathoROB, and MoNuSAC come from their official public sources. MHIST, CoNSeP, SurGen, and BoehmK survival use the [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) probe mirror for portable noninteractive setup; before fetching MHIST, CoNSeP, or BoehmK survival, `prepare.py` prints that users must satisfy the official upstream form/access terms first. Slide-level probes cache 20x/512 tissue grids (`tiles.parquet`, `surgen-*.parquet`, or `patches.parquet`) so `probe.py` never opens raw WSIs; SurGen and BoehmK survival prepare the full grid but stream deterministic raster-spaced sub-bags for runtime.
 3. **DINOv2 backbone weights**: `torch.hub.load_state_dict_from_url` fetches the Meta checkpoint for `model.type` from `dl.fbaipublicfiles.com` into `~/.cache/torch/hub/checkpoints/`.
 
 **Prerequisites**
 - ~120 GB free wherever `data.dataset_dir` lives for the parquet shards (cluster default: `/data/nanopath_parquet`).
-- Probe data disk varies by suite: the checked-in cluster paths are shared; off-cluster, expect large one-time downloads and preprocessing for PanNuke, UCLA Lung, CRC survival, and MoNuSAC. SurGen's official CZI regeneration path is multi-hour, so normal setup pulls our pre-extracted ~102 GB HF parquet cache instead. Reruns skip already-populated roots.
+- Probe data disk varies by suite: the checked-in cluster paths are shared; off-cluster, expect large one-time downloads and preprocessing for PanNuke, UCLA Lung, and MoNuSAC. SurGen and BoehmK survival normally pull pre-extracted HF parquet caches; official-source regeneration is slower and BoehmK requires Synapse access. Reruns skip already-populated roots.
 - ~330 MB free under `~/.cache/torch/hub/checkpoints/` for DINOv2-S/B weights, or ~4.6 GB if you run the DINOv2-G baseline.
 - `wget` on PATH for the BRACS FTP mirror. Python-side WSI/probe dependencies are installed by `uv sync`.
 

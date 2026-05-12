@@ -45,6 +45,7 @@ from PIL import Image, ImageDraw
 HF_REPO_ID = "medarc/nanopath"
 HF_PROBE_PREFIX = "probes"
 PROBE_ACCESS_NOTICES = {
+    "boehmk_pfs": "you MUST satisfy the BOEHMK Synapse access terms at https://www.synapse.org/Synapse:syn25946117/wiki/611576 before using these data; this mirror download is only for portable setup.",
     "consep": "you MUST satisfy the official CoNSeP/Warwick access terms at https://warwick.ac.uk/fac/sci/dcs/research/tia/data/hovernet/ before using these data; this mirror download is only for portable setup.",
     "mhist": "you MUST complete MHIST's Dataset Research Use Agreement at https://bmirds.github.io/MHIST/ before using these data; this mirror download is only for portable setup.",
 }
@@ -558,23 +559,31 @@ def fetch_surgen_from_official_sources(root):
     building.unlink(missing_ok=True)
 
 
-# PFS_VALENTINO survival probe. Only train/val slides from the vendored split
-# are tiled; PathoBench fold_0 test remains held out.
-CRC_SURVIVAL_HF_TSV = "crc_outcomes/PFS_VALENTINO/k=all.tsv"
-CRC_SURVIVAL_BIOSTUDIES = "https://ftp.ebi.ac.uk/biostudies/fire/S-BIAD/407/S-BIAD1407/Files/VALENTINO"
-CRC_SURVIVAL_TILING_VERSION = PATHOBENCH_TILING_VERSION
+# BOEHMK survival probe. Normal setup pulls our pre-extracted HF parquet
+# mirror; the Synapse helper rebuilds it after the user has accepted access terms.
+BOEHMK_PFS_HF_TSV = "boehmk_/PFS/k=all.tsv"
+BOEHMK_PFS_SYNAPSE_TAR = "syn31937603"
+BOEHMK_PFS_TILING_VERSION = PATHOBENCH_TILING_VERSION
 
 
-def _tile_one_crc_survival(args):
+def synapse_download(syn_id, dst):
+    req = urllib.request.Request(
+        f"https://repo-prod.prod.sagebase.org/repo/v1/entity/{syn_id}/file",
+        headers={"Authorization": f"Bearer {os.environ['SYNAPSE_AUTH_TOKEN']}", "User-Agent": "nanopath"},
+    )
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with urllib.request.urlopen(req, timeout=120) as r, dst.open("wb") as f:
+        shutil.copyfileobj(r, f, length=1 << 20)
+
+
+def _tile_one_boehmk_pfs(args):
     import openslide
     wsi_path, slide_id, cache_dir = args
     cache_path = Path(cache_dir) / f"{slide_id}.parquet"
     if cache_path.exists():
         return slide_id, pq.read_metadata(cache_path).num_rows
     slide = openslide.OpenSlide(str(wsi_path))
-    # BioStudies VALENTINO TIFF metadata encodes native resolution inconsistently;
-    # the cohort is ~0.22 um/px, so use that fixed fallback when needed.
-    rows = _openslide_grid_rows(slide, slide_id, image_col="image", default_mpp=0.22)
+    rows = _openslide_grid_rows(slide, slide_id, image_col="image")
     slide.close()
     tmp_cache = cache_path.with_suffix(".parquet.part")
     pq.write_table(pa.table({"slide_id": [r["slide_id"] for r in rows], "image": [r["image"] for r in rows]}), tmp_cache, compression="snappy", row_group_size=PARQUET_ROW_GROUP_SIZE)
@@ -582,38 +591,51 @@ def _tile_one_crc_survival(args):
     return slide_id, len(rows)
 
 
-def fetch_crc_survival(root):
+def fetch_boehmk_pfs(root):
+    from huggingface_hub import snapshot_download
+    print("  using pre-extracted BOEHMK survival tile cache from medarc/nanopath; official Synapse regeneration requires accepted access terms", flush=True)
+    workers = int(os.environ.get("PREPARE_WORKERS", os.cpu_count() or 8))
+    snapshot_download(repo_id=HF_REPO_ID, repo_type="dataset", local_dir=str(root), allow_patterns=["probes/boehmk_pfs/*"], max_workers=workers)
+    src = root / HF_PROBE_PREFIX / "boehmk_pfs"
+    for name in ("patches.parquet", "labels.tsv", "tiling_version.txt"):
+        (root / name).unlink(missing_ok=True)
+        os.replace(src / name, root / name)
+    shutil.rmtree(root / HF_PROBE_PREFIX)
+
+
+def fetch_boehmk_pfs_from_synapse(root):
     from huggingface_hub import hf_hub_download
-    tsv_src = hf_hub_download(repo_id="MahmoodLab/Patho-Bench", repo_type="dataset", filename=CRC_SURVIVAL_HF_TSV)
+    root.mkdir(parents=True, exist_ok=True)
+    tsv_src = hf_hub_download(repo_id="MahmoodLab/Patho-Bench", repo_type="dataset", filename=BOEHMK_PFS_HF_TSV)
     shutil.copy(tsv_src, root / "labels.tsv")
-    splits = json.loads((Path(__file__).resolve().parent / "benchmarking" / "crc_survival.json").read_text())
+    splits = json.loads((Path(__file__).resolve().parent / "benchmarking" / "boehmk_pfs.json").read_text())
     slide_ids = sorted(set(splits["train"]["slide_ids"] + splits["val"]["slide_ids"]))
     wsi_dir, slide_cache = root / "wsi", root / "slides"
     wsi_dir.mkdir(parents=True, exist_ok=True)
     slide_cache.mkdir(parents=True, exist_ok=True)
     version, building = root / "tiling_version.txt", root / "tiling_in_progress.txt"
-    if not version.exists() or version.read_text().strip() != CRC_SURVIVAL_TILING_VERSION:
-        if not building.exists() or building.read_text().strip() != CRC_SURVIVAL_TILING_VERSION:
+    if not version.exists() or version.read_text().strip() != BOEHMK_PFS_TILING_VERSION:
+        if not building.exists() or building.read_text().strip() != BOEHMK_PFS_TILING_VERSION:
             if (root / "patches.parquet").exists():
                 (root / "patches.parquet").unlink()
             shutil.rmtree(slide_cache)
             slide_cache.mkdir(parents=True, exist_ok=True)
-            building.write_text(CRC_SURVIVAL_TILING_VERSION + "\n")
-    for sid in slide_ids:
-        out = wsi_dir / f"{sid}.tif"
-        if not (out.exists() and out.stat().st_size > 1_000_000):
-            http_download(f"{CRC_SURVIVAL_BIOSTUDIES}/{sid}.tif", out.with_suffix(".tif.part"))
-            out.with_suffix(".tif.part").rename(out)
+            building.write_text(BOEHMK_PFS_TILING_VERSION + "\n")
+    if not any(wsi_dir.rglob("*")):
+        tar = root / "data.tar.gz"
+        synapse_download(BOEHMK_PFS_SYNAPSE_TAR, tar)
+        shutil.unpack_archive(tar, wsi_dir)
+    slide_paths = {p.stem: p for p in wsi_dir.rglob("*") if p.is_file()}
     workers = int(os.environ.get("PREPARE_WORKERS", os.cpu_count() or 8))
     tiles = 0
     with mp.Pool(workers) as pool:
-        for done, (sid, n) in enumerate(pool.imap_unordered(_tile_one_crc_survival, [(wsi_dir / f"{sid}.tif", sid, str(slide_cache)) for sid in slide_ids]), start=1):
+        for done, (sid, n) in enumerate(pool.imap_unordered(_tile_one_boehmk_pfs, [(slide_paths[sid], sid, str(slide_cache)) for sid in slide_ids]), start=1):
             tiles += n
             if done % 10 == 0 or done == len(slide_ids):
                 print(f"  [{done}/{len(slide_ids)}] patches={tiles:,}", flush=True)
     table = pa.concat_tables([pq.read_table(slide_cache / f"{sid}.parquet") for sid in slide_ids])
     pq.write_table(table, root / "patches.parquet", compression="snappy", row_group_size=PARQUET_ROW_GROUP_SIZE)
-    version.write_text(CRC_SURVIVAL_TILING_VERSION + "\n")
+    version.write_text(BOEHMK_PFS_TILING_VERSION + "\n")
     version.chmod(0o664)
     building.unlink(missing_ok=True)
 
@@ -672,10 +694,10 @@ def fetch_mhist(root):
 
 
 FETCHERS = {
+    "boehmk_pfs": fetch_boehmk_pfs,
     "bracs": fetch_bracs,
     "break_his": fetch_break_his,
     "consep": fetch_consep,
-    "crc_survival": fetch_crc_survival,
     "mhist": fetch_mhist,
     "monusac": fetch_monusac,
     "pcam": fetch_pcam,
@@ -726,12 +748,12 @@ def is_populated(name, p):
         got = set(pa.concat_tables([pq.read_table(f, columns=["slide_id"]) for f in files]).column("slide_id").to_pylist()) if files else set()
         version = p / "tiling_version.txt"
         return version.exists() and version.read_text().strip() == SURGEN_TILING_VERSION and expected <= labels and expected <= got
-    if name == "crc_survival":
-        splits = json.loads((bench / "crc_survival.json").read_text())
+    if name == "boehmk_pfs":
+        splits = json.loads((bench / "boehmk_pfs.json").read_text())
         expected = set(splits["train"]["slide_ids"] + splits["val"]["slide_ids"])
         got = set(pq.read_table(p / "patches.parquet", columns=["slide_id"]).column("slide_id").to_pylist()) if (p / "patches.parquet").exists() else set()
         version = p / "tiling_version.txt"
-        return version.exists() and version.read_text().strip() == CRC_SURVIVAL_TILING_VERSION and (p / "labels.tsv").exists() and expected <= got
+        return version.exists() and version.read_text().strip() == BOEHMK_PFS_TILING_VERSION and (p / "labels.tsv").exists() and expected <= got
     if name == "pathorob" and not all(list((p / s / "data").glob("*.parquet")) for s in ("camelyon", "tolkach_esca")):
         return False
     if name == "monusac" and not any((p / "MoNuSAC_images_and_annotations").glob("*/*.npy")):

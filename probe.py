@@ -1,9 +1,9 @@
 # Inline downstream probes. mean_probe_score = the unweighted mean of one scalar
 # per headline dataset: break_his, bracs, mhist, pcam, monusac, consep,
-# pannuke, ucla_lung, surgen, crc_survival, pathorob. Tile classification
+# pannuke, ucla_lung, surgen, boehmk_pfs, pathorob. Tile classification
 # datasets score the mean of linear, KNN, and 16-shot SimpleShot F1
 # majority-voted over 1000 deterministic support sets.
-# PathoBench-derived slide classification and SurGen score AUROC; CRC survival
+# PathoBench-derived slide classification and SurGen score AUROC; BoehmK survival
 # scores Harrell's c-index; PathoROB scores its robustness index; segmentation
 # datasets score macro Jaccard from the MaskTransformer head below.
 #
@@ -22,7 +22,7 @@
 #   pcam        ~28-50s      fixed 3072 train / 768 val subset of official H5 files
 #   ucla_lung   ~32-140s     full IDR idr0082 tissue grid, mean-pooled
 #   surgen      ~235-1137s   deterministic SR386 sub-bags -> mean-pool -> logistic regression
-#   crc_survival ~174-708s   full PFS_VALENTINO grid -> mean-pool -> Coxnet sweep
+#   boehmk_pfs   ~82s        deterministic 768-tile sub-bag -> mean-pool -> Coxnet sweep
 #   pathorob    ~28-198s     camelyon + tolkach_esca patch sets
 #   monusac     ~25-93s      3 train-derived folds, features extracted once
 #   consep      ~5-19s       3 train-derived folds, features extracted once
@@ -76,11 +76,11 @@ CLASSIFICATION_DATASETS = ["bracs", "break_his", "mhist", "pcam"]
 SEGMENTATION_DATASETS = ["pannuke", "monusac", "consep"]
 SLIDE_DATASETS = ["ucla_lung"]
 AUC_DATASETS = ["surgen"]
-SURVIVAL_DATASETS = ["crc_survival"]
+SURVIVAL_DATASETS = ["boehmk_pfs"]
 ROBUSTNESS_DATASETS = ["pathorob"]
 MEAN_PROBE_DATASETS = [
     "break_his", "bracs", "mhist", "pcam", "monusac", "consep",
-    "pannuke", "ucla_lung", "surgen", "crc_survival", "pathorob",
+    "pannuke", "ucla_lung", "surgen", "boehmk_pfs", "pathorob",
 ]
 TASK_FIELDS = {
     "classification_datasets": ("datasets", CLASSIFICATION_DATASETS),
@@ -95,9 +95,10 @@ SURGEN_LR_MAX_ITER = 5000
 SURGEN_LR_SOLVER = "liblinear"
 SURGEN_TILES_PER_SLIDE = 768
 SURGEN_ROW_GROUP_SIZE = 64
+SURVIVAL_TILES_PER_SLIDE = 768
 SLIDE_LR_CS = (0.001, 0.01, 0.1, 0.5, 1.0, 10.0, 100.0)
-CRC_SURVIVAL_COX_ALPHAS = (0.01, 0.02, 0.07)
-CRC_SURVIVAL_COX_L1_RATIOS = (0.5, 1.0)
+SURVIVAL_COX_ALPHAS = (0.01, 0.02, 0.07)
+SURVIVAL_COX_L1_RATIOS = (0.5, 1.0)
 PATHOROB_SUBSETS = {"camelyon": 11, "tolkach_esca": 46}
 # Module-level so dataset adapters can read roots without threading cfg through every call.
 # Populated from cfg.probe.dataset_roots by prepare_probe_state() and run_probe_job().
@@ -156,7 +157,7 @@ def prepare_probe_state(cfg, output_dir):
         path.mkdir(parents=True, exist_ok=True)
     groups = {request_key: [str(x) for x in cfg["probe"].get(cfg_key, [])] for request_key, (cfg_key, _) in TASK_FIELDS.items()}
     data = {
-        "version": 10,
+        "version": 11,
         "family": str(cfg["project"]["family"]),
         "count": int(cfg["probe"]["count"]),
         "logged_results": [],
@@ -165,7 +166,7 @@ def prepare_probe_state(cfg, output_dir):
     if paths["state_path"].exists():
         # Explicit resume can continue only if the probe family/datasets/count match the old state.
         previous = json.loads(paths["state_path"].read_text())
-        if previous["version"] != 10:
+        if previous["version"] != 11:
             raise ValueError(f"unsupported probe state version: {previous['version']}")
         if previous["family"] != data["family"]:
             raise ValueError(f"probe family changed from {previous['family']} to {data['family']}")
@@ -703,7 +704,7 @@ def inline_surgen_ras_auc(model, mean, std, device, transform):
     return {"val_auc": auc_per_c[best_c], "best_c": float(best_c), "val_auc_per_c": auc_per_c, "fold_scores": [float(f["val_auc_per_c"][best_c]) for f in folds], "folds": folds, "tiles": tiles, "tiles_per_slide_cap": SURGEN_TILES_PER_SLIDE}, time.monotonic() - started_at
 
 
-def inline_crc_survival(model, mean, std, device, transform):
+def inline_pathobench_survival(model, mean, std, dataset, device, transform):
     import io
     import numpy as np
     import pyarrow.parquet as pq
@@ -712,42 +713,58 @@ def inline_crc_survival(model, mean, std, device, transform):
     from sksurv.metrics import concordance_index_censored
 
     started_at = time.monotonic()
-    splits = json.loads((BENCHMARKING_DIR / "crc_survival.json").read_text())
+    splits = json.loads((BENCHMARKING_DIR / f"{dataset}.json").read_text())
     pool_slides = list(splits["train"]["slide_ids"]) + list(splits["val"]["slide_ids"])
     pool_events = np.asarray([bool(e) for split in ("train", "val") for e in splits[split]["events"]])
     pool_days = np.asarray([float(d) for split in ("train", "val") for d in splits[split]["days"]])
     needed = set(pool_slides)
-    tbl = pq.read_table(DATASET_ROOTS["crc_survival"] / "patches.parquet")
-    slide_col = tbl.column("slide_id").to_numpy(zero_copy_only=False)
-    keep = np.isin(slide_col, list(needed))
-    byts = [b.as_py() for b in tbl.column("image").filter(keep)]
-    sids = slide_col[keep]
+    pf = pq.ParquetFile(DATASET_ROOTS[dataset] / "patches.parquet")
+    row_groups = defaultdict(list)
+    for rg in range(pf.num_row_groups):
+        stats = pf.metadata.row_group(rg).column(0).statistics
+        sids = [stats.min] if stats.min == stats.max else set(pf.read_row_group(rg, columns=["slide_id"]).column("slide_id").to_pylist())
+        for sid in sids:
+            if sid in needed:
+                row_groups[sid].append(rg)
+    groups_per_slide = (SURVIVAL_TILES_PER_SLIDE + pf.metadata.row_group(0).num_rows - 1) // pf.metadata.row_group(0).num_rows
+    selected_groups = set()
+    for sid in pool_slides:
+        groups = row_groups[sid]
+        take = range(len(groups)) if len(groups) <= groups_per_slide else np.linspace(0, len(groups) - 1, groups_per_slide, dtype=np.int64)
+        selected_groups.update(groups[int(i)] for i in take)
+    selected_groups = sorted(selected_groups)
 
-    class _Patches(torch.utils.data.Dataset):
-        def __len__(self): return len(byts)
-        def __getitem__(self, i): return transform(Image.open(io.BytesIO(byts[i])).convert("RGB"))
+    class _Tiles(torch.utils.data.IterableDataset):
+        def __iter__(self):
+            worker = torch.utils.data.get_worker_info()
+            groups = selected_groups if worker is None else selected_groups[worker.id::worker.num_workers]
+            pf = pq.ParquetFile(DATASET_ROOTS[dataset] / "patches.parquet")
+            for rg in groups:
+                table = pf.read_row_group(rg, columns=["image", "slide_id"])
+                for b, sid in zip(table.column("image").to_pylist(), table.column("slide_id").to_pylist()):
+                    if sid in needed:
+                        yield transform(Image.open(io.BytesIO(b)).convert("RGB")), sid
 
-    loader = torch.utils.data.DataLoader(_Patches(), batch_size=EMBED_BATCH_SIZE, num_workers=EMBED_NUM_WORKERS, pin_memory=True, shuffle=False)
+    loader = torch.utils.data.DataLoader(_Tiles(), batch_size=EMBED_BATCH_SIZE, num_workers=EMBED_NUM_WORKERS, pin_memory=True)
     autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
-    embs = []
+    sums, counts, tiles = {}, defaultdict(int), 0
     with torch.no_grad():
-        for batch in loader:
-            x = batch.to(device, non_blocking=True)
+        for x, sids in loader:
+            x = x.to(device, non_blocking=True)
             with autocast:
-                embs.append(model.probe_features((x - mean) / std).float().cpu().numpy())
-    embs = np.concatenate(embs).astype(np.float32)
-    pooled = {}
-    for sid, vec in zip(sids, embs):
-        pooled.setdefault(sid, []).append(vec)
-    pooled = {sid: np.mean(np.stack(vs), axis=0) for sid, vs in pooled.items()}
+                batch = model.probe_features((x - mean) / std).float().cpu().numpy()
+            for sid, vec in zip(sids, batch):
+                sums[sid] = sums.get(sid, 0.0) + vec.astype(np.float64)
+                counts[sid] += 1
+                tiles += 1
 
-    X = np.stack([pooled[sid] for sid in pool_slides]).astype(np.float64)
+    X = np.stack([sums[sid] / counts[sid] for sid in pool_slides]).astype(np.float64)
     y = np.array(list(zip(pool_events, pool_days)), dtype=[("event", bool), ("days", float)])
     folds = []
     for tr, va in stratified_folds(pool_events.astype(np.int64)):
         cindex_per_cox = {}
-        for l1_ratio in CRC_SURVIVAL_COX_L1_RATIOS:
-            for alpha in CRC_SURVIVAL_COX_ALPHAS:
+        for l1_ratio in SURVIVAL_COX_L1_RATIOS:
+            for alpha in SURVIVAL_COX_ALPHAS:
                 head = CoxnetSurvivalAnalysis(l1_ratio=l1_ratio, alphas=[alpha], max_iter=100000, fit_baseline_model=False)
                 head.fit(X[tr], y[tr])
                 risk = head.predict(X[va])
@@ -755,10 +772,10 @@ def inline_crc_survival(model, mean, std, device, transform):
         best = max(cindex_per_cox, key=cindex_per_cox.get)
         l1_ratio, alpha = (float(x) for x in best.split(":"))
         folds.append({"val_cindex": cindex_per_cox[best], "best_l1_ratio": l1_ratio, "best_alpha": alpha, "val_cindex_per_cox": cindex_per_cox})
-    cindex_per_cox = {f"{l1}:{a}": float(np.mean([f["val_cindex_per_cox"][f"{l1}:{a}"] for f in folds])) for l1 in CRC_SURVIVAL_COX_L1_RATIOS for a in CRC_SURVIVAL_COX_ALPHAS}
+    cindex_per_cox = {f"{l1}:{a}": float(np.mean([f["val_cindex_per_cox"][f"{l1}:{a}"] for f in folds])) for l1 in SURVIVAL_COX_L1_RATIOS for a in SURVIVAL_COX_ALPHAS}
     best = max(cindex_per_cox, key=cindex_per_cox.get)
     best_l1, best_alpha = (float(x) for x in best.split(":"))
-    return {"val_cindex": cindex_per_cox[best], "best_l1_ratio": best_l1, "best_alpha": best_alpha, "val_cindex_per_cox": cindex_per_cox, "fold_scores": [float(f["val_cindex_per_cox"][best]) for f in folds], "folds": folds}, time.monotonic() - started_at
+    return {"val_cindex": cindex_per_cox[best], "best_l1_ratio": best_l1, "best_alpha": best_alpha, "val_cindex_per_cox": cindex_per_cox, "fold_scores": [float(f["val_cindex_per_cox"][best]) for f in folds], "folds": folds, "tiles": tiles, "tiles_per_slide_cap": SURVIVAL_TILES_PER_SLIDE}, time.monotonic() - started_at
 
 
 # KNN probe over frozen embeddings; best k is selected on the validation split.
@@ -1007,7 +1024,7 @@ def run_probe_job(request_path):
     survival_metrics = {}
     for dataset in survival:
         print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_survival_start: {dataset}", flush=True)
-        result, wall = {"crc_survival": inline_crc_survival}[dataset](model, mean, std, device, patch_transform)
+        result, wall = inline_pathobench_survival(model, mean, std, dataset, device, patch_transform)
         survival_metrics[dataset] = result
         print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_survival_done: {dataset}  cindex={result['val_cindex']:.4f}  best_l1={result['best_l1_ratio']}  best_alpha={result['best_alpha']}  wall={wall:.2f}s", flush=True)
 
@@ -1071,6 +1088,8 @@ def run_probe_job(request_path):
         metrics[f"probe_{dataset}_val_cindex"] = survival_metrics[dataset]["val_cindex"]
         metrics[f"probe_{dataset}_best_l1_ratio"] = survival_metrics[dataset]["best_l1_ratio"]
         metrics[f"probe_{dataset}_best_alpha"] = survival_metrics[dataset]["best_alpha"]
+        metrics[f"probe_{dataset}_tiles"] = survival_metrics[dataset]["tiles"]
+        metrics[f"probe_{dataset}_tiles_per_slide_cap"] = survival_metrics[dataset]["tiles_per_slide_cap"]
         for key, cindex in survival_metrics[dataset]["val_cindex_per_cox"].items():
             l1_ratio, alpha = key.split(":")
             metrics[f"probe_{dataset}_val_cindex_l1_{l1_ratio.replace('.', 'p')}_alpha_{alpha.replace('.', 'p')}"] = cindex

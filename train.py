@@ -6,10 +6,11 @@
 # FLOP budget, batch size); other DINOv2 hyperparameters are hardcoded inline
 # at their use sites — see LOG.md for the sweeps that picked those values.
 # Researchers changing objectives should start at the loss block in main();
-# changing data preprocessing starts in dataloader.py; changing downstream
-# comparisons starts in probe.py.
+# changing data preprocessing starts in dataloader.py. The downstream probe
+# suite is fixed for fair model comparisons.
 
 import contextlib
+import fnmatch
 import json
 import math
 import os
@@ -241,10 +242,25 @@ def main():
     )
     source_artifact = wandb.Artifact(f"nanopath-source-{wandb_run.id}", type="code")
     repo_dir = Path(__file__).resolve().parent
+    artifact_ignore = [
+        line.strip() for line in (repo_dir / ".gitignore").read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ] + [".git/", "baselines/", "slurm/"]
+
+    def artifact_ignored(path):
+        rel, name = path.relative_to(repo_dir).as_posix(), path.name
+        for pat in artifact_ignore:
+            pat = pat.rstrip("/") if pat.endswith("/") else pat
+            if fnmatch.fnmatch(name, pat) or fnmatch.fnmatch(rel, pat) or rel == pat or rel.startswith(pat + "/"):
+                return True
+        return False
+
     for root, dirs, files in os.walk(repo_dir):
-        dirs[:] = sorted(d for d in dirs if d not in {".git", ".venv", "__pycache__", ".claude"})
+        dirs[:] = sorted(d for d in dirs if not artifact_ignored(Path(root) / d))
         for name in sorted(files):
             path = Path(root) / name
+            if artifact_ignored(path):
+                continue
             source_artifact.add_file(str(path), name=str(path.relative_to(repo_dir)))
     wandb_run.log_artifact(source_artifact)
     wandb_meta = {"project": "nanopath", "id": wandb_run.id, "name": cfg["project"]["name"]}
