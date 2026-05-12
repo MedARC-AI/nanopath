@@ -61,7 +61,6 @@ Recent H100 timings from the untouched baselines after the PathoBench-style reti
 | `surgen` | 205.0s | 234.5s | 414.5s | 467.3s | 386.8s | 1137.0s |
 | `boehmk_pfs` | 83.7s | 84.0s | 148.9s | 148.9s | 148.5s | 435.8s |
 | `pathorob` | 34.5s | 28.3s | 72.3s | 75.6s | 74.5s | 198.4s |
-| **probe wall** | **pending** | **pending** | **pending** | **pending** | **pending** | **pending** |
 
 Before deterministic sub-bags, the dominant bottlenecks were slide embedding from large PathoBench caches. For DINOv2-style backbones, SurGen and BoehmK survival are expected to remain among the largest sequential costs and PanNuke overlaps with the main worker. For GenBio-PathFM, SurGen, BoehmK survival, UCLA Lung, and PathoROB are much slower because each RGB tile is encoded as three single-channel ViT-G passes and the heads consume native 4608-d features.
 
