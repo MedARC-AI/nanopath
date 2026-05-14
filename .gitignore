@@ -51,3 +51,4 @@ core.*
 
 # Probe datasets fetched by prepare.py (when configured under repo)
 probe_data/
+preserved_run_logs/
