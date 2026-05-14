@@ -15,7 +15,7 @@ import torch.nn.functional as F
 from torchvision import transforms
 
 
-# (dim, depth, heads, pretrain_grid, ffn, pos_has_cls, weight URL) for each supported variant.
+# (dim, depth, heads, pretrain_grid, ffn, pos_has_cls, weight URL[, registers]) for each supported variant.
 DINOV2_VARIANTS = {
     "dinov2_vits14_reg": (384, 12, 6, 37, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vits14/dinov2_vits14_reg4_pretrain.pth"),
     "dinov2_vitb14_reg": (768, 12, 12, 37, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitb14/dinov2_vitb14_reg4_pretrain.pth"),
@@ -107,8 +107,9 @@ class Block(nn.Module):
 class DinoV2ViT(nn.Module):
     def __init__(self, variant="dinov2_vits14_reg", drop_path_rate=0.0, variant_cfg=None):
         super().__init__()
-        dim, depth, heads, pretrain_grid, ffn, pos_has_cls, _ = variant_cfg or DINOV2_VARIANTS[variant]
-        mlp_ratio, patch, registers = 4.0, 14, 4
+        cfg = variant_cfg or DINOV2_VARIANTS[variant]
+        dim, depth, heads, pretrain_grid, ffn, pos_has_cls, _ = cfg[:7]
+        mlp_ratio, patch, registers = 4.0, 14, cfg[7] if len(cfg) > 7 else 4
         self.variant = variant
         self.patch_size, self.registers, self.embed_dim = patch, registers, dim
         self._pretrain_grid, self._pos_has_cls = pretrain_grid, pos_has_cls

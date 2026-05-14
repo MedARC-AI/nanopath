@@ -52,12 +52,14 @@ Score is final `mean_probe_score` across our 11-dataset benchmarking suite, asse
 
 | # | Name | Description | final score | linear | knn | 16-shot | segmentation | progression | mutation | survival | robustness |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | GenBio-PathFM | GenBio-PathFM ViT-G/16 baseline | **0.6268** | 0.8076 | 0.7626 | 0.6970 | 0.3301 | 0.7680 | 0.6375 | 0.5349 | 0.9412 |
-| 2 | H-optimus-0 | H-optimus-0 ViT-G/14-reg baseline | 0.6190 | 0.7995 | 0.7676 | 0.6931 | 0.3261 | 0.7004 | 0.6584 | 0.5661 | 0.8926 |
-| 3 | DINOv2-giant | Untouched Meta `dinov2_vitg14_reg` | 0.5627 | 0.7689 | 0.7208 | 0.5834 | 0.2845 | 0.6000 | 0.6174 | 0.5562 | 0.7985 |
-| 4 | OpenMidnight | OpenMidnight ViT-G/14-reg baseline | 0.5494 | 0.7926 | 0.7135 | 0.4335 | 0.3064 | 0.6993 | 0.6091 | 0.4861 | 0.7438 |
-| 5 | DINOv2-small | Untouched Meta `dinov2_vits14_reg` | 0.5304 | 0.6968 | 0.6249 | 0.5834 | 0.2675 | 0.5827 | 0.6225 | 0.5321 | 0.7543 |
-| 6 | DINOv2-small random | `dinov2_vits14_reg` with random weights | 0.4268 | 0.5237 | 0.5066 | 0.4139 | 0.2682 | 0.6922 | 0.5648 | 0.5176 | 0.1905 |
+| 1 | GenBio-PathFM | Untouched GenBio-PathFM ViT-G/16 baseline | **0.6268** | 0.8076 | 0.7626 | 0.6970 | 0.3301 | 0.7680 | 0.6375 | 0.5349 | 0.9412 |
+| 2 | H-optimus-0 | Untouched H-optimus-0 ViT-G/14-reg baseline | 0.6190 | 0.7995 | 0.7676 | 0.6931 | 0.3261 | 0.7004 | 0.6584 | 0.5661 | 0.8926 |
+| 3 | UNI-2-h | Untouched MahmoodLab UNI-2-h ViT-H/14 baseline | 0.6149 | 0.7910 | 0.7547 | 0.6961 | 0.3192 | 0.7330 | 0.6463 | 0.5739 | 0.8637 |
+| 4 | DINOv2-giant | Untouched Meta `dinov2_vitg14_reg` baseline | 0.5627 | 0.7689 | 0.7208 | 0.5834 | 0.2845 | 0.6000 | 0.6174 | 0.5562 | 0.7985 |
+| 5 | Midnight-12K | Untouched Kaiko Midnight-12K ViT-G/14 baseline | 0.5545 | 0.7684 | 0.6807 | 0.5758 | 0.2725 | 0.6840 | 0.6087 | 0.5071 | 0.7823 |
+| 6 | OpenMidnight | Untouched OpenMidnight ViT-G/14-reg baseline | 0.5494 | 0.7926 | 0.7135 | 0.4335 | 0.3064 | 0.6993 | 0.6091 | 0.4861 | 0.7438 |
+| 7 | DINOv2-small | Untouched Meta `dinov2_vits14_reg` baseline | 0.5304 | 0.6968 | 0.6249 | 0.5834 | 0.2675 | 0.5827 | 0.6225 | 0.5321 | 0.7543 |
+| 8 | DINOv2-small random | Seed-0 random Meta `dinov2_vits14_reg` architecture baseline | 0.4268 | 0.5237 | 0.5066 | 0.4139 | 0.2682 | 0.6922 | 0.5648 | 0.5176 | 0.1905 |
 
 Baseline rows are frozen reference checkpoints evaluated with the same probe suite. They help calibrate the plot, but pathology-specific baselines are not valid initialization points for nanopath leaderboard submissions.
 

@@ -29,7 +29,7 @@ mean_probe_score = mean(
 
 All probes keep the backbone frozen. Probe heads are intentionally small: they measure representation quality, not downstream fine-tuning capacity.
 
-Probe heads consume each model's native frozen feature dimension rather than projecting every backbone to a common width. This intentionally evaluates each checkpoint as a deployed feature extractor, but it also means dimensionality is part of the baseline comparison: DINOv2-S emits 384-d features, DINOv2-G/OpenMidnight/H-optimus-0 emit 1536-d features, and GenBio-PathFM emits 4608-d features.
+Probe heads consume each model's native frozen feature dimension rather than projecting every backbone to a common width. This intentionally evaluates each checkpoint as a deployed feature extractor, but it also means dimensionality is part of the baseline comparison: DINOv2-S emits 384-d features, DINOv2-G/OpenMidnight/H-optimus-0/UNI-2-h emit 1536-d features, Midnight-12K emits 3072-d CLS plus mean-patch features, and GenBio-PathFM emits 4608-d features.
 
 Linear, KNN, segmentation-head, logistic, and Coxnet hyperparameters are selected on the same internal validation splits that define `mean_probe_score`. Thunder-derived tile classifiers keep Thunder-style linear/KNN/16-shot SimpleShot heads; SimpleShot precomputes 1000 deterministic support sets and majority-votes query predictions. PathoBench-derived slide classifiers use balanced logistic linear probing; SurGen uses sklearn's `liblinear` solver. Tiny train-derived probes use deterministic 3-fold validation over their official-train pool (`monusac`, `consep`, `ucla_lung`, `surgen`, `boehmk_pfs`) while reusing frozen embeddings/features. `probe.py` logs fold variance/std for those repeated probes so noisy improvements are easier to spot.
 
@@ -46,19 +46,19 @@ The full suite is designed for the final H100 probe window for the standard smal
 
 Recent H100 timings from the untouched baselines:
 
-| dataset | DINOv2-random | DINOv2-S | DINOv2-G | OpenMidnight | H-optimus-0 | GenBio-PathFM |
-|---|---:|---:|---:|---:|---:|---:|
-| `bracs` | 160.3s | 182.8s | 168.5s | 163.8s | 179.9s | 160.6s |
-| `break_his` | 26.4s | 15.1s | 18.7s | 19.0s | 20.4s | 14.6s |
-| `mhist` | 10.9s | 12.3s | 24.7s | 27.6s | 26.3s | 21.2s |
-| `pcam` | 23.9s | 27.8s | 45.7s | 58.5s | 50.0s | 43.1s |
-| `pannuke` | 159.2s | 165.3s | 303.0s | 732.9s | 309.5s | 279.8s |
-| `monusac` | 22.7s | 24.9s | 139.5s | 64.0s | 91.5s | 34.5s |
-| `consep` | 4.4s | 5.1s | 41.6s | 5.0s | 18.5s | 5.9s |
-| `ucla_lung` | 27.2s | 31.7s | 63.4s | 68.7s | 63.6s | 140.3s |
-| `surgen` | 205.0s | 234.5s | 414.5s | 467.3s | 386.8s | 1137.0s |
-| `boehmk_pfs` | 83.7s | 84.0s | 148.9s | 148.9s | 148.5s | 435.8s |
-| `pathorob` | 34.5s | 28.3s | 72.3s | 75.6s | 74.5s | 198.4s |
+| dataset | DINOv2-random | DINOv2-S | DINOv2-G | UNI-2-h | Midnight-12K | OpenMidnight | H-optimus-0 | GenBio-PathFM |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `bracs` | 160.3s | 182.8s | 168.5s | 168.5s | 193.2s | 163.8s | 179.9s | 160.6s |
+| `break_his` | 26.4s | 15.1s | 18.7s | 18.3s | 20.3s | 19.0s | 20.4s | 14.6s |
+| `mhist` | 10.9s | 12.3s | 24.7s | 23.9s | 27.0s | 27.6s | 26.3s | 21.2s |
+| `pcam` | 23.9s | 27.8s | 45.7s | 42.5s | 57.2s | 58.5s | 50.0s | 43.1s |
+| `pannuke` | 159.2s | 165.3s | 303.0s | 289.9s | 481.1s | 732.9s | 309.5s | 279.8s |
+| `monusac` | 22.7s | 24.9s | 139.5s | 126.3s | 150.9s | 64.0s | 91.5s | 34.5s |
+| `consep` | 4.4s | 5.1s | 41.6s | 33.7s | 32.4s | 5.0s | 18.5s | 5.9s |
+| `ucla_lung` | 27.2s | 31.7s | 63.4s | 44.4s | 65.4s | 68.7s | 63.6s | 140.3s |
+| `surgen` | 205.0s | 234.5s | 414.5s | 252.0s | 416.5s | 467.3s | 386.8s | 1137.0s |
+| `boehmk_pfs` | 83.7s | 84.0s | 148.9s | 92.7s | 148.5s | 148.9s | 148.5s | 435.8s |
+| `pathorob` | 34.5s | 28.3s | 72.3s | 43.0s | 67.1s | 75.6s | 74.5s | 198.4s |
 
 GenBio-PathFM is a slow outlier because each RGB tile is encoded as three single-channel ViT-G passes and the heads consume native 4608-d features. GenBio-PathFM baseline also runs segmentation sequentially because its three channel-wise ViT-G passes are already GPU-bound, and background PanNuke contention made the baseline much slower without changing the metric.
 
