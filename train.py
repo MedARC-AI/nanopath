@@ -4,10 +4,7 @@
 # L2-normalised CLS tokens. YAML drives the tunable knobs (backbone variant,
 # LR + LR scheduler, drop path, layerwise decay, KDE weight + concentration,
 # FLOP budget, batch size); other DINOv2 hyperparameters are hardcoded inline
-# at their use sites — see LOG.md for the sweeps that picked those values.
-# Researchers changing objectives should start at the loss block in main();
-# changing data preprocessing starts in dataloader.py. The downstream probe
-# suite is fixed for fair model comparisons.
+# at their use sites.
 
 import contextlib
 import fnmatch
