@@ -69,6 +69,8 @@ Score is final `mean_probe_score` across our 11-dataset benchmarking suite, asse
 | 5 | DINOv2-small | Untouched Meta `dinov2_vits14_reg` baseline | 0.5304 | 0.6968 | 0.6249 | 0.5834 | 0.2675 | 0.5827 | 0.6225 | 0.5321 | 0.7543 |
 | 6 | DINOv2-small random | Seed-0 random Meta `dinov2_vits14_reg` architecture baseline | 0.4268 | 0.5237 | 0.5066 | 0.4139 | 0.2682 | 0.6922 | 0.5648 | 0.5176 | 0.1905 |
 
+Baseline rows are frozen reference checkpoints evaluated with the same probe suite. They help calibrate the plot, but pathology-specific baselines are not valid initialization points for nanopath leaderboard submissions.
+
 ### How to submit to the leaderboard
 
 `configs/leader.yaml` is the currently winning `nanopath` training recipe. Submit any completed or failed run to labless:

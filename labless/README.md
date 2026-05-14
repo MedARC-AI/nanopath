@@ -24,9 +24,10 @@ The labless backend stores the submission as an idea, attempt, and run. The
 website fetches the API data and the SVG plot from `api.labless.dev`, so the run
 appears on the project page and plot without opening a pull request.
 
-`labless.yaml` is the project manifest. You do not need to edit it before
-submitting a run; change it only when the nanopath leaderboard policy itself
-changes.
+`labless.yaml` is the project manifest. It records the metric, validation
+rules, run tiers, current trained leader, and frozen reference baselines used by
+the public plot. You do not need to edit it before submitting a run; change it
+only when the nanopath leaderboard policy itself changes.
 
 ## Submit a completed run
 
@@ -50,6 +51,24 @@ Then point the submit script at the run directory printed by training:
 
 Completed submissions require both `summary.json` and `metrics.jsonl`. The run
 is shown as `pending` until the organizer validates it.
+
+## Submit a baseline/reference run
+
+Baseline scripts under `baselines/` write the same `summary.json` and
+`metrics.jsonl` files as `train.py`, so they can be submitted the same way:
+
+```bash
+python baselines/dinov2_small_baseline.py configs/leader.yaml
+./labless/submit_to_labless.py \
+  output_dir=/data/$USER/nanopath/baselines/dinov2-small \
+  contributor=@yourgithub \
+  notes="reran the frozen DINOv2-small reference"
+```
+
+The submit script detects `summary.family == "baseline"` and marks the run as
+`tier=baseline`. Baseline points are reference context for the tracker. The
+nanopath leaderboard still promotes trained `configs/leader.yaml` descendants
+through maintainer validation.
 
 ## Submit a failed run
 
@@ -81,7 +100,7 @@ Arguments are `key=value`; there is no `argparse`.
 | `status` | `completed` or `failed`; default is `completed`. |
 | `failure_reason` | Human-readable reason for failed runs. |
 | `title` | Optional display title. |
-| `tier` | `smoke`, `pilot`, `full`, or `replicate`; inferred when omitted. |
+| `tier` | `smoke`, `pilot`, `full`, `replicate`, or `baseline`; inferred when omitted. |
 | `hardware` | Override detected hardware string. |
 | `dry_run=true` | Write `labless_submission.json` without posting. |
 | `update_log=false` | Submit without editing `LOG.md`. |
@@ -107,6 +126,7 @@ The payload intentionally makes the run inspectable. It includes:
 
 - contributor handle and notes
 - final metric and probe submetrics
+- run family, recipe id, and tier (`baseline` for frozen reference scripts)
 - git remote, branch, commit, dirty flag, changed files, and diff summary
 - hardware, hostname, Python version, and optional GPU summary
 - artifact paths or URLs for `summary.json`, `metrics.jsonl`, W&B, SLURM logs,

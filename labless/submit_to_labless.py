@@ -48,6 +48,25 @@ def main() -> int:
     env = collect_environment(opts)
     artifacts = collect_artifacts(output_dir, summary_path, metrics_path, opts)
     run_name = str(summary.get("project") or output_dir.name)
+    config_path = str(summary.get("config_path") or "configs/leader.yaml")
+    recipe_id = str(summary.get("recipe_id") or "")
+    run_tier = opts.get("tier")
+    if not run_tier:
+        if summary.get("family") == "baseline":
+            run_tier = "baseline"
+        elif "smoke" in config_path:
+            run_tier = "smoke"
+        else:
+            run_tier = "full"
+    baseline_commands = {
+        "dinov2-vits14-reg-no-continued-pretraining": "python baselines/dinov2_small_baseline.py configs/leader.yaml",
+        "dinov2-vitg14-reg-no-continued-pretraining": "python baselines/dinov2_giant_baseline.py configs/leader.yaml",
+        "dinov2-vits14-reg-random-init-seed0": "python baselines/dinov2_random_baseline.py configs/leader.yaml",
+        "genbio-pathfm-vitg16-rope-untouched": "python baselines/genbio_pathfm_baseline.py configs/leader.yaml",
+        "hoptimus0-vitg14-reg-untouched": "python baselines/hoptimus0_baseline.py configs/leader.yaml",
+        "openmidnight-vitg14-reg-untouched": "python baselines/openmidnight_baseline.py configs/leader.yaml",
+    }
+    run_command = opts.get("command") or baseline_commands.get(recipe_id) or f"python train.py {config_path}"
     payload = {
         "version": 1,
         "title": opts.get("title") or f"{summary.get('recipe_id') or run_name} ({repo['branch']})",
@@ -60,8 +79,10 @@ def main() -> int:
         "repo": repo,
         "run": {
             "name": run_name,
-            "tier": opts.get("tier") or ("smoke" if "smoke" in str(summary.get("config_path") or "") else "full"),
-            "command": opts.get("command") or f"python train.py {summary.get('config_path') or 'configs/leader.yaml'}",
+            "tier": run_tier,
+            "family": summary.get("family") or "nanopath",
+            "recipe_id": summary.get("recipe_id"),
+            "command": run_command,
             "seed": int(opts["seed"]) if opts.get("seed") else summary.get("config", {}).get("train", {}).get("seed"),
             "hardware": opts.get("hardware") or env["hardware"],
             "started_at": opts.get("started_at"),
