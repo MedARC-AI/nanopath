@@ -37,14 +37,3 @@ The dataset score is `mean(linear_val_f1, knn_val_f1, fewshot_val_f1)`.
 ## Difference From Original Usage
 
 BreaKHis is commonly evaluated with magnification-aware and patient-level protocols. Nanopath instead uses the fixed EVA/Thunder 40X four-subtype validation split as a lightweight representation probe and does not report an official test-set score.
-
-## Runtime
-
-Recent H100 timings:
-
-| model | wall |
-|---|---:|
-| DINOv2-S | 15.1s |
-| OpenMidnight | 19.0s |
-| H-optimus-0 | 20.4s |
-| GenBio-PathFM | 14.6s |

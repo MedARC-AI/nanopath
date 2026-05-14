@@ -26,12 +26,3 @@ Nanopath uses only the official train package. It creates deterministic 3-fold s
 ## Difference From Original Usage
 
 MoNuSAC is a challenge dataset with held-out evaluation data. Nanopath does not use challenge test data; it builds an internal train/validation split from the train package. The MaskTransformer head and per-image macro Jaccard come from Thunder; MoNuSAC is not in Thunder's standard suite, so this is the Thunder seg-head applied to a non-Thunder dataset.
-
-## Runtime
-
-| model | wall |
-|---|---:|
-| DINOv2-S | 24.9s |
-| OpenMidnight | 64.0s |
-| H-optimus-0 | 91.5s |
-| GenBio-PathFM | 34.5s |

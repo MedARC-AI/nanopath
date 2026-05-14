@@ -31,7 +31,3 @@ Nanopath vendors `boehmk_pfs.json`, derived from PathoBench BOEHMK survival/PFS 
 ## Difference From Original Usage
 
 PathoBench's BOEHMK survival task reports Harrell's c-index. PathoBench is designed for standardized task evaluation across folds and pools Trident patch embeddings. Nanopath keeps the same 20x/512 patch-grid cache, uses a deterministic up-to-768-tile sub-bag for final-probe runtime, runs a deterministic Coxnet hyperparameter sweep on mean-pooled custom-backbone embeddings, then uses repeated train-derived internal validation for fast iteration and does not score the PathoBench test fold. The tissue mask is a lightweight deterministic thumbnail mask rather than Trident HEST segmentation.
-
-## Runtime
-
-On May 12, 2026 H100 survival-only probes, the deterministic 768-tile sub-bag embedded 85,803 tiles and took 83.7s for DINOv2-S random, 84.0s for DINOv2-S, 148.9s for DINOv2-G, 148.9s for OpenMidnight, 148.5s for H-optimus-0, and 435.8s for GenBio-PathFM. The previous full-grid H100 leader-derived DINOv2-S/Nanopath smoke run took 335.5s for BoehmK survival and 844.3s for the full probe.

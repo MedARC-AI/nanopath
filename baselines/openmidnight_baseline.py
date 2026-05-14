@@ -23,15 +23,17 @@ OPENMIDNIGHT_VITG14_REG = (1536, 40, 24, 16, "swiglu", True, None)
 
 def load_probe_model(checkpoint_path, device):
     model = DinoV2ViT("openmidnight_vitg14_reg", variant_cfg=OPENMIDNIGHT_VITG14_REG)
-    raw = torch.load(checkpoint_path, map_location="cpu", weights_only=False)["teacher"]
+    raw = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    raw = raw["teacher"] if "teacher" in raw else raw
     state = {}
     for key, value in raw.items():
         if "dino" in key or "ibot" in key:
             continue
         key = key.removeprefix("backbone.")
         if key.startswith("blocks."):
-            _, _, block, rest = key.split(".", 3)
-            key = f"blocks.{block}.{rest}"
+            parts = key.split(".", 3)
+            if parts[2].isdigit():
+                key = f"blocks.{parts[2]}.{parts[3]}"
         state[key] = value
     model.load_state_dict(state, strict=True)
     return model.to(device).eval()

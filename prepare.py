@@ -269,6 +269,7 @@ def http_size(url):
 
 # Stream a URL to disk in chunks so large probe archives do not sit in memory.
 def http_download(url, dst):
+    if dst.exists() and dst.stat().st_size > 0: print(f"  [skip] {dst}", flush=True); return
     print(f"  GET {url}\n   -> {dst}", flush=True)
     dst.parent.mkdir(parents=True, exist_ok=True)
     tmp = dst.with_name(dst.name + ".part")
@@ -306,6 +307,7 @@ def http_download(url, dst):
 
 
 def hf_download(filename, dst):
+    if dst.exists() and dst.stat().st_size > 0: print(f"  [skip] {dst}", flush=True); return
     from huggingface_hub import hf_hub_download
     src = Path(hf_hub_download(repo_id=HF_REPO_ID, repo_type="dataset", filename=f"{HF_PROBE_PREFIX}/{filename}"))
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -337,6 +339,7 @@ def fetch_pcam(root):
     for split in ("train", "valid", "test"):
         for kind in ("x", "y"):
             name = f"camelyonpatch_level_2_split_{split}_{kind}.h5"
+            if (root / name).exists(): continue
             gz = root / (name + ".gz")
             http_download(f"{base}/{name}.gz/content", gz)
             with gzip.open(gz, "rb") as fin, (root / name).open("wb") as fout:
@@ -728,8 +731,8 @@ def is_populated(name, p):
         return False
     bench = Path(__file__).resolve().parent / "benchmarking"
     if name in {"bracs", "break_his", "mhist"}:
-        rel = json.loads((bench / f"{name}.json").read_text())["train"]["images"][0]
-        return (p / rel).exists()
+        splits = json.loads((bench / f"{name}.json").read_text())
+        return all((p / rel).exists() for split in ("train", "val") for rel in splits[split]["images"])
     if name == "pcam":
         return all((p / f"camelyonpatch_level_2_split_{s}_{k}.h5").exists() for s in ("train", "valid") for k in ("x", "y"))
     if name == "pannuke":
@@ -780,36 +783,35 @@ def main():
     shards = list(dataset_dir.glob("shard-*.parquet")) if dataset_dir.exists() else []
 
     # Stage 1 — Parquet tile shards (default source: medarc/nanopath HF dataset).
-    if shards:
-        print(f"[skip] tiles: {dataset_dir} ({len(shards)} shards)", flush=True)
+    if len(shards) == NUM_SHARDS:
+        print(f"[verify] tiles: {dataset_dir} ({len(shards)} shards)", flush=True)
     elif not download:
         raise SystemExit(
-            f"no parquet shards (shard-*.parquet) under {dataset_dir}.\n"
+            f"expected {NUM_SHARDS} parquet shards under {dataset_dir}, found {len(shards)}.\n"
             f"Either fix data.dataset_dir in {config_path} to point at an existing prepared "
             f"dataset, or rerun: python prepare.py {config_path} download=True"
         )
     else:
         dataset_dir.mkdir(parents=True, exist_ok=True)
         fetch_tiles_from_hf(dataset_dir)
+        assert sum(1 for _ in dataset_dir.glob("shard-*.parquet")) == NUM_SHARDS, f"tiles still incomplete after fetch: {dataset_dir}"
 
     # Stage 2 — probe datasets. Verify-only collects every gap and reports
     # them all at once so the user fixes the YAML in a single edit.
-    if download:
-        for name in cfg["probe"]["dataset_roots"]:
-            if name in PROBE_ACCESS_NOTICES:
-                print(f"[notice] probe/{name}: {PROBE_ACCESS_NOTICES[name]}", flush=True)
     missing = []
     for name in cfg["probe"]["dataset_roots"]:
         root = paths[f"probe.{name}"]
         if is_populated(name, root):
-            print(f"[skip] probe/{name}: {root}", flush=True)
+            print(f"[verify] probe/{name}: {root}", flush=True)
             continue
         if not download:
             missing.append((name, root))
             continue
         root.mkdir(parents=True, exist_ok=True)
+        if name in PROBE_ACCESS_NOTICES: print(f"[notice] probe/{name}: {PROBE_ACCESS_NOTICES[name]}", flush=True)
         print(f"[fetch] probe/{name} -> {root}", flush=True)
         FETCHERS[name](root)
+        assert is_populated(name, root), f"probe/{name} is still missing, empty, or stale after fetch: {root}"
         print(f"[done] probe/{name}", flush=True)
 
     if missing:

@@ -32,12 +32,3 @@ The dataset score is the mean of the two subset indices.
 ## Difference From Original Usage
 
 The original PathoROB benchmark includes multiple robustness settings. Nanopath uses the camelyon and tolkach_esca public subsets, excludes the TCGA subset, and treats the resulting robustness index as one validation-style probe scalar.
-
-## Runtime
-
-| model | wall |
-|---|---:|
-| DINOv2-S | 28.3s |
-| OpenMidnight | 75.6s |
-| H-optimus-0 | 74.5s |
-| GenBio-PathFM | 198.4s |

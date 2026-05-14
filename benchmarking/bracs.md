@@ -35,14 +35,3 @@ The dataset score is `mean(linear_val_f1, knn_val_f1, fewshot_val_f1)`.
 ## Difference From Original Usage
 
 BRACS has its own train/validation/test organization. Nanopath uses the same train and validation folders as the official release/THUNDER split metadata, but does not score the official test folder because the leaderboard is an iterative validation benchmark and should not consume official test labels.
-
-## Runtime
-
-BRACS is one of the main bottlenecks despite its modest image count. Runtime is dominated by the 200-epoch linear LR sweep; 16-shot SimpleShot is cheap.
-
-| model | wall |
-|---|---:|
-| DINOv2-S | 182.8s |
-| OpenMidnight | 163.8s |
-| H-optimus-0 | 179.9s |
-| GenBio-PathFM | 160.6s |

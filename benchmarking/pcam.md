@@ -34,12 +34,3 @@ The dataset score is `mean(linear_val_f1, knn_val_f1, fewshot_val_f1)`.
 ## Difference From Original Usage
 
 Thunder lists the full official train/valid/test sets for PCam. Nanopath deliberately uses a small deterministic train/valid subset from those official H5 files so the full 11-dataset probe remains inside the final H100 window. This is a runtime adaptation, not an exact full-sample Thunder PCam run.
-
-## Runtime
-
-| model | wall |
-|---|---:|
-| DINOv2-S | 27.8s |
-| OpenMidnight | 58.5s |
-| H-optimus-0 | 50.0s |
-| GenBio-PathFM | 43.1s |

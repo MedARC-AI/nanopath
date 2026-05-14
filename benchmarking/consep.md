@@ -31,12 +31,3 @@ The archive may include `Test`, but `probe.py` does not read it.
 ## Difference From Original Usage
 
 CoNSeP is often used with its official Train/Test split. Nanopath uses only repeated folds of Train, preserving Test for non-iterative evaluation outside `mean_probe_score`. The MaskTransformer head and per-image macro Jaccard come from Thunder; CoNSeP is not in Thunder's standard suite, so this is the Thunder seg-head applied to a non-Thunder dataset.
-
-## Runtime
-
-| model | wall |
-|---|---:|
-| DINOv2-S | 5.1s |
-| OpenMidnight | 5.0s |
-| H-optimus-0 | 18.5s |
-| GenBio-PathFM | 5.9s |

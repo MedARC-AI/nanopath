@@ -20,10 +20,10 @@ mean_probe_score = mean(
 
 | family | datasets | dataset scalar |
 |---|---|---|
-| Tile classification | `break_his`, `bracs`, `mhist`, `pcam` | mean of linear, KNN, and 16-shot SimpleShot macro F1; SimpleShot majority-votes 1000 deterministic support sets |
-| Slide classification | `ucla_lung` | AUROC from a balanced logistic linear probe on mean-pooled slide embeddings |
+| Tile classification | `break_his`, `bracs`, `mhist`, `pcam` | mean of linear, KNN, and 16-shot SimpleShot macro F1|
 | Segmentation | `monusac`, `consep`, `pannuke` | macro Jaccard from a small MaskTransformer head on frozen patch tokens |
-| Mutation prediction | `surgen` | AUROC for PathoBench SR386 RAS mutation status |
+| Progression | `ucla_lung` | AUROC from a balanced logistic linear probe on mean-pooled slide embeddings |
+| Mutation | `surgen` | AUROC for PathoBench SR386 RAS mutation status |
 | Survival | `boehmk_pfs` | Harrell's c-index from a Cox time-to-event head with validation-selected `l1_ratio` and `alpha` |
 | Robustness | `pathorob` | mean PathoROB-style robustness index across camelyon and tolkach_esca |
 
@@ -31,22 +31,20 @@ All probes keep the backbone frozen. Probe heads are intentionally small: they m
 
 Probe heads consume each model's native frozen feature dimension rather than projecting every backbone to a common width. This intentionally evaluates each checkpoint as a deployed feature extractor, but it also means dimensionality is part of the baseline comparison: DINOv2-S emits 384-d features, DINOv2-G/OpenMidnight/H-optimus-0 emit 1536-d features, and GenBio-PathFM emits 4608-d features.
 
-A previous tiny breast response probe was removed because 68 train-fold slides made the validation ordering unstable and added another breast task without clear signal. The suite still covers slide-level outcome/prognosis through UCLA Lung progression/regression and BoehmK survival, but it no longer includes a treatment-response classification endpoint. PathoBench has response candidates (`nadt--response`, `ovarian--response`, `mbc_--Recist`), but the first two are 36-case tasks and `mbc_--Recist` uses an ordinal RECIST weighted-kappa endpoint that would need a new head/metric before inclusion.
-
-Linear, KNN, segmentation-head, logistic, and Coxnet hyperparameters are selected on the same internal validation splits that define `mean_probe_score`. Thunder-derived tile classifiers keep Thunder-style linear/KNN/16-shot SimpleShot heads; SimpleShot precomputes 1000 deterministic support sets and majority-votes query predictions. PathoBench-derived slide classifiers use balanced logistic linear probing rather than KNN or SimpleShot; SurGen uses sklearn's `liblinear` solver for its small-sample, high-dimensional logistic sweep so 4608-d GenBio-PathFM features do not turn the regularization sweep into a solver bottleneck. Tiny train-derived probes use deterministic 3-fold validation over their official-train pool (`monusac`, `consep`, `ucla_lung`, `surgen`, `boehmk_pfs`) while reusing frozen embeddings/features. `probe.py` logs fold variance/std for those repeated probes so noisy improvements are easier to spot. This is deliberate: model ideas can iterate quickly, but the probe suite and scoring definition are fixed for leaderboard comparisons while official test labels stay sealed.
+Linear, KNN, segmentation-head, logistic, and Coxnet hyperparameters are selected on the same internal validation splits that define `mean_probe_score`. Thunder-derived tile classifiers keep Thunder-style linear/KNN/16-shot SimpleShot heads; SimpleShot precomputes 1000 deterministic support sets and majority-votes query predictions. PathoBench-derived slide classifiers use balanced logistic linear probing; SurGen uses sklearn's `liblinear` solver. Tiny train-derived probes use deterministic 3-fold validation over their official-train pool (`monusac`, `consep`, `ucla_lung`, `surgen`, `boehmk_pfs`) while reusing frozen embeddings/features. `probe.py` logs fold variance/std for those repeated probes so noisy improvements are easier to spot.
 
 ## Runtime Strategy
 
-The full suite is designed for the final H100 probe window for the standard small Nanopath model by keeping the benchmark small where it can be small, and precomputing expensive slide tiling during `prepare.py download=True`. Giant frozen baselines are timing stress tests and can run beyond the small-model probe budget.
+The full suite is designed for the final H100 probe window for the standard small Nanopath model by keeping the benchmark small where it can be small, and precomputing expensive slide tiling.
 
 - Whole-slide tasks use pre-extracted tile grids, so the final probe embeds JPEG/parquet tiles rather than opening full WSIs. PathoBench-derived slide tasks use a 20x, 512 px, 0-overlap tissue grid following the Trident/PathoBench tutorial contract. UCLA Lung embeds the full cached grid; SurGen and BoehmK survival prepare the full grid but stream deterministic up-to-768-tile raster-spaced sub-bags per slide so large-slide tasks fit the final-probe window. SurGen and BoehmK survival use pre-extracted `medarc/nanopath` parquet mirrors by default; `prepare.py` keeps official-source regeneration helpers for rebuilding those mirrors. The remaining preprocessing simplification is a deterministic thumbnail tissue mask instead of invoking Trident's HEST segmentation model during `prepare.py`.
 - PCam is a fixed subset of the official train/valid H5 files.
-- Tile classifiers use Nanopath's default square `Resize((224, 224))` from `model.py::probe_transforms` for trained Nanopath checkpoints. Frozen baseline scripts set their own `probe.transform_policy`; OpenMidnight also uses square resize, while the current DINOv2/H-optimus-0/GenBio baselines use resize-short-side-224 plus center-crop-224. Patch-cache probes keep square resize because their inputs are already extracted tissue tiles.
-- Segmentation runs in a background thread while classification, slide, survival, and robustness probes run in the main worker for DINOv2-style backbones. CUDA kernels still serialize, but CPU-heavy decode/head work overlaps with segmentation head training. GenBio-PathFM runs segmentation sequentially because its three channel-wise ViT-G passes are already GPU-bound, and background PanNuke contention made the baseline much slower without changing the metric.
+- Tile classifiers use `Resize((224, 224))` from `model.py::probe_transforms` for trained Nanopath checkpoints. Frozen baseline scripts set their own `probe.transform_policy`. Patch-cache probes keep square resize because their inputs are already extracted tissue tiles.
+- Segmentation runs in a background thread while classification, slide, survival, and robustness probes run in the main worker for DINOv2-style backbones. CUDA kernels still serialize, but CPU-heavy decode/head work overlaps with segmentation head training.
 - The same loaded frozen backbone serves every probe in one subprocess, avoiding repeated model load overhead.
 - Test splits are not read by `probe.py`, which keeps official labels sealed during model development.
 
-Recent H100 timings from the untouched baselines after the PathoBench-style retile and no-crop patch transform. BoehmK survival timings are from May 12, 2026 survival-only H100 probes after switching from full-grid embedding to the deterministic 768-tile sub-bag; other per-task timings are retained from the previous 11-probe suite. Wall time varies with concurrent jobs and OS page cache.
+Recent H100 timings from the untouched baselines:
 
 | dataset | DINOv2-random | DINOv2-S | DINOv2-G | OpenMidnight | H-optimus-0 | GenBio-PathFM |
 |---|---:|---:|---:|---:|---:|---:|
@@ -62,7 +60,7 @@ Recent H100 timings from the untouched baselines after the PathoBench-style reti
 | `boehmk_pfs` | 83.7s | 84.0s | 148.9s | 148.9s | 148.5s | 435.8s |
 | `pathorob` | 34.5s | 28.3s | 72.3s | 75.6s | 74.5s | 198.4s |
 
-Before deterministic sub-bags, the dominant bottlenecks were slide embedding from large PathoBench caches. For DINOv2-style backbones, SurGen and BoehmK survival are expected to remain among the largest sequential costs and PanNuke overlaps with the main worker. For GenBio-PathFM, SurGen, BoehmK survival, UCLA Lung, and PathoROB are much slower because each RGB tile is encoded as three single-channel ViT-G passes and the heads consume native 4608-d features.
+GenBio-PathFM is a slow outlier because each RGB tile is encoded as three single-channel ViT-G passes and the heads consume native 4608-d features. GenBio-PathFM baseline also runs segmentation sequentially because its three channel-wise ViT-G passes are already GPU-bound, and background PanNuke contention made the baseline much slower without changing the metric.
 
 ## Dataset Summary
 

@@ -30,12 +30,3 @@ Only train and val are read by `probe.py`.
 ## Difference From Original Usage
 
 PathoBench reports macro one-vs-rest AUROC for this task; with fold 0's two-class labels this equals binary AUROC. PathoBench runs linear probing on mean-pooled Trident features; Nanopath's balanced logistic linear probe matches that head class on custom-backbone features. Nanopath uses repeated train-derived validation from fold 0 and follows the uncapped Trident-style patch-grid contract for slide pooling; it does not report the PathoBench test-fold score. The tissue mask is a lightweight deterministic thumbnail mask rather than Trident HEST segmentation.
-
-## Runtime
-
-| model | wall |
-|---|---:|
-| DINOv2-S | 31.7s |
-| OpenMidnight | 68.7s |
-| H-optimus-0 | 63.6s |
-| GenBio-PathFM | 140.3s |

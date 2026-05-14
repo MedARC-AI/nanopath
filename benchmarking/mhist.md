@@ -38,12 +38,3 @@ The dataset score is `mean(linear_val_f1, knn_val_f1, fewshot_val_f1)`.
 ## Difference From Original Usage
 
 MHIST ships with its own agreement-gated access path and task framing. Nanopath uses a checked-in split of the official training partition for fast frozen-backbone validation and keeps test metadata out of `mean_probe_score`.
-
-## Runtime
-
-| model | wall |
-|---|---:|
-| DINOv2-S | 12.3s |
-| OpenMidnight | 27.6s |
-| H-optimus-0 | 26.3s |
-| GenBio-PathFM | 21.2s |
