@@ -7,13 +7,11 @@
 # scores Harrell's c-index; PathoROB scores its robustness index; segmentation
 # datasets score macro Jaccard from the MaskTransformer head below.
 #
-# train.py snapshots a probe checkpoint at each FLOP milestone and runs
-# this file as a subprocess (`python probe.py req.json`); training pauses, the
+# train.py can snapshot a probe checkpoint at each FLOP milestone to run
+# this file as a subprocess (`python probe.py req.json`), whereby training pauses,
 # subprocess writes a result JSON, collect_probe_results ingests it back into
 # wandb + metrics.jsonl. Inside the subprocess, one loaded frozen backbone serves
-# every probe. By default, segmentation overlaps with the main probe loop in a
-# background thread; baseline scripts can disable this in cfg.probe when their
-# model wrapper is already GPU-bound.
+# every probe.
 #
 # Rough per-task wall on H100 baselines after the probe-revamp benchmark.
 #   bracs       ~161-183s
@@ -511,7 +509,6 @@ def inline_pannuke_jaccard(model, mean, std, device):
 def inline_monusac_jaccard(model, mean, std, device):
     import numpy as np
     from PIL import Image
-    Image.MAX_IMAGE_PIXELS = None
     started_at = time.monotonic()
     root = DATASET_ROOTS["monusac"] / "MoNuSAC_images_and_annotations"
     slides = sorted(p.name for p in root.iterdir() if p.is_dir())
