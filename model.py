@@ -103,7 +103,7 @@ class Block(nn.Module):
 # (cls_token, register_tokens, pos_embed (1, 1+37^2, dim), mask_token (1, dim), patch_embed.proj,
 # blocks.{i}.{norm1,norm2,attn.qkv,attn.proj,ls1,ls2,mlp.fc1,mlp.fc2}, norm).
 # Pos embed is bicubically interpolated at runtime to the current patch grid.
-    # Meta DINOv2 includes a cls pos and uses 37x37 patches; variant_cfg can override this for probes.
+# Meta DINOv2 includes a cls pos and uses 37x37 patches; variant_cfg can override this for probes.
 class DinoV2ViT(nn.Module):
     def __init__(self, variant="dinov2_vits14_reg", drop_path_rate=0.0, variant_cfg=None):
         super().__init__()

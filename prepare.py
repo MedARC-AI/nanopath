@@ -314,13 +314,6 @@ def hf_download(filename, dst):
     shutil.copy(src, dst)
 
 
-def _http_download_if_needed(args):
-    url, dst = args
-    if not (dst.exists() and dst.stat().st_size > 1_000_000):
-        http_download(url, dst)
-    return dst.name
-
-
 def fetch_pannuke(root):
     for fold in (1, 2, 3):
         if all((root / f"Fold{fold}/{kind}/fold{fold}/{kind}.npy").exists() for kind in ("images", "masks")):

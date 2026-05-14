@@ -187,7 +187,7 @@ def main():
     wandb_dir = Path(cfg["project"]["wandb_dir"])
     slurm_job_id = os.environ.get("SLURM_JOB_ID")
     latest_checkpoint_path = output_dir / "latest.pt"
-    # Fresh launches always start from scratch and wipe output_dir. 
+    # Fresh launches always start from scratch and wipe output_dir.
     resume_path = Path(train_cfg["resume"]) if train_cfg["resume"] else None
     if resume_path is None and output_dir.exists():
         shutil.rmtree(output_dir)
@@ -413,7 +413,7 @@ def main():
     # Per-step FLOPs are measured once via FlopCounterMode on the first wrapped step (forward +
     # backward + opt.step) and reused for every subsequent step since the shapes don't change.
     # Counts the EMA teacher forward + DINO/iBOT projection heads, not just the backbone, so the
-    # 1e18 leaderboard cap reflects real GPU work. 
+    # 1e18 leaderboard cap reflects real GPU work.
     measured_flops_per_step = None
 
     while not stop_requested:
