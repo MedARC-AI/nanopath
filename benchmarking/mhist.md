@@ -27,7 +27,7 @@ Only train and val are read by `probe.py`. Train and val are a deterministic spl
 
 ## Implementation
 
-The probe embeds MHIST RGB images with model-native preprocessing from `model.py::probe_transforms`, then fits three heads on cached embeddings:
+The probe embeds MHIST RGB images with Nanopath's default transform or the baseline script's explicit `probe.transform_policy`, then fits three heads on cached embeddings:
 
 - AdamW linear probe: LR ∈ {1e-3, 1e-4, 1e-5}, weight decay 1e-4, batch size 64, 200 epochs; report the best val macro F1 across all LR × epoch checkpoints
 - cosine KNN: k ∈ {1, 3, 5, 10, 20, 30, 40, 50}, k selected by val F1
@@ -38,12 +38,3 @@ The dataset score is `mean(linear_val_f1, knn_val_f1, fewshot_val_f1)`.
 ## Difference From Original Usage
 
 MHIST ships with its own agreement-gated access path and task framing. Nanopath uses a checked-in split of the official training partition for fast frozen-backbone validation and keeps test metadata out of `mean_probe_score`.
-
-## Runtime
-
-| model | wall |
-|---|---:|
-| DINOv2-S | 12.3s |
-| OpenMidnight | 27.5s |
-| H-optimus-0 | 26.3s |
-| GenBio-PathFM | 21.2s |

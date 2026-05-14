@@ -5,7 +5,7 @@ version: 1
 slug: nanopath
 title: nanopath
 repo: MedARC-AI/nanopath
-default_branch: labless
+default_branch: main
 summary: Single-GPU pathology foundation-model hill climbing.
 
 metric:
@@ -13,8 +13,8 @@ metric:
   direction: maximize
   source: summary.json
   json_path: final_probe_score
-  baseline: 0.5284
-  current_leader: 0.6284
+  baseline: 0.5304
+  current_leader: 0.5563
   improvement_threshold: 0.01
 
 plot:

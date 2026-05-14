@@ -23,7 +23,7 @@ The official test H5 files may be downloaded for completeness, but `probe.py` ne
 
 ## Implementation
 
-`ClassificationDataset(..., dataset="pcam")` samples fixed train and validation subsets with `PCAM_SUBSET_SEED = 1337`, embeds those images with model-native preprocessing from `model.py::probe_transforms`, and fits three heads on cached embeddings:
+`ClassificationDataset(..., dataset="pcam")` samples fixed train and validation subsets with `PCAM_SUBSET_SEED = 1337`, embeds those images with Nanopath's default transform or the baseline script's explicit `probe.transform_policy`, and fits three heads on cached embeddings:
 
 - AdamW linear probe: LR ∈ {1e-3, 1e-4, 1e-5}, weight decay 1e-4, batch size 64, 200 epochs; report the best val macro F1 across all LR × epoch checkpoints
 - cosine KNN: k ∈ {1, 3, 5, 10, 20, 30, 40, 50}, k selected by val F1
@@ -34,12 +34,3 @@ The dataset score is `mean(linear_val_f1, knn_val_f1, fewshot_val_f1)`.
 ## Difference From Original Usage
 
 Thunder lists the full official train/valid/test sets for PCam. Nanopath deliberately uses a small deterministic train/valid subset from those official H5 files so the full 11-dataset probe remains inside the final H100 window. This is a runtime adaptation, not an exact full-sample Thunder PCam run.
-
-## Runtime
-
-| model | wall |
-|---|---:|
-| DINOv2-S | 27.8s |
-| OpenMidnight | 48.6s |
-| H-optimus-0 | 50.0s |
-| GenBio-PathFM | 43.1s |

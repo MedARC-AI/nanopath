@@ -26,7 +26,7 @@ This is not the full 8-subtype, all-magnification BreaKHis task. Following the E
 
 ## Implementation
 
-`probe.py` loads relative image paths from `benchmarking/break_his.json`, embeds each RGB image with model-native preprocessing from `model.py::probe_transforms`, and fits three heads on cached embeddings:
+`probe.py` loads relative image paths from `benchmarking/break_his.json`, embeds each RGB image with Nanopath's default transform or the baseline script's explicit `probe.transform_policy`, and fits three heads on cached embeddings:
 
 - AdamW linear probe: LR ∈ {1e-3, 1e-4, 1e-5}, weight decay 1e-4, batch size 64, 200 epochs; report the best val macro F1 across all LR × epoch checkpoints
 - cosine KNN: k ∈ {1, 3, 5, 10, 20, 30, 40, 50}, k selected by val F1
@@ -37,14 +37,3 @@ The dataset score is `mean(linear_val_f1, knn_val_f1, fewshot_val_f1)`.
 ## Difference From Original Usage
 
 BreaKHis is commonly evaluated with magnification-aware and patient-level protocols. Nanopath instead uses the fixed EVA/Thunder 40X four-subtype validation split as a lightweight representation probe and does not report an official test-set score.
-
-## Runtime
-
-Recent H100 timings:
-
-| model | wall |
-|---|---:|
-| DINOv2-S | 15.1s |
-| OpenMidnight | 20.7s |
-| H-optimus-0 | 20.4s |
-| GenBio-PathFM | 14.6s |
