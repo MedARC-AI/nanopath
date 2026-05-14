@@ -74,14 +74,14 @@ probe:
   auc_datasets:
     - surgen
   survival_datasets:
-    - crc_survival
+    - boehmk_pfs
   robustness_datasets:
     - pathorob
   dataset_roots:
     bracs: /block/eva-data/bracs
     break_his: /block/eva-data/breakhis
     consep: /block/eva-data/consep
-    crc_survival: /data/crc-survival
+    boehmk_pfs: /data/boehmk_pfs
     mhist: /block/eva-data/mhist
     monusac: /block/eva-data/monusac
     pcam: /block/eva-data/patch_camelyon

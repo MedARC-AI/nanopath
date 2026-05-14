@@ -78,7 +78,7 @@ probe:
   auc_datasets:
     - surgen
   survival_datasets:
-    - crc_survival
+    - boehmk_pfs
   robustness_datasets:
     - pathorob
   # Dataset roots are read by probe.py. Defaults are shared MedARC cluster
@@ -88,7 +88,7 @@ probe:
     bracs: /block/eva-data/bracs
     break_his: /block/eva-data/breakhis
     consep: /block/eva-data/consep
-    crc_survival: /data/crc-survival
+    boehmk_pfs: /data/boehmk_pfs
     mhist: /block/eva-data/mhist
     monusac: /block/eva-data/monusac
     pcam: /block/eva-data/patch_camelyon

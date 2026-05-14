@@ -41,6 +41,7 @@ def run_dinov2_baseline(script, project, recipe_id, variant, output_default, pre
     cfg["probe"]["enabled"] = True
     cfg["probe"]["model_weights"] = "ema"
     cfg["probe"]["count"] = 1
+    cfg["probe"]["transform_policy"] = "resize_crop_224"
 
     if output_dir.exists():
         shutil.rmtree(output_dir)

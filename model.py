@@ -12,6 +12,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torchvision import transforms
 
 
 # (dim, depth, heads, pretrain_grid, ffn, pos_has_cls, weight URL) for each supported variant.
@@ -19,20 +20,14 @@ DINOV2_VARIANTS = {
     "dinov2_vits14_reg": (384, 12, 6, 37, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vits14/dinov2_vits14_reg4_pretrain.pth"),
     "dinov2_vitb14_reg": (768, 12, 12, 37, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitb14/dinov2_vitb14_reg4_pretrain.pth"),
     "dinov2_vitg14_reg": (1536, 40, 24, 37, "swiglu", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitg14/dinov2_vitg14_reg4_pretrain.pth"),
-    "openmidnight_vitg14_reg": (1536, 40, 24, 16, "swiglu", True, None),
-    "hoptimus0_vitg14_reg": (1536, 40, 24, 16, "swiglu", False, None),
 }
 
 
-def probe_transforms(model_type):
-    from torchvision import transforms
-    if model_type == "openmidnight_vitg14_reg":
-        image = transforms.Compose([transforms.Resize((224, 224), antialias=True), transforms.ToTensor()])
-    else:
-        image = transforms.Compose([transforms.Resize(224, antialias=True), transforms.CenterCrop(224), transforms.ToTensor()])
-    # Patch caches are already square tissue tiles, so keep slide/robustness probes uncropped.
-    patch = transforms.Compose([transforms.Resize((224, 224), antialias=True), transforms.ToTensor()])
-    return image, patch
+def probe_transforms():
+    # Default for Nanopath-trained checkpoints; baseline scripts override this in their request config.
+    transform = transforms.Compose([transforms.Resize((224, 224), antialias=True), transforms.ToTensor()])
+    # Keep the two return slots because probe.py separates tile-image and slide/patch-bag probes.
+    return transform, transform
 
 
 # Stochastic depth: keep_prob bernoulli on the residual branch, scaled to preserve mean.
@@ -108,11 +103,11 @@ class Block(nn.Module):
 # (cls_token, register_tokens, pos_embed (1, 1+37^2, dim), mask_token (1, dim), patch_embed.proj,
 # blocks.{i}.{norm1,norm2,attn.qkv,attn.proj,ls1,ls2,mlp.fc1,mlp.fc2}, norm).
 # Pos embed is bicubically interpolated at runtime to the current patch grid.
-# Meta DINOv2 includes a cls pos and uses 37x37 patches; ViT-G baselines use 16x16.
+# Meta DINOv2 includes a cls pos and uses 37x37 patches; variant_cfg can override this for probes.
 class DinoV2ViT(nn.Module):
-    def __init__(self, variant="dinov2_vits14_reg", drop_path_rate=0.0):
+    def __init__(self, variant="dinov2_vits14_reg", drop_path_rate=0.0, variant_cfg=None):
         super().__init__()
-        dim, depth, heads, pretrain_grid, ffn, pos_has_cls, _ = DINOV2_VARIANTS[variant]
+        dim, depth, heads, pretrain_grid, ffn, pos_has_cls, _ = variant_cfg or DINOV2_VARIANTS[variant]
         mlp_ratio, patch, registers = 4.0, 14, 4
         self.variant = variant
         self.patch_size, self.registers, self.embed_dim = patch, registers, dim
@@ -185,90 +180,6 @@ def load_dinov2_pretrained(model):
     state = torch.hub.load_state_dict_from_url(url, progress=False, map_location="cpu")
     model.load_state_dict(state, strict=True)
     return model
-
-
-def load_openmidnight_checkpoint(model, path="/data/OpenMidnight_ckpts/openmidnight_checkpoint.pth"):
-    raw = torch.load(path, map_location="cpu", weights_only=False)["teacher"]
-    state = {}
-    for key, value in raw.items():
-        if "dino" in key or "ibot" in key:
-            continue
-        key = key.removeprefix("backbone.")
-        if key.startswith("blocks."):
-            _, _, block, rest = key.split(".", 3)
-            key = f"blocks.{block}.{rest}"
-        state[key] = value
-    model.load_state_dict(state, strict=True)
-    return model
-
-
-def load_hoptimus0_checkpoint(model, path="/data/H-optimus-0/pytorch_model.bin"):
-    raw = torch.load(path, map_location="cpu", weights_only=False)
-    state = {}
-    for key, value in raw.items():
-        key = key.replace("reg_token", "register_tokens").replace("mlp.fc1", "mlp.w12").replace("mlp.fc2", "mlp.w3")
-        state[key] = value
-    state["mask_token"] = model.mask_token.detach().cpu().clone()
-    model.load_state_dict(state, strict=True)
-    return model
-
-
-# GenBio-PathFM is a per-channel ViT-G (in_chans=1, RoPE, patch_size=16, swiglu64,
-# qkv_bias=False, 4 storage tokens). Its public forward splits an RGB image into 3
-# single-channel inputs, encodes each, and concatenates R/G/B CLS / patch tokens
-# along the feature dim to produce 3*embed_dim=4608-d features. We re-use the
-# upstream VisionTransformer class from /data/genbio-pathfm/modeling_genbio_pathfm.py
-# (stubbing transformers, which the file imports only for the unused HF wrapper)
-# and load model.pth — a flat backbone state dict — straight into it. The wrapper
-# below exposes the (registers, encode_image, probe_features) interface probe.py
-# expects; storage_tokens are excluded by the model itself, so registers=0.
-def load_genbio_pathfm(path="/data/genbio-pathfm"):
-    import importlib.util, json, sys, types
-    from pathlib import Path
-    if "transformers" not in sys.modules:
-        tf = types.ModuleType("transformers")
-        class _Pre(nn.Module):
-            def __init__(self, config=None): super().__init__(); self.config = config
-            def post_init(self): pass
-        tf.PreTrainedModel = _Pre
-        tf.PretrainedConfig = type("PretrainedConfig", (), {"__init__": lambda self, **k: None})
-        sys.modules["transformers"] = tf
-    if "_genbio" not in sys.modules:
-        # Synthetic package so genbio's modeling file's relative import resolves.
-        pkg = types.ModuleType("_genbio"); pkg.__path__ = [path]; sys.modules["_genbio"] = pkg
-        for n in ("configuration_genbio_pathfm", "modeling_genbio_pathfm"):
-            spec = importlib.util.spec_from_file_location(f"_genbio.{n}", str(Path(path, f"{n}.py")))
-            mod = importlib.util.module_from_spec(spec); sys.modules[f"_genbio.{n}"] = mod
-            spec.loader.exec_module(mod)
-    VisionTransformer = sys.modules["_genbio.modeling_genbio_pathfm"].VisionTransformer
-    cfg = json.loads(Path(path, "config.json").read_text())
-    backbone = VisionTransformer(**cfg)  # **ignored_kwargs in VT eats unrelated keys (model_type, ...)
-    backbone.load_state_dict(torch.load(str(Path(path, "model.pth")), map_location="cpu", weights_only=False), strict=True)
-    class _GenBioPathFM(nn.Module):
-        def __init__(self, b): super().__init__(); self.backbone, self.registers = b, 0
-        def _encode(self, x):
-            tokens, (h, w) = self.backbone.prepare_tokens(x)
-            rope = self.backbone.rope_embed(H=h, W=w)
-            for blk in self.backbone.blocks:
-                tokens = blk(tokens, rope)
-            tokens = self.backbone.norm(tokens)
-            return tokens[:, 0], tokens[:, 1 + self.backbone.n_storage_tokens:]
-        # Per-channel encode → concat R/G/B along feature dim, matching upstream's GenBioPathFMModel.forward[_with_patches].
-        def _stack(self, x, patches=False):
-            b, _, h, w = x.shape
-            cls, patch = self._encode(x.reshape(b * 3, 1, h, w))
-            out = (patch if patches else cls).unflatten(0, (b, 3))
-            return torch.cat([out[:, 0], out[:, 1], out[:, 2]], dim=-1)
-        def forward(self, x):
-            b, _, h, w = x.shape
-            cls, patch = self._encode(x.reshape(b * 3, 1, h, w))
-            return {
-                "x_norm_clstoken": torch.cat([cls.unflatten(0, (b, 3))[:, i] for i in range(3)], dim=-1),
-                "x_norm_patchtokens": torch.cat([patch.unflatten(0, (b, 3))[:, i] for i in range(3)], dim=-1),
-            }
-        def encode_image(self, x): return self._stack(x, patches=True)
-        def probe_features(self, x): return self._stack(x)
-    return _GenBioPathFM(backbone).eval()
 
 
 # DINO/iBOT projection head: 3-layer MLP (in -> hidden -> hidden -> bottleneck) + L2 norm +

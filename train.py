@@ -4,12 +4,10 @@
 # L2-normalised CLS tokens. YAML drives the tunable knobs (backbone variant,
 # LR + LR scheduler, drop path, layerwise decay, KDE weight + concentration,
 # FLOP budget, batch size); other DINOv2 hyperparameters are hardcoded inline
-# at their use sites — see LOG.md for the sweeps that picked those values.
-# Researchers changing objectives should start at the loss block in main();
-# changing data preprocessing starts in dataloader.py; changing downstream
-# comparisons starts in probe.py.
+# at their use sites.
 
 import contextlib
+import fnmatch
 import json
 import math
 import os
@@ -189,7 +187,7 @@ def main():
     wandb_dir = Path(cfg["project"]["wandb_dir"])
     slurm_job_id = os.environ.get("SLURM_JOB_ID")
     latest_checkpoint_path = output_dir / "latest.pt"
-    # Fresh launches always start from scratch and wipe output_dir. 
+    # Fresh launches always start from scratch and wipe output_dir.
     resume_path = Path(train_cfg["resume"]) if train_cfg["resume"] else None
     if resume_path is None and output_dir.exists():
         shutil.rmtree(output_dir)
@@ -241,10 +239,25 @@ def main():
     )
     source_artifact = wandb.Artifact(f"nanopath-source-{wandb_run.id}", type="code")
     repo_dir = Path(__file__).resolve().parent
+    artifact_ignore = [
+        line.strip() for line in (repo_dir / ".gitignore").read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ] + [".git/", "baselines/", "slurm/"]
+
+    def artifact_ignored(path):
+        rel, name = path.relative_to(repo_dir).as_posix(), path.name
+        for pat in artifact_ignore:
+            pat = pat.rstrip("/") if pat.endswith("/") else pat
+            if fnmatch.fnmatch(name, pat) or fnmatch.fnmatch(rel, pat) or rel == pat or rel.startswith(pat + "/"):
+                return True
+        return False
+
     for root, dirs, files in os.walk(repo_dir):
-        dirs[:] = sorted(d for d in dirs if d not in {".git", ".venv", "__pycache__", ".claude"})
+        dirs[:] = sorted(d for d in dirs if not artifact_ignored(Path(root) / d))
         for name in sorted(files):
             path = Path(root) / name
+            if artifact_ignored(path):
+                continue
             source_artifact.add_file(str(path), name=str(path.relative_to(repo_dir)))
     wandb_run.log_artifact(source_artifact)
     wandb_meta = {"project": "nanopath", "id": wandb_run.id, "name": cfg["project"]["name"]}
@@ -400,7 +413,7 @@ def main():
     # Per-step FLOPs are measured once via FlopCounterMode on the first wrapped step (forward +
     # backward + opt.step) and reused for every subsequent step since the shapes don't change.
     # Counts the EMA teacher forward + DINO/iBOT projection heads, not just the backbone, so the
-    # 1e18 leaderboard cap reflects real GPU work. 
+    # 1e18 leaderboard cap reflects real GPU work.
     measured_flops_per_step = None
 
     while not stop_requested:

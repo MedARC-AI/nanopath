@@ -24,7 +24,7 @@ Only train and val are read by `probe.py`. The seven labels follow the BRACS ROI
 
 ## Implementation
 
-The image adapter reads relative PNG paths from `benchmarking/bracs.json`. Preprocessing is model-native via `model.py::probe_transforms`: OpenMidnight uses THUNDER's square `Resize((224, 224))`, while DINOv2-style backbones use resize-short-side-224 plus center-crop-224. Frozen embeddings are reused for:
+The image adapter reads relative PNG paths from `benchmarking/bracs.json`. Trained Nanopath checkpoints use the square `Resize((224, 224))` default from `model.py::probe_transforms`; frozen baseline scripts set `probe.transform_policy`, with OpenMidnight also using THUNDER's square resize. Frozen embeddings are reused for:
 
 - AdamW linear probe: LR ∈ {1e-3, 1e-4, 1e-5}, weight decay 1e-4, batch size 64, 200 epochs; report the best val macro F1 across all LR × epoch checkpoints
 - cosine KNN: k ∈ {1, 3, 5, 10, 20, 30, 40, 50}, k selected by val F1
@@ -35,14 +35,3 @@ The dataset score is `mean(linear_val_f1, knn_val_f1, fewshot_val_f1)`.
 ## Difference From Original Usage
 
 BRACS has its own train/validation/test organization. Nanopath uses the same train and validation folders as the official release/THUNDER split metadata, but does not score the official test folder because the leaderboard is an iterative validation benchmark and should not consume official test labels.
-
-## Runtime
-
-BRACS is one of the main bottlenecks despite its modest image count. Runtime is dominated by the 200-epoch linear LR sweep; 16-shot SimpleShot is cheap.
-
-| model | wall |
-|---|---:|
-| DINOv2-S | 182.8s |
-| OpenMidnight | 177.6s |
-| H-optimus-0 | 179.9s |
-| GenBio-PathFM | 160.6s |
