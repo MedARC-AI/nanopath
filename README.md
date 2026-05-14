@@ -48,7 +48,7 @@ The script reads `summary.json` and `metrics.jsonl`, writes `labless_submission.
 
 ## Leaderboard
 
-[![Nanopath progress plot](https://api.labless.dev/api/nano-projects/nanopath/plot.svg)](https://labless.dev/nano-projects/nanopath)
+[![Nanopath progress plot](https://api.labless.dev/api/nano-projects/nanopath/plot)](https://labless.dev/nano-projects/nanopath)
 
 Score is final `mean_probe_score` across our 11-dataset benchmarking suite, assessing tile-level classification (linear probing, knn, few-shot), segmentation, slide-level classification (progression, mutation, survival), and robustness. These benchmarks are derived from [THUNDER](https://mics-lab.github.io/thunder/) and [PathoBench](https://github.com/mahmoodlab/patho-bench), with modifications to make them finish in under 15 minutes on an H100 gpu. We operate only on the train/validation splits for these datasets, entirely holding out the test splits defined in THUNDER/PathoBench, so these benchmark suites remain valid for `nanopath` models without overfitting. See [benchmarking/README.md](benchmarking/README.md) for more information.
 
