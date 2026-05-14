@@ -1,14 +1,14 @@
 # labless project manifest for nanopath.
 #
 # Normal contributors do NOT need to edit this file before submitting a run.
-# To publish a completed or failed experiment, run:
+# To publish a completed full run or frozen baseline evaluation, run:
 #   ./labless/submit_to_labless.py output_dir=... contributor=... notes=...
 #
 # This manifest is the project-level contract between nanopath and labless. It
 # describes the public tracker: which metric is plotted, which files are locked
-# for fair leaderboard comparisons, which run tiers exist, and which artifacts
-# the submit script/backend should expect. Think of it as policy metadata, not
-# per-run metadata. Individual runs get their own payload at
+# for fair leaderboard comparisons, which public submission tiers exist, and
+# which artifacts the submit script/backend should expect. Think of it as
+# policy metadata, not per-run metadata. Individual runs get their own payload at
 # output_dir/labless_submission.json.
 #
 # The reference_points section mirrors the README leaderboard tables. These are
@@ -42,7 +42,6 @@ plot:
   y: mean_probe_score
   baseline_label: DINOv2-S frozen baseline
   reference_points_from_manifest: true
-  include_failed: false
   pending_can_be_best: false
 
 reference_points:
@@ -74,12 +73,24 @@ reference_points:
       command: python baselines/hoptimus0_baseline.py configs/leader.yaml
       mean_probe_score: 0.6190
       metrics: {linear: 0.7995, knn: 0.7676, few_shot: 0.6931, seg_jaccard: 0.3261, progression_auc: 0.7004, mutation_auc: 0.6584, survival_cindex: 0.5661, robustness: 0.8926}
+    - id: baseline-uni2-h
+      label: UNI-2-h
+      kind: frozen_pathology_foundation_model
+      command: python baselines/uni2h_baseline.py configs/leader.yaml
+      mean_probe_score: 0.6149
+      metrics: {linear: 0.7910, knn: 0.7547, few_shot: 0.6961, seg_jaccard: 0.3192, progression_auc: 0.7330, mutation_auc: 0.6463, survival_cindex: 0.5739, robustness: 0.8637}
     - id: baseline-dinov2-giant
       label: DINOv2-giant
       kind: frozen_natural_image_foundation_model
       command: python baselines/dinov2_giant_baseline.py configs/leader.yaml
       mean_probe_score: 0.5627
       metrics: {linear: 0.7689, knn: 0.7208, few_shot: 0.5834, seg_jaccard: 0.2845, progression_auc: 0.6000, mutation_auc: 0.6174, survival_cindex: 0.5562, robustness: 0.7985}
+    - id: baseline-midnight-12k
+      label: Midnight-12K
+      kind: frozen_pathology_foundation_model
+      command: python baselines/midnight12k_baseline.py configs/leader.yaml
+      mean_probe_score: 0.5545
+      metrics: {linear: 0.7684, knn: 0.6807, few_shot: 0.5758, seg_jaccard: 0.2725, progression_auc: 0.6840, mutation_auc: 0.6087, survival_cindex: 0.5071, robustness: 0.7823}
     - id: baseline-openmidnight
       label: OpenMidnight
       kind: frozen_pathology_foundation_model
@@ -114,17 +125,8 @@ rules:
   pretraining_data: TCGA tiles only
 
 run_tiers:
-  smoke:
-    command: python train.py configs/smoke.yaml output_dir=$OUTPUT_DIR
-    approval: auto_ingest
-  pilot:
-    command: python train.py configs/smoke.yaml output_dir=$OUTPUT_DIR
-    approval: maintainer_required
   full:
     command: python train.py configs/leader.yaml output_dir=$OUTPUT_DIR
-    approval: maintainer_required
-  replicate:
-    command: edit train.seed in configs/leader.yaml, then python train.py configs/leader.yaml output_dir=$OUTPUT_DIR
     approval: maintainer_required
   baseline:
     command: python baselines/<baseline_script>.py configs/leader.yaml

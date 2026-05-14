@@ -25,9 +25,10 @@ website fetches the API data and the SVG plot from `api.labless.dev`, so the run
 appears in the project log, run table, and plot without opening a pull request.
 
 `labless.yaml` is the project manifest. It records the metric, validation
-rules, run tiers, current trained leader, and frozen reference baselines used by
-the public plot. You do not need to edit it before submitting a run; change it
-only when the nanopath leaderboard policy itself changes.
+rules, the two public submission tiers (`full` and `baseline`), the current
+trained leader, and frozen reference baselines used by the public plot. You do
+not need to edit it before submitting a run; change it only when the nanopath
+leaderboard policy itself changes.
 
 ## Submit a completed run
 
@@ -54,6 +55,7 @@ Completed submissions require both `summary.json` and `metrics.jsonl`. The run
 is shown as `pending` until the organizer validates it.
 Use the same config you prepared and trained with; off the MedARC cluster, copy
 the config and point its data paths at writable local storage before training.
+Smoke runs are local setup checks only and are not accepted by labless.
 
 ## Submit a baseline/reference run
 
@@ -73,23 +75,6 @@ The submit script detects `summary.family == "baseline"` and marks the run as
 nanopath leaderboard still promotes trained `configs/leader.yaml` descendants
 through maintainer validation.
 
-## Submit a failed run
-
-Failed attempts are useful because they tell the next contributor what not to
-repeat. Submit them too:
-
-```bash
-./labless/submit_to_labless.py \
-  output_dir=/data/$USER/nanopath/leader/my-failed-run \
-  contributor=@yourgithub \
-  status=failed \
-  failure_reason="OOM after increasing batch size" \
-  notes="activation checkpointing was not enough on a 24GB card"
-```
-
-Failed runs do not need a final score, but the script still includes any files
-and metrics that exist.
-
 ## Useful options
 
 Arguments are `key=value`; there is no `argparse`.
@@ -100,10 +85,8 @@ Arguments are `key=value`; there is no `argparse`.
 | `contributor` | GitHub/Discord handle shown on labless. |
 | `notes` | Short explanation of what changed and why. |
 | `wandb_url` | Optional public W&B run URL. |
-| `status` | `completed` or `failed`; default is `completed`. |
-| `failure_reason` | Human-readable reason for failed runs. |
 | `title` | Optional display title. |
-| `tier` | `smoke`, `pilot`, `full`, `replicate`, or `baseline`; inferred when omitted. |
+| `tier` | `full` or `baseline`; inferred when omitted. |
 | `hardware` | Override detected hardware string. |
 | `dry_run=true` | Write `labless_submission.json` without posting. |
 | `api_url` | Use a local labless backend for testing. |
@@ -139,6 +122,6 @@ weights or raw data.
 
 ## Maintainer validation
 
-New completed runs appear on the plot as `pending`. A maintainer can replicate a
-promising run, then mark it `validated` or `leader` in labless. Failed and
-rejected runs remain visible because they are useful research context.
+New completed full runs appear on the plot as `pending`. A maintainer can
+replicate a promising run, then mark it `validated` or `leader` in labless.
+Failed runs are not accepted as public submissions.

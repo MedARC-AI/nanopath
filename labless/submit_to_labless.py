@@ -34,17 +34,18 @@ def main() -> int:
     submission_path = output_dir / "labless_submission.json"
     previous_submission = json.loads(submission_path.read_text()) if submission_path.exists() else {}
     status = opts.get("status", "completed").strip().lower()
-    if status not in {"completed", "failed"}:
-        raise ValueError("status must be completed or failed")
+    if status != "completed":
+        raise ValueError("labless only accepts completed full or baseline nanopath runs")
 
     summary_path = output_dir / "summary.json"
     metrics_path = output_dir / "metrics.jsonl"
     summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
     metric_rows = read_jsonl(metrics_path) if metrics_path.exists() else []
     metric_value = primary_metric(summary, metric_rows)
-    validation_errors = validate_output(output_dir, status, summary_path, metrics_path, metric_value)
+    validation_errors = validate_output(output_dir, summary_path, metrics_path, metric_value)
 
     repo = collect_git()
+    validation_errors.extend(f"locked path changed: {p}" for p in repo["changed_files"] if any(p == lock.rstrip("/") or p.startswith(lock) for lock in LOCKED_PATHS))
     env = collect_environment(opts)
     artifacts = collect_artifacts(output_dir, summary_path, metrics_path, opts)
     run_name = str(summary.get("project") or output_dir.name)
@@ -54,17 +55,21 @@ def main() -> int:
     if not run_tier:
         if summary.get("family") == "baseline":
             run_tier = "baseline"
-        elif "smoke" in config_path:
-            run_tier = "smoke"
         else:
             run_tier = "full"
+    if run_tier not in {"full", "baseline"}:
+        raise ValueError("tier must be full or baseline")
+    if run_tier == "full" and "smoke" in config_path:
+        raise ValueError("smoke runs are local validation only; submit a completed full run")
     baseline_commands = {
         "dinov2-vits14-reg-no-continued-pretraining": "python baselines/dinov2_small_baseline.py configs/leader.yaml",
         "dinov2-vitg14-reg-no-continued-pretraining": "python baselines/dinov2_giant_baseline.py configs/leader.yaml",
         "dinov2-vits14-reg-random-init-seed0": "python baselines/dinov2_random_baseline.py configs/leader.yaml",
         "genbio-pathfm-vitg16-rope-untouched": "python baselines/genbio_pathfm_baseline.py configs/leader.yaml",
         "hoptimus0-vitg14-reg-untouched": "python baselines/hoptimus0_baseline.py configs/leader.yaml",
+        "midnight-12k-vitg14-untouched": "python baselines/midnight12k_baseline.py configs/leader.yaml",
         "openmidnight-vitg14-reg-untouched": "python baselines/openmidnight_baseline.py configs/leader.yaml",
+        "uni2-h-vith14-untouched": "python baselines/uni2h_baseline.py configs/leader.yaml",
     }
     run_command = opts.get("command") or baseline_commands.get(recipe_id) or f"python train.py {config_path}"
     if not opts.get("command") and "output_dir=" not in run_command:
@@ -92,9 +97,8 @@ def main() -> int:
             "summary": summary,
             "metrics": final_metrics(summary, metric_rows),
             "changes": opts.get("changes") or opts.get("notes", ""),
-            "failure_reason": opts.get("failure_reason") or (opts.get("notes", "") if status == "failed" else ""),
             "environment": env,
-            "locked_path_changes": [p for p in repo["changed_files"] if any(p == lock.rstrip("/") or p.startswith(lock) for lock in LOCKED_PATHS)],
+            "locked_path_changes": [p.removeprefix("locked path changed: ") for p in validation_errors if p.startswith("locked path changed: ")],
             "validation_errors": validation_errors,
         },
         "artifacts": artifacts,
@@ -108,7 +112,7 @@ def main() -> int:
     submission_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     print(f"wrote {submission_path}")
 
-    if validation_errors and status == "completed":
+    if validation_errors:
         for error in validation_errors:
             print(f"validation error: {error}", file=sys.stderr)
         return 2
@@ -160,7 +164,7 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def validate_output(output_dir: Path, status: str, summary_path: Path, metrics_path: Path, metric_value: float | None) -> list[str]:
+def validate_output(output_dir: Path, summary_path: Path, metrics_path: Path, metric_value: float | None) -> list[str]:
     errors: list[str] = []
     if not output_dir.exists():
         errors.append(f"output_dir does not exist: {output_dir}")
@@ -168,7 +172,7 @@ def validate_output(output_dir: Path, status: str, summary_path: Path, metrics_p
         errors.append("summary.json missing")
     if not metrics_path.exists():
         errors.append("metrics.jsonl missing")
-    if status == "completed" and metric_value is None:
+    if metric_value is None:
         errors.append(f"completed run is missing {PRIMARY_METRIC} / final_probe_score")
     return errors
 
