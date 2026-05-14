@@ -1,6 +1,21 @@
-# labless manifest for the public nanopath experiment loop. The website and
-# submit_to_labless.py use this to keep the metric, locked paths, run tiers, and artifacts
-# aligned with the README leaderboard policy.
+# labless project manifest for nanopath.
+#
+# Normal contributors do NOT need to edit this file before submitting a run.
+# To publish a completed or failed experiment, run:
+#   ./labless/submit_to_labless.py output_dir=... contributor=... notes=...
+#
+# This manifest is the project-level contract between nanopath and labless. It
+# describes the public tracker: which metric is plotted, which files are locked
+# for fair leaderboard comparisons, which run tiers exist, and which artifacts
+# the submit script/backend should expect. Think of it as policy metadata, not
+# per-run metadata. Individual runs get their own payload at
+# output_dir/labless_submission.json.
+#
+# Edit this file only when the project policy changes: a new benchmark metric,
+# changed locked paths, a new current leader/baseline, different run commands,
+# or a future labless registration/update workflow. Do not edit it to describe
+# your personal experiment; use submit_to_labless.py key=value arguments and
+# notes=... for that.
 version: 1
 slug: nanopath
 title: nanopath

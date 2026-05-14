@@ -24,6 +24,10 @@ The labless backend stores the submission as an idea, attempt, and run. The
 website fetches the API data and the SVG plot from `api.labless.dev`, so the run
 appears on the project page and plot without opening a pull request.
 
+`labless.yaml` is the project manifest. You do not need to edit it before
+submitting a run; change it only when the nanopath leaderboard policy itself
+changes.
+
 ## Submit a completed run
 
 Run training first:
