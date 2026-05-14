@@ -25,10 +25,11 @@ sbatch submit/train_1gpu.sbatch configs/smoke.yaml
 # or directly on a GPU machine: python train.py configs/smoke.yaml
 
 # train and evaluate the current leader nanopath recipe
-sbatch submit/train_1gpu.sbatch configs/leader.yaml
-# or directly on a GPU machine: python train.py configs/leader.yaml
+RUN_DIR=/data/$USER/nanopath/leader/my-run
+sbatch submit/train_1gpu.sbatch configs/leader.yaml output_dir=$RUN_DIR
+# or directly on a GPU machine: python train.py configs/leader.yaml output_dir=$RUN_DIR
 
-# publish the completed smoke run to the live labless plot
+# publish a completed full run to the live labless plot
 ./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub notes="what changed"
 ```
 
@@ -65,7 +66,7 @@ Baseline rows are frozen reference checkpoints evaluated with the same probe sui
 
 ### How to submit to the leaderboard
 
-`configs/leader.yaml` is the currently winning `nanopath` training recipe. Submit any completed or failed run to labless:
+`configs/leader.yaml` is the currently winning `nanopath` training recipe. Submit completed full runs to labless:
 
 ```bash
 RUN_DIR=/data/$USER/nanopath/leader/my-run
@@ -102,14 +103,14 @@ You can initialize the model using DINOv2 checkpoint (trained on natural images)
 
 ### Labless for live tracking
 
-Submit any informative completed runs to the live tracker:
+Submit completed full runs to the live tracker:
 
 ```bash
 RUN_DIR=/data/$USER/nanopath/leader/my-run
 ./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub notes="what changed and why"
 ```
 
-The script reads `summary.json` and `metrics.jsonl`, writes `labless_submission.json` into the run directory, and posts to `api.labless.dev`. The labless website, run log, and plot update automatically; new completed runs stay `pending` until maintainer validation. See [labless/README.md](labless/README.md) for details.
+The script reads `summary.json` and `metrics.jsonl`, writes `labless_submission.json` into the run directory, and posts to `api.labless.dev`. Smoke checks and failed runs stay local. The labless website, run log, and plot update automatically; new completed full runs stay `pending` until maintainer validation. See [labless/README.md](labless/README.md) for details.
 
 ## Repository layout
 
