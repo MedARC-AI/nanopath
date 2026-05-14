@@ -45,7 +45,7 @@ train:
 
 dino:
   # DINOv2 recipe knobs. lr / kde_loss_weight / kde_concentration are the most-tuned
-  # (see LOG.md sweeps); other values are established DINOv2 defaults that train.py
+  # from early sweeps; other values are established DINOv2 defaults that train.py
   # reads but we rarely change. Anything not listed here is hardcoded in train.py.
   lr: 1.0e-4
   lr_min: 1.0e-6

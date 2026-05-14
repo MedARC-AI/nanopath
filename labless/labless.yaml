@@ -1,0 +1,138 @@
+# labless project manifest for nanopath.
+#
+# Normal contributors do NOT need to edit this file before submitting a run.
+# To publish a completed or failed experiment, run:
+#   ./labless/submit_to_labless.py output_dir=... contributor=... notes=...
+#
+# This manifest is the project-level contract between nanopath and labless. It
+# describes the public tracker: which metric is plotted, which files are locked
+# for fair leaderboard comparisons, which run tiers exist, and which artifacts
+# the submit script/backend should expect. Think of it as policy metadata, not
+# per-run metadata. Individual runs get their own payload at
+# output_dir/labless_submission.json.
+#
+# The reference_points section mirrors the README leaderboard tables. These are
+# not per-user submissions. The trained nanopath leader is the recipe to beat;
+# frozen external baselines are context rows/guide lines for the public plot.
+#
+# Edit this file only when the project policy changes: a new benchmark metric,
+# changed locked paths, a new current leader, new frozen baseline numbers,
+# different run commands, or a future labless registration/update workflow. Do
+# not edit it to describe your personal experiment; use submit_to_labless.py
+# key=value arguments and notes=... for that.
+version: 1
+slug: nanopath
+title: nanopath
+repo: MedARC-AI/nanopath
+default_branch: main
+summary: Single-GPU pathology foundation-model hill climbing.
+
+metric:
+  name: mean_probe_score
+  direction: maximize
+  source: summary.json
+  json_path: final_probe_score
+  baseline: 0.5304
+  current_leader: 0.5563
+  best_reference: 0.6268
+  improvement_threshold: 0.01
+
+plot:
+  x: submitted_at
+  y: mean_probe_score
+  baseline_label: DINOv2-S frozen baseline
+  reference_points_from_manifest: true
+  include_failed: false
+  pending_can_be_best: false
+
+reference_points:
+  leader:
+    id: nanopath-v18-s4242
+    label: DINOv2-S/14-reg leader recipe trained on TCGA
+    kind: trained_nanopath_leader
+    command: python train.py configs/leader.yaml output_dir=$OUTPUT_DIR
+    mean_probe_score: 0.5563
+    metrics:
+      linear: 0.7656
+      knn: 0.7046
+      few_shot: 0.6667
+      seg_jaccard: 0.3000
+      progression_auc: 0.6644
+      mutation_auc: 0.5843
+      survival_cindex: 0.5070
+      robustness: 0.6142
+  baselines:
+    - id: baseline-genbio-pathfm
+      label: GenBio-PathFM
+      kind: frozen_pathology_foundation_model
+      command: python baselines/genbio_pathfm_baseline.py configs/leader.yaml
+      mean_probe_score: 0.6268
+      metrics: {linear: 0.8076, knn: 0.7626, few_shot: 0.6970, seg_jaccard: 0.3301, progression_auc: 0.7680, mutation_auc: 0.6375, survival_cindex: 0.5349, robustness: 0.9412}
+    - id: baseline-hoptimus0
+      label: H-optimus-0
+      kind: frozen_pathology_foundation_model
+      command: python baselines/hoptimus0_baseline.py configs/leader.yaml
+      mean_probe_score: 0.6190
+      metrics: {linear: 0.7995, knn: 0.7676, few_shot: 0.6931, seg_jaccard: 0.3261, progression_auc: 0.7004, mutation_auc: 0.6584, survival_cindex: 0.5661, robustness: 0.8926}
+    - id: baseline-dinov2-giant
+      label: DINOv2-giant
+      kind: frozen_natural_image_foundation_model
+      command: python baselines/dinov2_giant_baseline.py configs/leader.yaml
+      mean_probe_score: 0.5627
+      metrics: {linear: 0.7689, knn: 0.7208, few_shot: 0.5834, seg_jaccard: 0.2845, progression_auc: 0.6000, mutation_auc: 0.6174, survival_cindex: 0.5562, robustness: 0.7985}
+    - id: baseline-openmidnight
+      label: OpenMidnight
+      kind: frozen_pathology_foundation_model
+      command: python baselines/openmidnight_baseline.py configs/leader.yaml
+      mean_probe_score: 0.5494
+      metrics: {linear: 0.7926, knn: 0.7135, few_shot: 0.4335, seg_jaccard: 0.3064, progression_auc: 0.6993, mutation_auc: 0.6091, survival_cindex: 0.4861, robustness: 0.7438}
+    - id: baseline-dinov2-small
+      label: DINOv2-small
+      kind: frozen_natural_image_foundation_model
+      command: python baselines/dinov2_small_baseline.py configs/leader.yaml
+      mean_probe_score: 0.5304
+      metrics: {linear: 0.6968, knn: 0.6249, few_shot: 0.5834, seg_jaccard: 0.2675, progression_auc: 0.5827, mutation_auc: 0.6225, survival_cindex: 0.5321, robustness: 0.7543}
+    - id: baseline-dinov2-small-random
+      label: DINOv2-small random
+      kind: random_init_architecture_baseline
+      command: python baselines/dinov2_random_baseline.py configs/leader.yaml
+      mean_probe_score: 0.4268
+      metrics: {linear: 0.5237, knn: 0.5066, few_shot: 0.4139, seg_jaccard: 0.2682, progression_auc: 0.6922, mutation_auc: 0.5648, survival_cindex: 0.5176, robustness: 0.1905}
+
+rules:
+  allowed_to_change:
+    - train.py
+    - model.py
+    - dataloader.py
+    - configs/*.yaml
+  locked_paths:
+    - probe.py
+    - benchmarking/**
+  max_train_flops: 1e18
+  max_wallclock_1xh100_minutes: 60
+  max_backbone_params: 150000000
+  pretraining_data: TCGA tiles only
+
+run_tiers:
+  smoke:
+    command: python train.py configs/smoke.yaml output_dir=$OUTPUT_DIR
+    approval: auto_ingest
+  pilot:
+    command: python train.py configs/smoke.yaml output_dir=$OUTPUT_DIR
+    approval: maintainer_required
+  full:
+    command: python train.py configs/leader.yaml output_dir=$OUTPUT_DIR
+    approval: maintainer_required
+  replicate:
+    command: edit train.seed in configs/leader.yaml, then python train.py configs/leader.yaml output_dir=$OUTPUT_DIR
+    approval: maintainer_required
+  baseline:
+    command: python baselines/<baseline_script>.py configs/leader.yaml
+    approval: reference_only
+
+artifacts:
+  metrics: metrics.jsonl
+  summary: summary.json
+  submission: labless_submission.json
+  logs: slurm/*.out
+  wandb_dir: /data/$USER/nanopath/wandb
