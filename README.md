@@ -4,7 +4,7 @@
 
 `nanopath` is a super lean experimental harness for training tile-level computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). It trains in less than 45 minutes on a single GPU and covers the full pretraining pipeline using public TCGA dataset (12k WSIs) and built-in downstream probes spanning classification, segmentation, slide-level mutation/progression, survival, and robustness. The goal is to easily explore and iterate on research directions to see what works best on small-scale, then we scale up the best performing training recipes with larger compute.
 
-This repository is intentionally made to be compatible with [autoresearch](https://github.com/karpathy/autoresearch)-style pursuits and the [labless nanopath tracker](https://labless.dev/nano-projects/nanopath). We will continuously update our codebase and [Leaderboard](#leaderboard) to reflect the best performing model (`configs/leader.yaml`). Nanopath models must finish training on a single H100 in <45 minutes, and are evaluated in the same job in <15 minutes across a downstream benchmark suite.
+This repository is intentionally made to be compatible with [autoresearch](https://github.com/karpathy/autoresearch)-style pursuits, and we even have a live autoresearch-style plot in [Leaderboard](#leaderboard). Nanopath models must finish training on a single H100 in <45 minutes, and are evaluated in the same job in <15 minutes across a downstream benchmark suite.
 
 **Want to get involved? Join us in the [MedARC Discord](https://discord.gg/tVR4TWnRM9) (find us in #path-fm)!**
 
@@ -24,27 +24,17 @@ python prepare.py configs/smoke.yaml download=True
 sbatch submit/train_1gpu.sbatch configs/smoke.yaml
 # or directly on a GPU machine: python train.py configs/smoke.yaml
 
-# publish any completed or failed run to the live labless plot
-./labless/submit_to_labless.py output_dir=/data/$USER/nanopath/leader/smoke contributor=@yourgithub notes="what changed"
-
 # train and evaluate the current leader nanopath recipe
 sbatch submit/train_1gpu.sbatch configs/leader.yaml
 # or directly on a GPU machine: python train.py configs/leader.yaml
+
+# publish the completed smoke run to the live labless plot
+./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub notes="what changed"
 ```
 
 `pyproject.toml` pins `torch` / `torchvision` against the CUDA 12.9 wheel index. If your GPU/driver needs a different CUDA build, edit the `torch` and `torchvision` lines in `pyproject.toml` before `uv sync`.
 
-A successful model training prints periodic train lines, logs to wandb, and ends with a final summary in `metrics.jsonl`. `configs/smoke.yaml` is simply meant to pretrain briefly and evaluate downstream probe to ensure everything runs without error.
-
-## Labless
-
-Submit completed or failed runs to the live tracker:
-
-```bash
-./labless/submit_to_labless.py output_dir=/data/$USER/nanopath/leader/my-run contributor=@yourgithub notes="what changed and why"
-```
-
-The script reads `summary.json` and `metrics.jsonl`, writes `labless_submission.json` into the run directory, posts to `api.labless.dev`, and appends `LOG.md` only after the remote submission succeeds. The labless website and plot update automatically; new completed runs stay `pending` until maintainer validation. See [labless/README.md](labless/README.md) for details.
+A successful model training prints periodic train lines, appends metrics to `metrics.jsonl`, and writes the final comparison artifact to `summary.json`. `configs/smoke.yaml` is simply meant to pretrain briefly and run the fixed downstream probe suite to ensure everything works.
 
 ## Leaderboard
 
@@ -62,12 +52,12 @@ Score is final `mean_probe_score` across our 11-dataset benchmarking suite, asse
 
 | # | Name | Description | final score | linear | knn | 16-shot | segmentation | progression | mutation | survival | robustness |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | GenBio-PathFM | Untouched GenBio-PathFM ViT-G/16 baseline | **0.6268** | 0.8076 | 0.7626 | 0.6970 | 0.3301 | 0.7680 | 0.6375 | 0.5349 | 0.9412 |
-| 2 | H-optimus-0 | Untouched H-optimus-0 ViT-G/14-reg baseline | 0.6190 | 0.7995 | 0.7676 | 0.6931 | 0.3261 | 0.7004 | 0.6584 | 0.5661 | 0.8926 |
-| 3 | DINOv2-giant | Untouched Meta `dinov2_vitg14_reg` baseline | 0.5627 | 0.7689 | 0.7208 | 0.5834 | 0.2845 | 0.6000 | 0.6174 | 0.5562 | 0.7985 |
-| 4 | OpenMidnight | Untouched OpenMidnight ViT-G/14-reg baseline | 0.5494 | 0.7926 | 0.7135 | 0.4335 | 0.3064 | 0.6993 | 0.6091 | 0.4861 | 0.7438 |
-| 5 | DINOv2-small | Untouched Meta `dinov2_vits14_reg` baseline | 0.5304 | 0.6968 | 0.6249 | 0.5834 | 0.2675 | 0.5827 | 0.6225 | 0.5321 | 0.7543 |
-| 6 | DINOv2-small random | Seed-0 random Meta `dinov2_vits14_reg` architecture baseline | 0.4268 | 0.5237 | 0.5066 | 0.4139 | 0.2682 | 0.6922 | 0.5648 | 0.5176 | 0.1905 |
+| 1 | GenBio-PathFM | GenBio-PathFM ViT-G/16 baseline | **0.6268** | 0.8076 | 0.7626 | 0.6970 | 0.3301 | 0.7680 | 0.6375 | 0.5349 | 0.9412 |
+| 2 | H-optimus-0 | H-optimus-0 ViT-G/14-reg baseline | 0.6190 | 0.7995 | 0.7676 | 0.6931 | 0.3261 | 0.7004 | 0.6584 | 0.5661 | 0.8926 |
+| 3 | DINOv2-giant | Untouched Meta `dinov2_vitg14_reg` | 0.5627 | 0.7689 | 0.7208 | 0.5834 | 0.2845 | 0.6000 | 0.6174 | 0.5562 | 0.7985 |
+| 4 | OpenMidnight | OpenMidnight ViT-G/14-reg baseline | 0.5494 | 0.7926 | 0.7135 | 0.4335 | 0.3064 | 0.6993 | 0.6091 | 0.4861 | 0.7438 |
+| 5 | DINOv2-small | Untouched Meta `dinov2_vits14_reg` | 0.5304 | 0.6968 | 0.6249 | 0.5834 | 0.2675 | 0.5827 | 0.6225 | 0.5321 | 0.7543 |
+| 6 | DINOv2-small random | `dinov2_vits14_reg` with random weights | 0.4268 | 0.5237 | 0.5066 | 0.4139 | 0.2682 | 0.6922 | 0.5648 | 0.5176 | 0.1905 |
 
 Baseline rows are frozen reference checkpoints evaluated with the same probe suite. They help calibrate the plot, but pathology-specific baselines are not valid initialization points for nanopath leaderboard submissions.
 
@@ -76,12 +66,13 @@ Baseline rows are frozen reference checkpoints evaluated with the same probe sui
 `configs/leader.yaml` is the currently winning `nanopath` training recipe. Submit any completed or failed run to labless:
 
 ```bash
-./labless/submit_to_labless.py output_dir=/data/$USER/nanopath/leader/my-run contributor=@yourgithub wandb_url=https://wandb.ai/... notes="what changed and why"
+RUN_DIR=/data/$USER/nanopath/leader/my-run
+./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub wandb_url=https://wandb.ai/... notes="what changed and why"
 ```
 
-To top the leaderboard you must outperform this recipe on `mean_probe_score` by at least 0.01. If you do so, open a PR to this repo with a description of your changes (please keep only the minimal necessary code changes that improve performance) and share your labless/W&B run. [@PaulScotti](https://github.com/PaulScotti) will train a new model using your code on his 1 80GB H100, using a different rng seed. If it still improves `mean_probe_score` by at least 0.01, we will update the README & leaderboard accordingly. **You don't need an H100 yourself to submit**—train on whatever hardware you have access to, share the run if you think it's a winner, and we will handle official verification.
+To top the leaderboard you must outperform this recipe on `mean_probe_score` by at least 0.01. Submit the run to labless; that public submission is the leaderboard claim, with git state, changed files, notes, metrics, hardware, and optional W&B attached. [@PaulScotti](https://github.com/PaulScotti) will inspect promising submissions, rerun the candidate on his 1 80GB H100 with a different rng seed, and update the README, `configs/leader.yaml`, and labless leader state if it still improves by at least 0.01. **You don't need an H100 or a PR to submit**—train on whatever hardware you have access to, and labless handles the public record and maintainer validation.
 
-We also strongly welcome PRs that simplify the codebase, either by reducing lines of code (excluding commented-out lines intended for readability) or by reducing complexity (e.g. replacing the cosine LR scheduler with a constant LR), so long as the changes do not interfere with `mean_probe_score`.
+Code-cleanup PRs are still welcome when they simplify the codebase without changing benchmark peformance on the leader recipe. Leaderboard claims should go through labless instead of a pull request.
 
 ### What you must NOT change for a leaderboard submission
 
@@ -107,6 +98,17 @@ The above limits force submissions to be **simultaneously compute efficient and 
 **Initializing model from a pretrained ckpt is OK only if not pathology-specific**
 You can initialize the model using DINOv2 checkpoint (trained on natural images) but you can't initialize from, say, H-optimus-0 or OpenMidnight checkpoints. We want to train our own pathology foundation model, not offload most of the task to someone else's pathology-specific model.
 
+### Labless for live tracking
+
+Submit any informative completed runs to the live tracker:
+
+```bash
+RUN_DIR=/data/$USER/nanopath/leader/my-run
+./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub notes="what changed and why"
+```
+
+The script reads `summary.json` and `metrics.jsonl`, writes `labless_submission.json` into the run directory, and posts to `api.labless.dev`. The labless website, run log, and plot update automatically; new completed runs stay `pending` until maintainer validation. See [labless/README.md](labless/README.md) for details.
+
 ## Repository layout
 
 ### Primary files meant to be hacked
@@ -123,14 +125,13 @@ You can initialize the model using DINOv2 checkpoint (trained on natural images)
 - `submit/train_1gpu.sbatch` — SLURM launcher for single-GPU training.
 - `labless/submit_to_labless.py` + `labless/labless.yaml` — package a run and post it to the live labless tracker.
 - `download_TCGA.sh` — manual utility, run by hand if you want the full 12K TCGA open-access SVS slide set (~13 TB) for forking the tile-extraction recipe. Not invoked by `prepare.py` and not needed for any standard training workflow.
-- `LOG.md` — running notes on what has been tried, including negative results.
 - `pyproject.toml` + `uv.lock` — Python dependencies used by `uv sync`.
 
 ## Data
 
 `prepare.py` prepares the necessary data for pretraining and downstream probing. Flag `download=True` to fetch/prepare the configured datasets into the folders specified by the YAML; flag `download=False` to verify that all required paths are already populated.
 
-You should edit `data.dataset_dir` and every `probe.dataset_roots.*` in your config (`configs/leader.yaml` and `configs/smoke.yaml` if you also smoke-test) to your own correct paths.
+On the MedARC cluster, the checked-in data paths are the intended defaults. On another VM, copy the config you plan to run and edit `data.dataset_dir` plus every `probe.dataset_roots.*` path to writable local storage before `prepare.py download=True`.
 
 **What `download=True` does**
 1. **TCGA tiles**: `huggingface_hub.snapshot_download` (filtered to `shard-*.parquet`) pulls the 200 parquet shards (~120 GB total, `{path: string, jpeg: binary}` rows with 64-row row groups) from [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) into `data.dataset_dir`.
@@ -198,7 +199,7 @@ sbatch submit/train_1gpu.sbatch configs/leader.yaml
 
 ## Experiment log
 
-See [LOG.md](LOG.md) for running notes on what has been tried in nanopath. Negative results included! Such logs help contributors avoid retrying dead ends.
+See the live [labless nanopath log](https://labless.dev/nano-projects/nanopath) for submitted runs, including negative results. Labless is the source of truth for experiment history so the record updates immediately when contributors submit runs.
 
 ## Acknowledgements
 

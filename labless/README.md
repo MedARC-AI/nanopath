@@ -4,7 +4,8 @@ This folder contains the nanopath-to-labless bridge. The goal is simple: after
 you train a model, one command publishes the run to the public nanopath tracker.
 
 ```bash
-./labless/submit_to_labless.py output_dir=/data/$USER/nanopath/leader/my-run contributor=@yourgithub notes="what changed and why"
+RUN_DIR=/data/$USER/nanopath/leader/my-run
+./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub notes="what changed and why"
 ```
 
 ## What the submit script does
@@ -18,11 +19,10 @@ repo root after `train.py` finishes. It:
    version, optional W&B URL, and artifact paths.
 4. Writes the exact public payload to `output_dir/labless_submission.json`.
 5. Posts it to `https://api.labless.dev/api/nano-projects/nanopath/submissions`.
-6. Prepends a `LOG.md` entry only after the remote submission succeeds.
 
 The labless backend stores the submission as an idea, attempt, and run. The
 website fetches the API data and the SVG plot from `api.labless.dev`, so the run
-appears on the project page and plot without opening a pull request.
+appears in the project log, run table, and plot without opening a pull request.
 
 `labless.yaml` is the project manifest. It records the metric, validation
 rules, run tiers, current trained leader, and frozen reference baselines used by
@@ -34,16 +34,17 @@ only when the nanopath leaderboard policy itself changes.
 Run training first:
 
 ```bash
-sbatch submit/train_1gpu.sbatch configs/leader.yaml
+RUN_DIR=/data/$USER/nanopath/leader/my-run
+sbatch submit/train_1gpu.sbatch configs/leader.yaml output_dir=$RUN_DIR
 # or directly on a GPU machine:
-python train.py configs/leader.yaml
+python train.py configs/leader.yaml output_dir=$RUN_DIR
 ```
 
-Then point the submit script at the run directory printed by training:
+Then point the submit script at the same run directory:
 
 ```bash
 ./labless/submit_to_labless.py \
-  output_dir=/data/$USER/nanopath/leader/my-run \
+  output_dir=$RUN_DIR \
   contributor=@yourgithub \
   wandb_url=https://wandb.ai/... \
   notes="changed the crop schedule and kept all probe paths untouched"
@@ -51,6 +52,8 @@ Then point the submit script at the run directory printed by training:
 
 Completed submissions require both `summary.json` and `metrics.jsonl`. The run
 is shown as `pending` until the organizer validates it.
+Use the same config you prepared and trained with; off the MedARC cluster, copy
+the config and point its data paths at writable local storage before training.
 
 ## Submit a baseline/reference run
 
@@ -103,7 +106,6 @@ Arguments are `key=value`; there is no `argparse`.
 | `tier` | `smoke`, `pilot`, `full`, `replicate`, or `baseline`; inferred when omitted. |
 | `hardware` | Override detected hardware string. |
 | `dry_run=true` | Write `labless_submission.json` without posting. |
-| `update_log=false` | Submit without editing `LOG.md`. |
 | `api_url` | Use a local labless backend for testing. |
 
 If labless later enables a private submission token, set

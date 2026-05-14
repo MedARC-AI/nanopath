@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Dependency-free nanopath -> labless bridge. Run from the nanopath repo root
 # after train.py finishes; it writes output_dir/labless_submission.json,
-# posts the same payload to labless, and prepends a LOG.md entry after success.
+# then posts the same payload to labless.
 
 from __future__ import annotations
 
@@ -67,6 +67,8 @@ def main() -> int:
         "openmidnight-vitg14-reg-untouched": "python baselines/openmidnight_baseline.py configs/leader.yaml",
     }
     run_command = opts.get("command") or baseline_commands.get(recipe_id) or f"python train.py {config_path}"
+    if not opts.get("command") and "output_dir=" not in run_command:
+        run_command = f"{run_command} output_dir={output_dir}"
     payload = {
         "version": 1,
         "title": opts.get("title") or f"{summary.get('recipe_id') or run_name} ({repo['branch']})",
@@ -112,12 +114,7 @@ def main() -> int:
         return 2
 
     dry_run = truthy(opts.get("dry_run", "false"))
-    update_log = truthy(opts.get("update_log", "false" if dry_run else "true"))
-
     if dry_run:
-        if update_log:
-            append_log(Path(opts.get("log_path", "LOG.md")).expanduser(), payload)
-            print(f"updated {opts.get('log_path', 'LOG.md')}")
         print(json.dumps({"dry_run": True, "status": status, "metric": metric_value, "submission": str(submission_path)}, indent=2))
         return 0
 
@@ -132,9 +129,6 @@ def main() -> int:
     with urllib.request.urlopen(req, timeout=30) as response:
         body = response.read().decode()
     result = json.loads(body) if body else {"ok": True}
-    if update_log:
-        append_log(Path(opts.get("log_path", "LOG.md")).expanduser(), payload)
-        print(f"updated {opts.get('log_path', 'LOG.md')}")
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
@@ -296,45 +290,6 @@ def collect_artifacts(output_dir: Path, summary_path: Path, metrics_path: Path, 
 def file_artifact(kind: str, path: Path) -> dict[str, Any]:
     data = path.read_bytes()
     return {"kind": kind, "path": str(path), "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
-
-
-def append_log(path: Path, payload: dict[str, Any]) -> None:
-    marker = f"<!-- labless:{payload['submission_id']} -->"
-    existing = path.read_text() if path.exists() else "# Experiment log\n\n"
-    if marker in existing:
-        return
-    run = payload["run"]
-    primary = run["metrics"].get(PRIMARY_METRIC)
-    lines = [
-        marker,
-        f"## {dt.datetime.now(dt.timezone.utc).date().isoformat()} - {payload['title']} ({payload['contributor']['login']})",
-        "",
-        f"- status: `{payload['status']}`",
-        f"- metric: `{PRIMARY_METRIC}={primary:.4f}`" if primary is not None else f"- metric: `{PRIMARY_METRIC}=unscored`",
-        f"- tier: `{run.get('tier') or 'unknown'}`",
-        f"- hardware: `{run.get('hardware') or 'unknown'}`",
-        f"- command: `{run.get('command') or 'unknown'}`",
-        f"- submission_id: `{payload['submission_id']}`",
-        "",
-        payload.get("notes") or run.get("changes") or "No notes provided.",
-        "",
-    ]
-    notes = [*run.get("validation_errors", []), *[f"locked path changed: {p}" for p in run.get("locked_path_changes", [])]]
-    if notes:
-        lines.extend(["Validation notes:", *[f"- {note}" for note in notes], ""])
-    if payload.get("artifacts"):
-        lines.append("Artifacts:")
-        for artifact in payload["artifacts"]:
-            uri = artifact.get("uri") or artifact.get("path")
-            if uri:
-                lines.append(f"- {artifact.get('kind', 'artifact')}: `{uri}`")
-        lines.append("")
-    entry = "\n".join(lines).rstrip() + "\n\n"
-    if existing.startswith("# Experiment log"):
-        head, _, tail = existing.partition("\n")
-        path.write_text(head.rstrip() + "\n\n" + entry + tail.lstrip("\n"))
-    else:
-        path.write_text("# Experiment log\n\n" + entry + existing.lstrip("\n"))
 
 
 def now_iso() -> str:

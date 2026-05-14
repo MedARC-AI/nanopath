@@ -42,7 +42,7 @@ plot:
   y: mean_probe_score
   baseline_label: DINOv2-S frozen baseline
   reference_points_from_manifest: true
-  include_failed: true
+  include_failed: false
   pending_can_be_best: false
 
 reference_points:
