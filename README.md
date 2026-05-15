@@ -29,7 +29,7 @@ RUN_DIR=/data/$USER/nanopath/leader/my-run
 sbatch submit/train_1gpu.sbatch configs/leader.yaml output_dir=$RUN_DIR
 # or directly on a GPU machine: python train.py configs/leader.yaml output_dir=$RUN_DIR
 
-# publish a completed full run to the live labless plot
+# publish the completed run to the labless API, which auto-populates the live plot
 ./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub run_name=kde-crops notes="what changed"
 ```
 
@@ -41,7 +41,7 @@ A successful model training prints periodic train lines, appends metrics to `met
 
 [![Nanopath progress plot](https://api.labless.dev/api/nano-projects/nanopath/plot.svg)](https://labless.dev/nano-projects/nanopath)
 
-Score is final `mean_probe_score` across our 11-dataset benchmarking suite, assessing tile-level classification (linear probing, knn, few-shot), segmentation, slide-level classification (progression, mutation, survival), and robustness. These benchmarks are derived from [THUNDER](https://mics-lab.github.io/thunder/) and [PathoBench](https://github.com/mahmoodlab/patho-bench), with modifications to make them finish in under 15 minutes on an H100 gpu. We operate only on the train/validation splits for these datasets, entirely holding out the test splits defined in THUNDER/PathoBench, so these benchmark suites remain valid for `nanopath` models without overfitting. See [benchmarking/README.md](benchmarking/README.md) for more information.
+Score is final `mean_probe_score` across our 11-dataset benchmarking suite, assessing tile-level classification (linear probing, knn, few-shot), segmentation, slide-level classification (progression, mutation, survival), and robustness. These benchmarks are derived from [THUNDER](https://mics-lab.github.io/thunder/), [PathoBench](https://github.com/mahmoodlab/patho-bench), and [PathoROB](https://arxiv.org/abs/2507.17845), with modifications to make them finish in under 15 minutes on an H100 gpu. We operate only on the train/validation splits for these datasets, entirely holding out the test splits defined in THUNDER/PathoBench, so these benchmark suites remain valid for `nanopath` models without overfitting. See [benchmarking/README.md](benchmarking/README.md) for more information.
 
 ### Nanopath models
 
@@ -53,14 +53,14 @@ Score is final `mean_probe_score` across our 11-dataset benchmarking suite, asse
 
 | # | Name | Description | final score | linear | knn | 16-shot | segmentation | progression | mutation | survival | robustness |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | GenBio-PathFM | Untouched GenBio-PathFM ViT-G/16 baseline | **0.6268** | 0.8076 | 0.7626 | 0.6970 | 0.3301 | 0.7680 | 0.6375 | 0.5349 | 0.9412 |
-| 2 | H-optimus-0 | Untouched H-optimus-0 ViT-G/14-reg baseline | 0.6190 | 0.7995 | 0.7676 | 0.6931 | 0.3261 | 0.7004 | 0.6584 | 0.5661 | 0.8926 |
-| 3 | UNI-2-h | Untouched MahmoodLab UNI-2-h ViT-H/14 baseline | 0.6149 | 0.7910 | 0.7547 | 0.6961 | 0.3192 | 0.7330 | 0.6463 | 0.5739 | 0.8637 |
-| 4 | DINOv2-giant | Untouched Meta `dinov2_vitg14_reg` baseline | 0.5627 | 0.7689 | 0.7208 | 0.5834 | 0.2845 | 0.6000 | 0.6174 | 0.5562 | 0.7985 |
-| 5 | Midnight-12K | Untouched Kaiko Midnight-12K ViT-G/14 baseline | 0.5545 | 0.7684 | 0.6807 | 0.5758 | 0.2725 | 0.6840 | 0.6087 | 0.5071 | 0.7823 |
-| 6 | OpenMidnight | Untouched OpenMidnight ViT-G/14-reg baseline | 0.5494 | 0.7926 | 0.7135 | 0.4335 | 0.3064 | 0.6993 | 0.6091 | 0.4861 | 0.7438 |
-| 7 | DINOv2-small | Untouched Meta `dinov2_vits14_reg` baseline | 0.5304 | 0.6968 | 0.6249 | 0.5834 | 0.2675 | 0.5827 | 0.6225 | 0.5321 | 0.7543 |
-| 8 | DINOv2-small random | Seed-0 random Meta `dinov2_vits14_reg` architecture baseline | 0.4268 | 0.5237 | 0.5066 | 0.4139 | 0.2682 | 0.6922 | 0.5648 | 0.5176 | 0.1905 |
+| 1 | GenBio-PathFM | GenBio-PathFM ViT-G/16 | **0.6268** | 0.8076 | 0.7626 | 0.6970 | 0.3301 | 0.7680 | 0.6375 | 0.5349 | 0.9412 |
+| 2 | H-optimus-0 | H-optimus-0 ViT-G/14-reg | 0.6190 | 0.7995 | 0.7676 | 0.6931 | 0.3261 | 0.7004 | 0.6584 | 0.5661 | 0.8926 |
+| 3 | UNI-2-h | MahmoodLab UNI-2-h ViT-H/14 | 0.6149 | 0.7910 | 0.7547 | 0.6961 | 0.3192 | 0.7330 | 0.6463 | 0.5739 | 0.8637 |
+| 4 | DINOv2-giant | Untouched Meta `dinov2_vitg14_reg` | 0.5627 | 0.7689 | 0.7208 | 0.5834 | 0.2845 | 0.6000 | 0.6174 | 0.5562 | 0.7985 |
+| 5 | Midnight-12K | Kaiko Midnight-12K ViT-G/14 | 0.5545 | 0.7684 | 0.6807 | 0.5758 | 0.2725 | 0.6840 | 0.6087 | 0.5071 | 0.7823 |
+| 6 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.5494 | 0.7926 | 0.7135 | 0.4335 | 0.3064 | 0.6993 | 0.6091 | 0.4861 | 0.7438 |
+| 7 | DINOv2-small | Untouched Meta `dinov2_vits14_reg` | 0.5304 | 0.6968 | 0.6249 | 0.5834 | 0.2675 | 0.5827 | 0.6225 | 0.5321 | 0.7543 |
+| 8 | DINOv2-small random | Randomized weights `dinov2_vits14_reg` | 0.4268 | 0.5237 | 0.5066 | 0.4139 | 0.2682 | 0.6922 | 0.5648 | 0.5176 | 0.1905 |
 
 Baseline rows are frozen reference checkpoints evaluated with the same probe suite. They help calibrate the plot, but pathology-specific baselines are not valid initialization points for nanopath leaderboard submissions.
 
@@ -208,4 +208,4 @@ See the live [labless nanopath log](https://labless.dev/nano-projects/nanopath) 
 
 ## Acknowledgements
 
-Inspired by [nanochat](https://github.com/karpathy/nanochat). The DINOv2 backbone weights are [Meta checkpoints](https://github.com/facebookresearch/dinov2) loaded by state-dict into our own clean ViT implementation. Tile-classification and segmentation probes follow the [THUNDER benchmark](https://mics-lab.github.io/thunder/); slide-level probes follow [PathoBench](https://huggingface.co/datasets/MahmoodLab/Patho-Bench).
+Inspired by [nanochat](https://github.com/karpathy/nanochat). The DINOv2 backbone weights are [Meta checkpoints](https://github.com/facebookresearch/dinov2) loaded by state-dict into our own clean ViT implementation. Tile-classification and segmentation probes follow the [THUNDER benchmark](https://mics-lab.github.io/thunder/); slide-level probes follow [PathoBench](https://huggingface.co/datasets/MahmoodLab/Patho-Bench); robustness is calculated via [PathoROB](https://arxiv.org/abs/2507.17845).
