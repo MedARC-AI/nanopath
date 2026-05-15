@@ -15,12 +15,14 @@ repo root after `train.py` finishes. It:
 
 1. Reads `summary.json` and `metrics.jsonl` from `output_dir`.
 2. Extracts the final `mean_probe_score` and probe submetrics.
-3. Records git branch, commit, dirty files, diff summary, hardware, Python
-   version, optional W&B URL, and artifact paths.
-4. Writes the exact public payload to `output_dir/labless_submission.json`.
-5. Posts it to `https://api.labless.dev/api/nano-projects/nanopath/submissions`.
+3. Records git branch, commit, dirty state, and a code diff against the current
+   leader run for `train.py`, `model.py`, `dataloader.py`, `prepare.py`, and
+   the config YAML used by the run.
+4. Records hardware, Python version, optional W&B URL, and artifact paths.
+5. Writes the exact public payload to `output_dir/labless_submission.json`.
+6. Posts it to `https://api.labless.dev/api/nano-projects/nanopath/submissions`.
 
-The labless backend stores the submission as an idea, attempt, and run. The
+The labless backend stores the submission as a run with artifact pointers. The
 website fetches the API data and the SVG plot from `api.labless.dev`, so the run
 appears in the project log, run table, and plot without opening a pull request.
 
@@ -112,13 +114,18 @@ The payload intentionally makes the run inspectable. It includes:
 - contributor handle and notes
 - final metric and probe submetrics
 - run family, recipe id, and tier (`baseline` for frozen reference scripts)
-- git remote, branch, commit, dirty flag, changed files, and diff summary
+- git remote, branch, commit, dirty flag, changed review files, and a
+  leader-relative patch capped at 120 KB
 - hardware, hostname, Python version, and optional GPU summary
 - artifact paths or URLs for `summary.json`, `metrics.jsonl`, W&B, SLURM logs,
   and `labless_submission.json`
 
-Local artifact paths are provenance pointers; the script does not upload model
-weights or raw data.
+The patch is only collected for `train.py`, `model.py`, `dataloader.py`,
+`prepare.py`, and the config YAML used by the run. If none of those files differ
+from the leader, no patch is sent. Untracked review files over 24 KB or with
+binary suffixes are omitted from the patch and listed in the payload. Local
+artifact paths are provenance pointers; the script does not upload model weights
+or raw data.
 
 ## Maintainer validation
 
