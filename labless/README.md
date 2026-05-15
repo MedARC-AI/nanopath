@@ -71,11 +71,10 @@ python baselines/dinov2_small_baseline.py configs/leader.yaml
 ```
 
 The submit script detects `summary.family == "baseline"` and marks the run as
-`tier=baseline`. Labless currently tracks GenBio-PathFM plus DINOv2 giant,
-small, and random-init references; other nanopath baselines can stay in the
-repo README without becoming Labless reference rows. The nanopath leaderboard
-still promotes trained `configs/leader.yaml` descendants through maintainer
-validation.
+`tier=baseline`. Labless currently tracks GenBio-PathFM plus DINOv2 giant and
+small references; other nanopath baselines can stay in the repo README without
+becoming Labless reference rows. The nanopath leaderboard still promotes
+trained `configs/leader.yaml` descendants through maintainer validation.
 
 ## Useful options
 

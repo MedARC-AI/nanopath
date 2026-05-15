@@ -26,8 +26,8 @@ PROJECT_SLUG = "nanopath"
 PRIMARY_METRIC = "mean_probe_score"
 LOCKED_PATHS = ("probe.py", "benchmarking/")
 FULL_RUN_MIN_FLOPS = 1_000_000_000_000_000_000
-LEADER_RUN_ID = "run_nanopath_v18_s4242"
-LEADER_COMMIT = "6b2a7c23f52834b87ce061a77ddf23bf2bca8963"
+LEADER_RUN_ID = "run_sub_08b694423e"
+LEADER_COMMIT = "86a6b7a523e455dc5dbf1c8cd95179c3f82017b6"
 MAX_REPO_DIFF_BYTES = 120_000
 MAX_UNTRACKED_DIFF_BYTES = 24_000
 REVIEW_DIFF_PATHS = ("train.py", "model.py", "dataloader.py", "prepare.py")
@@ -99,7 +99,6 @@ def main() -> int:
     baseline_commands = {
         "dinov2-vits14-reg-no-continued-pretraining": "python baselines/dinov2_small_baseline.py configs/leader.yaml",
         "dinov2-vitg14-reg-no-continued-pretraining": "python baselines/dinov2_giant_baseline.py configs/leader.yaml",
-        "dinov2-vits14-reg-random-init-seed0": "python baselines/dinov2_random_baseline.py configs/leader.yaml",
         "genbio-pathfm-vitg16-rope-untouched": "python baselines/genbio_pathfm_baseline.py configs/leader.yaml",
     }
     if run_tier == "baseline" and recipe_id not in baseline_commands:
