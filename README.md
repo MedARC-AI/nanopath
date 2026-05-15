@@ -30,7 +30,7 @@ sbatch submit/train_1gpu.sbatch configs/leader.yaml output_dir=$RUN_DIR
 # or directly on a GPU machine: python train.py configs/leader.yaml output_dir=$RUN_DIR
 
 # publish a completed full run to the live labless plot
-./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub notes="what changed"
+./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub run_name=kde-crops notes="what changed"
 ```
 
 `pyproject.toml` pins `torch` / `torchvision` against the CUDA 12.9 wheel index. If your GPU/driver needs a different CUDA build, edit the `torch` and `torchvision` lines in `pyproject.toml` before `uv sync`.
@@ -70,8 +70,10 @@ Baseline rows are frozen reference checkpoints evaluated with the same probe sui
 
 ```bash
 RUN_DIR=/data/$USER/nanopath/leader/my-run
-./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub wandb_url=https://wandb.ai/... notes="what changed and why"
+./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub run_name=kde-crops wandb_url=https://wandb.ai/... notes="what changed and why"
 ```
+
+The `run_name` is the short label shown next to your dot on the Labless plot; keep it under 20 characters and make it describe what changed. A copied config such as `configs/new_config.yaml` is fine if the completed `summary.json` still reports the full `max_train_flops: 1e18` budget. Short smoke-sized runs and failed runs are not public Labless submissions.
 
 To top the leaderboard you must outperform this recipe on `mean_probe_score` by at least 0.01. Submit the run to labless; that public submission is the leaderboard claim, with git state, changed files, notes, metrics, hardware, and optional W&B attached. [@PaulScotti](https://github.com/PaulScotti) will inspect promising submissions, rerun the candidate on his 1 80GB H100 with a different rng seed, and update the README, `configs/leader.yaml`, and labless leader state if it still improves by at least 0.01. **You don't need an H100 or a PR to submit**—train on whatever hardware you have access to, and labless handles the public record and maintainer validation.
 
@@ -107,10 +109,10 @@ Submit completed full runs to the live tracker:
 
 ```bash
 RUN_DIR=/data/$USER/nanopath/leader/my-run
-./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub notes="what changed and why"
+./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub run_name=kde-crops notes="what changed and why"
 ```
 
-The script reads `summary.json` and `metrics.jsonl`, writes `labless_submission.json` into the run directory, and posts to `api.labless.dev`. Smoke checks and failed runs stay local. The labless website, run log, and plot update automatically; new completed full runs stay `pending` until maintainer validation. See [labless/README.md](labless/README.md) for details.
+The script reads `summary.json` and `metrics.jsonl`, writes `labless_submission.json` into the run directory, verifies full runs from `max_train_flops: 1e18`, and posts to `api.labless.dev`. Smoke checks and failed runs stay local. The labless website, run log, and plot update automatically; new completed full runs stay `pending` until maintainer validation. See [labless/README.md](labless/README.md) for details.
 
 ## Repository layout
 
@@ -202,7 +204,7 @@ sbatch submit/train_1gpu.sbatch configs/leader.yaml
 
 ## Experiment log
 
-See the live [labless nanopath log](https://labless.dev/nano-projects/nanopath) for submitted runs, including negative results. Labless is the source of truth for experiment history so the record updates immediately when contributors submit runs.
+See the live [labless nanopath log](https://labless.dev/nano-projects/nanopath) for submitted completed runs, including low-scoring results. Labless is the source of truth for experiment history so the record updates immediately when contributors submit runs.
 
 ## Acknowledgements
 

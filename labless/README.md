@@ -5,7 +5,7 @@ you train a model, one command publishes the run to the public nanopath tracker.
 
 ```bash
 RUN_DIR=/data/$USER/nanopath/leader/my-run
-./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub notes="what changed and why"
+./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub run_name=kde-crops notes="what changed and why"
 ```
 
 ## What the submit script does
@@ -47,12 +47,16 @@ Then point the submit script at the same run directory:
 ./labless/submit_to_labless.py \
   output_dir=$RUN_DIR \
   contributor=@yourgithub \
+  run_name=kde-crops \
   wandb_url=https://wandb.ai/... \
   notes="changed the crop schedule and kept all probe paths untouched"
 ```
 
 Completed submissions require both `summary.json` and `metrics.jsonl`. The run
-is shown as `pending` until the organizer validates it.
+is shown as `pending` until the organizer validates it. A copied config such as
+`configs/new_config.yaml` is accepted if the completed `summary.json` reports
+the full `max_train_flops: 1e18` budget; short local configs are rejected even
+if they are not named smoke.
 Use the same config you prepared and trained with; off the MedARC cluster, copy
 the config and point its data paths at writable local storage before training.
 Smoke runs are local setup checks only and are not accepted by labless.
@@ -83,9 +87,9 @@ Arguments are `key=value`; there is no `argparse`.
 |---|---|
 | `output_dir` | Required run directory. |
 | `contributor` | GitHub/Discord handle shown on labless. |
+| `run_name` | Short plot label, 20 characters or fewer. |
 | `notes` | Short explanation of what changed and why. |
 | `wandb_url` | Optional public W&B run URL. |
-| `title` | Optional display title. |
 | `tier` | `full` or `baseline`; inferred when omitted. |
 | `hardware` | Override detected hardware string. |
 | `dry_run=true` | Write `labless_submission.json` without posting. |

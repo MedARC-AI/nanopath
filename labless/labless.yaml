@@ -2,7 +2,7 @@
 #
 # Normal contributors do NOT need to edit this file before submitting a run.
 # To publish a completed full run or frozen baseline evaluation, run:
-#   ./labless/submit_to_labless.py output_dir=... contributor=... notes=...
+#   ./labless/submit_to_labless.py output_dir=... contributor=... run_name=kde-crops notes=...
 #
 # This manifest is the project-level contract between nanopath and labless. It
 # describes the public tracker: which metric is plotted, which files are locked
@@ -19,7 +19,10 @@
 # changed locked paths, a new current leader, new frozen baseline numbers,
 # different run commands, or a future labless registration/update workflow. Do
 # not edit it to describe your personal experiment; use submit_to_labless.py
-# key=value arguments and notes=... for that.
+# key=value arguments such as run_name=... and notes=... for that. Full
+# training submissions are checked against rules.max_train_flops; copying or
+# renaming a config is fine, but the public submission must come from a
+# completed run whose summary.json reports the full 1e18 budget.
 version: 1
 slug: nanopath
 title: nanopath

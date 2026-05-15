@@ -27,7 +27,7 @@ Experiment and benchmark discipline:
 - An improvement should only actually be considered an improvement mean_probe_score improves over .01, anything less is within random variance.
 - Use wandb for logging, plotting, and utilization monitoring throughout pretraining. Log all metrics needed to validate training behavior (i.e., gradient norm).
 - Aim for >80% GPU utilization during GPU runs; investigate and remedy code when utilization is poor.
-- After any completed full run or frozen baseline evaluation worth sharing, run `./labless/submit_to_labless.py output_dir=... contributor=... notes=...`; submissions require `summary.json` and `metrics.jsonl`.
+- After any completed full run or frozen baseline evaluation worth sharing, run `./labless/submit_to_labless.py output_dir=... contributor=... run_name=... notes=...`; full submissions require `summary.json`, `metrics.jsonl`, and `summary.max_train_flops == 1e18`. Keep smoke checks and failed runs local.
 - Do not submit dirty changes touching `probe.py` or `benchmarking/`; labless marks locked-path changes invalid.
 
 Cluster and storage:

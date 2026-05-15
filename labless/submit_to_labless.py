@@ -25,6 +25,7 @@ API_URL = "https://api.labless.dev"
 PROJECT_SLUG = "nanopath"
 PRIMARY_METRIC = "mean_probe_score"
 LOCKED_PATHS = ("probe.py", "benchmarking/")
+FULL_RUN_MIN_FLOPS = 1_000_000_000_000_000_000
 NUMBER_RE = re.compile(r"^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
 
 
@@ -61,6 +62,11 @@ def main() -> int:
         raise ValueError("tier must be full or baseline")
     if run_tier == "full" and "smoke" in config_path:
         raise ValueError("smoke runs are local validation only; submit a completed full run")
+    if run_tier == "full" and not validation_errors and number(summary.get("max_train_flops")) != float(FULL_RUN_MIN_FLOPS):
+        raise ValueError("full submissions must report max_train_flops=1e18 in summary.json")
+    run_label = opts.get("run_name") or opts.get("label") or opts.get("title") or run_name
+    if run_tier == "full" and len(run_label) > 20:
+        raise ValueError("run_name must be 20 characters or fewer")
     baseline_commands = {
         "dinov2-vits14-reg-no-continued-pretraining": "python baselines/dinov2_small_baseline.py configs/leader.yaml",
         "dinov2-vitg14-reg-no-continued-pretraining": "python baselines/dinov2_giant_baseline.py configs/leader.yaml",
@@ -76,7 +82,7 @@ def main() -> int:
         run_command = f"{run_command} output_dir={output_dir}"
     payload = {
         "version": 1,
-        "title": opts.get("title") or f"{summary.get('recipe_id') or run_name} ({repo['branch']})",
+        "title": run_label,
         "status": status,
         "notes": opts.get("notes", ""),
         "contributor": {
@@ -86,6 +92,7 @@ def main() -> int:
         "repo": repo,
         "run": {
             "name": run_name,
+            "label": run_label,
             "tier": run_tier,
             "family": summary.get("family") or "nanopath",
             "recipe_id": summary.get("recipe_id"),
