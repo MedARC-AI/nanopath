@@ -128,7 +128,7 @@ The script reads `summary.json` and `metrics.jsonl`, writes `labless_submission.
 - `prepare.py` — data prep: verify or download pretraining data + probe datasets + any pretrained weights.
 - `probe.py` — downstream probes (KNN, few-shot, linear, segmentation, slide AUROC, survival, robustness).
 - `submit/train_1gpu.sbatch` — SLURM launcher for single-GPU training.
-- `labless/submit_to_labless.py` + `labless/labless.yaml` — package a run and post it to the live labless tracker.
+- `labless/submit_to_labless.py` — package a run and post it to the live labless tracker.
 - `download_TCGA.sh` — manual utility, run by hand if you want the full 12K TCGA open-access SVS slide set (~13 TB) for forking the tile-extraction recipe. Not invoked by `prepare.py` and not needed for any standard training workflow.
 - `pyproject.toml` + `uv.lock` — Python dependencies used by `uv sync`.
 

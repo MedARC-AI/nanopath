@@ -24,12 +24,6 @@ The labless backend stores the submission as an idea, attempt, and run. The
 website fetches the API data and the SVG plot from `api.labless.dev`, so the run
 appears in the project log, run table, and plot without opening a pull request.
 
-`labless.yaml` is the project manifest. It records the metric, validation
-rules, the two public submission tiers (`full` and `baseline`), the current
-trained leader, and frozen reference baselines used by the public plot. You do
-not need to edit it before submitting a run; change it only when the nanopath
-leaderboard policy itself changes.
-
 ## Submit a completed run
 
 Run training first:
@@ -63,7 +57,7 @@ Smoke runs are local setup checks only and are not accepted by labless.
 
 ## Submit a baseline/reference run
 
-Baseline scripts under `baselines/` write the same `summary.json` and
+Tracked reference baseline scripts write the same `summary.json` and
 `metrics.jsonl` files as `train.py`, so they can be submitted the same way:
 
 ```bash
@@ -75,9 +69,11 @@ python baselines/dinov2_small_baseline.py configs/leader.yaml
 ```
 
 The submit script detects `summary.family == "baseline"` and marks the run as
-`tier=baseline`. Baseline points are reference context for the tracker. The
-nanopath leaderboard still promotes trained `configs/leader.yaml` descendants
-through maintainer validation.
+`tier=baseline`. Labless currently tracks GenBio-PathFM plus DINOv2 giant,
+small, and random-init references; other nanopath baselines can stay in the
+repo README without becoming Labless reference rows. The nanopath leaderboard
+still promotes trained `configs/leader.yaml` descendants through maintainer
+validation.
 
 ## Useful options
 

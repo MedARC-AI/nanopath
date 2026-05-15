@@ -72,11 +72,9 @@ def main() -> int:
         "dinov2-vitg14-reg-no-continued-pretraining": "python baselines/dinov2_giant_baseline.py configs/leader.yaml",
         "dinov2-vits14-reg-random-init-seed0": "python baselines/dinov2_random_baseline.py configs/leader.yaml",
         "genbio-pathfm-vitg16-rope-untouched": "python baselines/genbio_pathfm_baseline.py configs/leader.yaml",
-        "hoptimus0-vitg14-reg-untouched": "python baselines/hoptimus0_baseline.py configs/leader.yaml",
-        "midnight-12k-vitg14-untouched": "python baselines/midnight12k_baseline.py configs/leader.yaml",
-        "openmidnight-vitg14-reg-untouched": "python baselines/openmidnight_baseline.py configs/leader.yaml",
-        "uni2-h-vith14-untouched": "python baselines/uni2h_baseline.py configs/leader.yaml",
     }
+    if run_tier == "baseline" and recipe_id not in baseline_commands:
+        raise ValueError("baseline is not tracked by labless")
     run_command = opts.get("command") or baseline_commands.get(recipe_id) or f"python train.py {config_path}"
     if not opts.get("command") and "output_dir=" not in run_command:
         run_command = f"{run_command} output_dir={output_dir}"
