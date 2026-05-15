@@ -12,10 +12,8 @@
 # lightweight DINO/iBOT/KDE validation pass), so the held-out patient slice
 # stays cleanly out-of-distribution from optimization.
 #
-# Augmentation per tile: optional HEDJitter (stain-space color perturbation),
-# then train.global_views global crops + train.local_views local crops, each
-# chained as RandomResizedCrop -> horizontal flip -> vertical flip ->
-# ColorJitter -> Normalize.
+# Augmentation per view: RandomResizedCrop -> optional HEDJitter -> horizontal/
+# vertical flips -> ColorJitter -> occasional grayscale/blur -> Normalize.
 #
 # This file is the *pretraining* input pipeline only. The downstream probes
 # (probe.py) do not import anything from here.
@@ -74,7 +72,7 @@ class HEDJitter(nn.Module):
         self.register_buffer("hed_from_rgb", HED_FROM_RGB)
         self.register_buffer("rgb_from_hed", RGB_FROM_HED)
 
-    # Perturb HED channels, then convert back to RGB before the crop/flip/color pipeline.
+    # Perturb HED channels, then convert back to RGB while the crop is still in [0, 1].
     def forward(self, x):
         rgb = x.permute(1, 2, 0).clamp_min(1e-6)
         hed = (torch.log(rgb) / LOG_1E6) @ self.hed_from_rgb.to(dtype=x.dtype)
@@ -128,14 +126,16 @@ class TCGATileDataset(Dataset):
         self.global_views = int(train["global_views"])
         self.local_views = int(train["local_views"])
         self.to_tensor = v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])
-        self.hed_jitter = HEDJitter(data["hed_jitter"]) if data["hed_jitter"] > 0 else None
         # Global crops carry the high-context view used by the DINO/iBOT objectives.
         self.global_aug = v2.Compose(
             [
                 v2.RandomResizedCrop(train["global_size"], scale=tuple(data["global_crop_scale"]), antialias=True),
+                *([HEDJitter(data["hed_jitter"])] if data["hed_jitter"] > 0 else []),
                 v2.RandomHorizontalFlip(),
                 v2.RandomVerticalFlip(),
                 v2.ColorJitter(data["color_jitter"], data["color_jitter"], data["color_jitter_saturation"], 0.0),
+                v2.RandomGrayscale(p=0.1),
+                v2.RandomApply([v2.GaussianBlur(9, sigma=(0.1, 1.8))], p=0.35),
                 v2.Normalize(mean=mean, std=std),
             ]
         )
@@ -143,9 +143,12 @@ class TCGATileDataset(Dataset):
         self.local_aug = v2.Compose(
             [
                 v2.RandomResizedCrop(train["local_size"], scale=tuple(data["local_crop_scale"]), antialias=True),
+                *([HEDJitter(data["hed_jitter"])] if data["hed_jitter"] > 0 else []),
                 v2.RandomHorizontalFlip(),
                 v2.RandomVerticalFlip(),
                 v2.ColorJitter(data["color_jitter"], data["color_jitter"], data["color_jitter_saturation"], 0.0),
+                v2.RandomGrayscale(p=0.1),
+                v2.RandomApply([v2.GaussianBlur(9, sigma=(0.1, 1.8))], p=0.35),
                 v2.Normalize(mean=mean, std=std),
             ]
         )
@@ -176,10 +179,9 @@ class TCGATileDataset(Dataset):
         patient_id = "-".join(slide_stem.split("-")[:3])
         slide_key = int.from_bytes(hashlib.blake2b(slide_stem.encode(), digest_size=8).digest(), "big") & 0x7FFFFFFFFFFFFFFF
         patient_key = int.from_bytes(hashlib.blake2b(patient_id.encode(), digest_size=8).digest(), "big") & 0x7FFFFFFFFFFFFFFF
-        # Augmentations are stochastic; reproducibility comes from worker seeds.
-        context_tile = self.hed_jitter(tile) if self.hed_jitter is not None else tile
-        global_views = torch.stack([self.global_aug(context_tile) for _ in range(self.global_views)])
-        local_views = torch.stack([self.local_aug(context_tile) for _ in range(self.local_views)])
+        # Augmentations are stochastic per view; reproducibility comes from worker seeds.
+        global_views = torch.stack([self.global_aug(tile) for _ in range(self.global_views)])
+        local_views = torch.stack([self.local_aug(tile) for _ in range(self.local_views)])
         return {
             "global_views": global_views,
             "local_views": local_views,
