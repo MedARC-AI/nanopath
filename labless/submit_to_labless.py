@@ -92,7 +92,7 @@ def main() -> int:
     run_label = opts.get("run_name") or opts.get("label") or opts.get("title") or run_name
     if run_tier == "full" and len(run_label) > 20:
         raise ValueError("run_name must be 20 characters or fewer")
-    repo = collect_wandb_source(resolve_leader(opts), summary, opts) if run_tier == "full" and not validation_errors else {"locked_path_changes": []}
+    repo = collect_wandb_source(resolve_main(opts), summary, opts) if run_tier == "full" and not validation_errors else {"locked_path_changes": []}
     validation_errors.extend(f"locked path changed: {p}" for p in repo.pop("locked_path_changes"))
     env = collect_environment(opts)
     artifacts = collect_artifacts(output_dir, summary_path, metrics_path, opts)
@@ -186,23 +186,23 @@ def required(opts: dict[str, str], key: str) -> str:
     return opts[key]
 
 
-def resolve_leader(opts: dict[str, str]) -> dict[str, str]:
-    if opts.get("leader_commit") or opts.get("leader_run_id"):
-        leader = {"run_id": required(opts, "leader_run_id"), "commit": required(opts, "leader_commit")}
+def resolve_main(opts: dict[str, str]) -> dict[str, str]:
+    if opts.get("main_commit") or opts.get("main_run_id"):
+        main_ref = {"run_id": required(opts, "main_run_id"), "commit": required(opts, "main_commit")}
     else:
         api_url = (opts.get("api_url") or API_URL).rstrip("/")
         project = opts.get("project", PROJECT_SLUG)
         req = urllib.request.Request(
-            f"{api_url}/api/nano-projects/{project}/leader",
+            f"{api_url}/api/nano-projects/{project}/main",
             headers={"Accept": "application/json", "User-Agent": "labless-submit/0.1"},
         )
         with urllib.request.urlopen(req, timeout=30) as response:
-            leader = json.loads(response.read().decode())
-    if not leader.get("run_id"):
-        raise ValueError("current leader response is missing run_id")
-    if not isinstance(leader.get("commit"), str) or not GIT_SHA_RE.match(leader["commit"]):
-        raise ValueError("current leader response is missing a full 40-character git commit")
-    return {"run_id": str(leader["run_id"]), "commit": leader["commit"]}
+            main_ref = json.loads(response.read().decode())
+    if not main_ref.get("run_id"):
+        raise ValueError("current main response is missing run_id")
+    if not isinstance(main_ref.get("commit"), str) or not GIT_SHA_RE.match(main_ref["commit"]):
+        raise ValueError("current main response is missing a full 40-character git commit")
+    return {"run_id": str(main_ref["run_id"]), "commit": main_ref["commit"]}
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -283,7 +283,7 @@ def final_metrics(summary: dict[str, Any], rows: list[dict[str, Any]]) -> dict[s
     return metrics
 
 
-def collect_wandb_source(leader: dict[str, str], summary: dict[str, Any], opts: dict[str, str]) -> dict[str, Any]:
+def collect_wandb_source(main_ref: dict[str, str], summary: dict[str, Any], opts: dict[str, str]) -> dict[str, Any]:
     import wandb
     run_path = wandb_run_path(summary, opts)
     api = wandb.Api()
@@ -293,11 +293,11 @@ def collect_wandb_source(leader: dict[str, str], summary: dict[str, Any], opts: 
     root = Path(run.metadata["root"])
     config_path = Path(run.config["config_path"])
     config_rel = str(config_path.relative_to(root)) if config_path.is_absolute() else str(config_path)
-    subprocess.run(["git", "cat-file", "-e", f"{leader['commit']}^{{commit}}"], check=True)
+    subprocess.run(["git", "cat-file", "-e", f"{main_ref['commit']}^{{commit}}"], check=True)
     with tempfile.TemporaryDirectory() as tmp:
         source_dir = Path(artifact.download(root=tmp))
         review_paths = [*REVIEW_DIFF_PATHS, *([] if config_rel in REVIEW_DIFF_PATHS else [config_rel])]
-        leader_diff = collect_leader_diff(leader, git_meta["commit"], source_dir, review_paths)
+        main_diff = collect_main_diff(main_ref, git_meta["commit"], source_dir, review_paths)
         review_files = collect_review_files(artifact.qualified_name, source_dir, review_paths)
         repo = {
             "root": str(root),
@@ -306,14 +306,14 @@ def collect_wandb_source(leader: dict[str, str], summary: dict[str, Any], opts: 
             "remote": git_meta["remote"],
             "branch": "",
             "commit": git_meta["commit"],
-            "leader_context": leader,
-            "dirty": bool(leader_diff),
-            "changed_files": leader_diff["files"] if leader_diff else [],
-            "diff_summary": leader_diff["summary"] if leader_diff else {"files": 0, "added": 0, "removed": 0},
-            "locked_path_changes": locked_path_changes(leader["commit"], source_dir),
+            "main_context": main_ref,
+            "dirty": bool(main_diff),
+            "changed_files": main_diff["files"] if main_diff else [],
+            "diff_summary": main_diff["summary"] if main_diff else {"files": 0, "added": 0, "removed": 0},
+            "locked_path_changes": locked_path_changes(main_ref["commit"], source_dir),
         }
-        if leader_diff:
-            repo["leader_diff"] = leader_diff
+        if main_diff:
+            repo["main_diff"] = main_diff
         return repo
 
 
@@ -335,16 +335,16 @@ def wandb_run_path(summary: dict[str, Any], opts: dict[str, str]) -> str:
     return f"{meta['entity']}/{meta['project']}/{meta['id']}"
 
 
-def collect_leader_diff(leader: dict[str, str], commit: str, source_dir: Path, review_paths: list[str]) -> dict[str, Any] | None:
+def collect_main_diff(main_ref: dict[str, str], commit: str, source_dir: Path, review_paths: list[str]) -> dict[str, Any] | None:
     changed_files, omitted, chunks, used, truncated = [], [], [], 0, False
     summary = {"files": 0, "added": 0, "removed": 0}
     for path in review_paths:
-        leader_data, source_data = leader_file(leader["commit"], path), snapshot_file(source_dir, path)
-        if leader_data == source_data:
+        main_data, source_data = main_file(main_ref["commit"], path), snapshot_file(source_dir, path)
+        if main_data == source_data:
             continue
         changed_files.append(path)
         summary["files"] += 1
-        patch, file_summary, reason = file_diff(path, leader_data, source_data)
+        patch, file_summary, reason = file_diff(path, main_data, source_data)
         summary["added"] += file_summary["added"]
         summary["removed"] += file_summary["removed"]
         if reason:
@@ -362,8 +362,8 @@ def collect_leader_diff(leader: dict[str, str], commit: str, source_dir: Path, r
         return None
     patch_bytes = b"".join(chunks)
     return {
-        "base_run_id": leader["run_id"],
-        "base_commit": leader["commit"],
+        "base_run_id": main_ref["run_id"],
+        "base_commit": main_ref["commit"],
         "head_commit": commit,
         "files": changed_files,
         "summary": summary,
@@ -375,7 +375,7 @@ def collect_leader_diff(leader: dict[str, str], commit: str, source_dir: Path, r
     }
 
 
-def leader_file(commit: str, path: str) -> bytes | None:
+def main_file(commit: str, path: str) -> bytes | None:
     exists = subprocess.run(["git", "cat-file", "-e", f"{commit}:{path}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return subprocess.check_output(["git", "show", f"{commit}:{path}"]) if exists.returncode == 0 else None
 
@@ -394,13 +394,13 @@ def snapshot_text(source_dir: Path, path: str) -> str | None:
     return data.decode("utf-8")
 
 
-def file_diff(path: str, leader_data: bytes | None, source_data: bytes | None) -> tuple[str, dict[str, int], str]:
-    if path_suffix_is_large(path) or (leader_data and b"\0" in leader_data) or (source_data and b"\0" in source_data):
+def file_diff(path: str, main_data: bytes | None, source_data: bytes | None) -> tuple[str, dict[str, int], str]:
+    if path_suffix_is_large(path) or (main_data and b"\0" in main_data) or (source_data and b"\0" in source_data):
         return "", {"added": 0, "removed": 0}, f"{path}: skipped binary or large-file patch"
-    old_lines = [] if leader_data is None else leader_data.decode("utf-8", "replace").splitlines(True)
+    old_lines = [] if main_data is None else main_data.decode("utf-8", "replace").splitlines(True)
     new_lines = [] if source_data is None else source_data.decode("utf-8", "replace").splitlines(True)
     header = f"diff --git a/{path} b/{path}\n"
-    if leader_data is None:
+    if main_data is None:
         header += f"new file mode 100644\n--- /dev/null\n+++ b/{path}\n"
     elif source_data is None:
         header += f"deleted file mode 100644\n--- a/{path}\n+++ /dev/null\n"
@@ -416,9 +416,9 @@ def file_diff(path: str, leader_data: bytes | None, source_data: bytes | None) -
 
 def locked_path_changes(commit: str, source_dir: Path) -> list[str]:
     source_files = [p.relative_to(source_dir).as_posix() for p in source_dir.rglob("*") if p.is_file() and p.name != "manifest.json"]
-    leader_files = subprocess.check_output(["git", "ls-tree", "-r", "--name-only", commit, "--", *LOCKED_PATHS], text=True).splitlines()
-    locked_files = sorted(path for path in set(source_files + leader_files) if any(path == lock.rstrip("/") or path.startswith(lock) for lock in LOCKED_PATHS))
-    return [path for path in locked_files if leader_file(commit, path) != snapshot_file(source_dir, path)]
+    main_files = subprocess.check_output(["git", "ls-tree", "-r", "--name-only", commit, "--", *LOCKED_PATHS], text=True).splitlines()
+    locked_files = sorted(path for path in set(source_files + main_files) if any(path == lock.rstrip("/") or path.startswith(lock) for lock in LOCKED_PATHS))
+    return [path for path in locked_files if main_file(commit, path) != snapshot_file(source_dir, path)]
 
 
 def path_suffix_is_large(path: str) -> bool:

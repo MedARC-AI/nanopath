@@ -24,7 +24,7 @@ python prepare.py configs/smoke.yaml download=True
 sbatch submit/train_1gpu.sbatch configs/smoke.yaml
 # or directly on a GPU machine: python train.py configs/smoke.yaml
 
-# train and evaluate the current leader nanopath recipe
+# train and evaluate the current main nanopath recipe
 RUN_DIR=/data/$USER/nanopath/leader/my-run
 sbatch submit/train_1gpu.sbatch configs/leader.yaml output_dir=$RUN_DIR
 # or directly on a GPU machine: python train.py configs/leader.yaml output_dir=$RUN_DIR
@@ -68,7 +68,7 @@ Baseline rows are frozen reference checkpoints evaluated with the same probe sui
 
 ### How to submit to the leaderboard
 
-`configs/leader.yaml` is the currently winning `nanopath` training recipe. Submit completed full runs to labless:
+`configs/leader.yaml` is the current `nanopath` main-branch training recipe. Submit completed full runs to labless:
 
 ```bash
 RUN_DIR=/data/$USER/nanopath/leader/my-run
@@ -77,9 +77,9 @@ RUN_DIR=/data/$USER/nanopath/leader/my-run
 
 The `run_name` is the short label shown next to your dot on the Labless plot; keep it under 20 characters and make it describe what changed. A copied config such as `configs/new_config.yaml` is fine if the completed `summary.json` still reports the full `max_train_flops: 1e18` budget. Short smoke-sized runs and failed runs are not public Labless submissions.
 
-To top the leaderboard you must outperform this recipe on `mean_probe_score` by at least 0.01. Submit the run to labless; that public submission is the leaderboard claim, with the W&B source artifact, changed files, notes, metrics, hardware, and optional W&B attached. [@PaulScotti](https://github.com/PaulScotti) will inspect promising submissions, rerun the candidate on his 1 80GB H100 with a different rng seed, and update the README, `configs/leader.yaml`, and labless leader state if it still improves by at least 0.01. **You don't need an H100 or a PR to submit**—train on whatever hardware you have access to, and labless handles the public record and maintainer validation.
+To top the leaderboard you must beat the highest validated Labless run on `mean_probe_score` by at least 0.01. Submit the run to labless; that public submission is the leaderboard claim, with the W&B source artifact, changed files, notes, metrics, hardware, and optional W&B attached. [@PaulScotti](https://github.com/PaulScotti) will inspect promising submissions, rerun the candidate on his 1 80GB H100 with a different rng seed, and validate it on Labless if it still improves by at least 0.01. If its code is pushed to nanopath `main`, Labless marks that run separately as `main`. **You don't need an H100 or a PR to submit**—train on whatever hardware you have access to, and labless handles the public record and maintainer validation.
 
-Code-cleanup PRs are still welcome when they simplify the codebase without changing benchmark peformance on the leader recipe. Leaderboard claims should go through labless instead of a pull request.
+Code-cleanup PRs are still welcome when they simplify the codebase without changing benchmark peformance on the main recipe. Leaderboard claims should go through labless instead of a pull request.
 
 ### What you must NOT change for a leaderboard submission
 

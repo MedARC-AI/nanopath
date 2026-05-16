@@ -16,7 +16,7 @@ RUN_DIR=/data/$USER/nanopath/leader/my-run
 1. Reads `summary.json` and `metrics.jsonl` from `output_dir`.
 2. Extracts the final `mean_probe_score` and probe submetrics.
 3. Downloads the existing `nanopath-source-<wandb_run_id>` W&B code artifact
-   and diffs that source against the current leader commit for `train.py`,
+   and diffs that source against the current main commit for `train.py`,
    `model.py`, `dataloader.py`, `prepare.py`, and the config YAML used by the
    run.
 4. Records hardware, Python version, optional W&B URL, and artifact paths.
@@ -74,8 +74,8 @@ python baselines/dinov2_small_baseline.py configs/leader.yaml
 The submit script detects `summary.family == "baseline"` and marks the run as
 `tier=baseline`. Labless currently tracks GenBio-PathFM plus DINOv2 giant and
 small references; other nanopath baselines can stay in the repo README without
-becoming Labless reference rows. The nanopath leaderboard still promotes
-trained `configs/leader.yaml` descendants through maintainer validation.
+becoming Labless reference rows. The nanopath leaderboard still ranks validated
+trained `configs/leader.yaml` descendants by score.
 
 ## Useful options
 
@@ -92,7 +92,7 @@ Arguments are `key=value`; there is no `argparse`.
 | `hardware` | Override detected hardware string. |
 | `dry_run=true` | Write `labless_submission.json` without posting. |
 | `api_url` | Use a local labless backend for testing. |
-| `leader_run_id` / `leader_commit` | Local testing override for the live leader lookup; both are required when either is set. |
+| `main_run_id` / `main_commit` | Local testing override for the live main lookup; both are required when either is set. |
 
 If labless later enables a private submission token, set
 `LABLESS_SUBMIT_TOKEN` in the environment before running the script.
@@ -124,7 +124,7 @@ The payload intentionally makes the run inspectable. It includes:
 
 The patch is only collected for `train.py`, `model.py`, `dataloader.py`,
 `prepare.py`, and the config YAML used by the run. If none of those files differ
-from the leader, no leader patch is sent. The capped review-file snapshot lets
+from main, no main patch is sent. The capped review-file snapshot lets
 labless diff a run against other logged non-baseline runs. Binary or
 large-file suffixes are omitted from patches and listed in the payload. Local
 artifact paths are provenance pointers; the script does not upload model
@@ -133,8 +133,8 @@ weights or raw data.
 ## Maintainer validation
 
 New completed full runs appear on the plot as `pending`. A maintainer can
-replicate a promising run, then mark it `validated` or `leader` in labless.
-Leader promotion stores the full git commit that was pushed to the project
-repo, so the submit script can diff the saved W&B source artifact directly
-against the current leader.
+replicate a promising run, then mark it `validated` in labless. The public
+leader label is the highest scoring validated run. Maintainers mark a separate
+`main` state with the full git commit pushed to the project repo, so the submit
+script can diff the saved W&B source artifact directly against current main.
 Failed runs are not accepted as public submissions.
