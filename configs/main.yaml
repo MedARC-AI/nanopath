@@ -1,8 +1,8 @@
 project:
-  name: leader-dinov2
-  family: leader
+  name: main-dinov2
+  family: nanopath
   recipe_id: dinov2-vits14-reg-kde
-  output_dir: /data/$USER/nanopath/leader/default
+  output_dir: /data/$USER/nanopath/main/default
   wandb_dir: /data/$USER/nanopath/wandb
 
 data:

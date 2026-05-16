@@ -13,12 +13,12 @@
 set -euo pipefail
 
 # CPU-node launcher for prepare.py. First arg is the YAML config (defaults to
-# configs/leader.yaml); any further args are passed through to prepare.py, e.g.
-#   sbatch submit/prepare.sbatch configs/leader.yaml download=True
+# configs/main.yaml); any further args are passed through to prepare.py, e.g.
+#   sbatch submit/prepare.sbatch configs/main.yaml download=True
 # Reruns are resumable: HF caches the parquet shards by content hash and
 # already-populated probe roots are left alone.
 REPO_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-CONFIG_FILE="${1:-${REPO_DIR}/configs/leader.yaml}"
+CONFIG_FILE="${1:-${REPO_DIR}/configs/main.yaml}"
 shift || true  # drop the consumed config arg; remaining "$@" forward to prepare.py
 
 cd "${REPO_DIR}"

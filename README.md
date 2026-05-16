@@ -25,9 +25,9 @@ sbatch submit/train_1gpu.sbatch configs/smoke.yaml
 # or directly on a GPU machine: python train.py configs/smoke.yaml
 
 # train and evaluate the current main nanopath recipe
-RUN_DIR=/data/$USER/nanopath/leader/my-run
-sbatch submit/train_1gpu.sbatch configs/leader.yaml output_dir=$RUN_DIR
-# or directly on a GPU machine: python train.py configs/leader.yaml output_dir=$RUN_DIR
+RUN_DIR=/data/$USER/nanopath/main/my-run
+sbatch submit/train_1gpu.sbatch configs/main.yaml output_dir=$RUN_DIR
+# or directly on a GPU machine: python train.py configs/main.yaml output_dir=$RUN_DIR
 
 # publish a completed full run to the live labless plot
 ./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub run_name=kde-crops notes="what changed"
@@ -68,10 +68,10 @@ Baseline rows are frozen reference checkpoints evaluated with the same probe sui
 
 ### How to submit to the leaderboard
 
-`configs/leader.yaml` is the current `nanopath` main-branch training recipe. Submit completed full runs to labless:
+`configs/main.yaml` is the current `nanopath` main-branch training recipe. Submit completed full runs to labless:
 
 ```bash
-RUN_DIR=/data/$USER/nanopath/leader/my-run
+RUN_DIR=/data/$USER/nanopath/main/my-run
 ./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub run_name=kde-crops wandb_url=https://wandb.ai/... notes="what changed and why"
 ```
 
@@ -100,7 +100,7 @@ The above limits force submissions to be **simultaneously compute efficient and 
 
 **Probe evaluation must be untouched**
 - All of `probe.py` and `benchmarking/`
-- All probe config variables in `configs/leader.yaml`.
+- All probe config variables in `configs/main.yaml`.
 
 **Initializing model from a pretrained ckpt is OK only if not pathology-specific**
 You can initialize the model using DINOv2 checkpoint (trained on natural images) but you can't initialize from, say, H-optimus-0 or OpenMidnight checkpoints. We want to train our own pathology foundation model, not offload most of the task to someone else's pathology-specific model.
@@ -110,7 +110,7 @@ You can initialize the model using DINOv2 checkpoint (trained on natural images)
 Submit completed full runs to the live tracker:
 
 ```bash
-RUN_DIR=/data/$USER/nanopath/leader/my-run
+RUN_DIR=/data/$USER/nanopath/main/my-run
 ./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub run_name=kde-crops notes="what changed and why"
 ```
 
@@ -122,7 +122,7 @@ The script reads `summary.json` and `metrics.jsonl`, downloads the run's W&B sou
 - `train.py` — main pretraining loop
 - `model.py` — model architecture and training objectives
 - `dataloader.py` — TCGA tile loader and data augmentations
-- `configs/{smoke,leader}.yaml` — training recipes (e.g., hyperparameters)
+- `configs/{smoke,main}.yaml` — training recipes (e.g., hyperparameters)
 
 ### Helper files
 - `AGENTS.md` — guidelines for design philosophy, coding rules, experiment discipline, cluster conventions, etc. Note this is Paul's personal `AGENTS.md` file and has instructions specific to our MedARC cluster—you should modify this file to suit your own setup!
@@ -184,18 +184,18 @@ sbatch submit/train_1gpu.sbatch configs/smoke.yaml
 # or directly on a GPU machine: `python train.py configs/smoke.yaml`
 ```
 
-Full leading `nanopath` recipe (~1 hour):
+Full main `nanopath` recipe (~1 hour):
 
 ```bash
-sbatch submit/train_1gpu.sbatch configs/leader.yaml
-# or directly on a GPU machine: `python train.py configs/leader.yaml`
+sbatch submit/train_1gpu.sbatch configs/main.yaml
+# or directly on a GPU machine: `python train.py configs/main.yaml`
 ```
 
-`configs/leader.yaml` is sized for an 80 GB H100 at `train.batch_size: 128`. On smaller cards you can set `train.activation_checkpointing: true` if you OOM. Smoke fits comfortably on any 24 GB+ GPU.
+`configs/main.yaml` is sized for an 80 GB H100 at `train.batch_size: 128`. On smaller cards you can set `train.activation_checkpointing: true` if you OOM. Smoke fits comfortably on any 24 GB+ GPU.
 
 ## Outputs
 
-- run outputs: `project.output_dir` (default is `/data/$USER/nanopath/leader/...`). Final probe results log to `metrics.jsonl`.
+- run outputs: `project.output_dir` (default is `/data/$USER/nanopath/main/...`). Final probe results log to `metrics.jsonl`.
 - wandb: `/data/$USER/nanopath/wandb`.
 - parquet tile shards: `data.dataset_dir` (defaults to `/data/nanopath_parquet`).
 - probe datasets: `probe.dataset_roots` (defaults to shared `/block/...` and `/data/...` paths on the MedARC cluster).

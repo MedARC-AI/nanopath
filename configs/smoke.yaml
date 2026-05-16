@@ -1,8 +1,8 @@
 project:
   name: smoke-dinov2
-  family: leader
+  family: nanopath
   recipe_id: dinov2-vits14-reg-kde
-  output_dir: /data/$USER/nanopath/leader/smoke
+  output_dir: /data/$USER/nanopath/main/smoke
   wandb_dir: /data/$USER/nanopath/wandb
 
 data:

@@ -74,7 +74,7 @@ def main() -> int:
     metric_rows = read_jsonl(metrics_path) if metrics_path.exists() else []
     metric_value = primary_metric(summary, metric_rows)
     validation_errors = validate_output(output_dir, summary_path, metrics_path, metric_value)
-    config_path = str(summary.get("config_path") or "configs/leader.yaml")
+    config_path = str(summary.get("config_path") or "configs/main.yaml")
     run_name = str(summary.get("project") or output_dir.name)
     recipe_id = str(summary.get("recipe_id") or "")
     run_tier = opts.get("tier")
@@ -97,9 +97,9 @@ def main() -> int:
     env = collect_environment(opts)
     artifacts = collect_artifacts(output_dir, summary_path, metrics_path, opts)
     baseline_commands = {
-        "dinov2-vits14-reg-no-continued-pretraining": "python baselines/dinov2_small_baseline.py configs/leader.yaml",
-        "dinov2-vitg14-reg-no-continued-pretraining": "python baselines/dinov2_giant_baseline.py configs/leader.yaml",
-        "genbio-pathfm-vitg16-rope-untouched": "python baselines/genbio_pathfm_baseline.py configs/leader.yaml",
+        "dinov2-vits14-reg-no-continued-pretraining": "python baselines/dinov2_small_baseline.py configs/main.yaml",
+        "dinov2-vitg14-reg-no-continued-pretraining": "python baselines/dinov2_giant_baseline.py configs/main.yaml",
+        "genbio-pathfm-vitg16-rope-untouched": "python baselines/genbio_pathfm_baseline.py configs/main.yaml",
     }
     if run_tier == "baseline" and recipe_id not in baseline_commands:
         raise ValueError("baseline is not tracked by labless")

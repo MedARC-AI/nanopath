@@ -4,7 +4,7 @@ This folder contains the nanopath-to-labless bridge. The goal is simple: after
 you train a model, one command publishes the run to the public nanopath tracker.
 
 ```bash
-RUN_DIR=/data/$USER/nanopath/leader/my-run
+RUN_DIR=/data/$USER/nanopath/main/my-run
 ./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub run_name=kde-crops notes="what changed and why"
 ```
 
@@ -32,10 +32,10 @@ appears in the project log, run table, and plot without opening a pull request.
 Run training first:
 
 ```bash
-RUN_DIR=/data/$USER/nanopath/leader/my-run
-sbatch submit/train_1gpu.sbatch configs/leader.yaml output_dir=$RUN_DIR
+RUN_DIR=/data/$USER/nanopath/main/my-run
+sbatch submit/train_1gpu.sbatch configs/main.yaml output_dir=$RUN_DIR
 # or directly on a GPU machine:
-python train.py configs/leader.yaml output_dir=$RUN_DIR
+python train.py configs/main.yaml output_dir=$RUN_DIR
 ```
 
 Then point the submit script at the same run directory:
@@ -64,7 +64,7 @@ Tracked reference baseline scripts write the same `summary.json` and
 `metrics.jsonl` files as `train.py`, so they can be submitted the same way:
 
 ```bash
-python baselines/dinov2_small_baseline.py configs/leader.yaml
+python baselines/dinov2_small_baseline.py configs/main.yaml
 ./labless/submit_to_labless.py \
   output_dir=/data/$USER/nanopath/baselines/dinov2-small \
   contributor=@yourgithub \
@@ -74,8 +74,8 @@ python baselines/dinov2_small_baseline.py configs/leader.yaml
 The submit script detects `summary.family == "baseline"` and marks the run as
 `tier=baseline`. Labless currently tracks GenBio-PathFM plus DINOv2 giant and
 small references; other nanopath baselines can stay in the repo README without
-becoming Labless reference rows. The nanopath leaderboard still ranks validated
-trained `configs/leader.yaml` descendants by score.
+ becoming Labless reference rows. The nanopath leaderboard still ranks validated
+completed full runs by score.
 
 ## Useful options
 
