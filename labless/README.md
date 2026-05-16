@@ -10,14 +10,15 @@ RUN_DIR=/data/$USER/nanopath/leader/my-run
 
 ## What the submit script does
 
-`submit_to_labless.py` is dependency-free and should be run from the nanopath
-repo root after `train.py` finishes. It:
+`submit_to_labless.py` should be run from the nanopath repo root after
+`train.py` finishes. It:
 
 1. Reads `summary.json` and `metrics.jsonl` from `output_dir`.
 2. Extracts the final `mean_probe_score` and probe submetrics.
-3. Records git branch, commit, dirty state, and a code diff against the current
-   leader run for `train.py`, `model.py`, `dataloader.py`, `prepare.py`, and
-   the config YAML used by the run.
+3. Downloads the existing `nanopath-source-<wandb_run_id>` W&B code artifact
+   and diffs that source against the current leader commit for `train.py`,
+   `model.py`, `dataloader.py`, `prepare.py`, and the config YAML used by the
+   run.
 4. Records hardware, Python version, optional W&B URL, and artifact paths.
 5. Writes the exact public payload to `output_dir/labless_submission.json`.
 6. Posts it to `https://api.labless.dev/api/nano-projects/nanopath/submissions`.
@@ -86,11 +87,12 @@ Arguments are `key=value`; there is no `argparse`.
 | `contributor` | GitHub/Discord handle shown on labless. |
 | `run_name` | Short plot label, 20 characters or fewer. |
 | `notes` | Short explanation of what changed and why. |
-| `wandb_url` | Optional public W&B run URL. |
+| `wandb_url` | W&B run URL; optional for new runs whose `summary.json` already records `wandb.url`. |
 | `tier` | `full` or `baseline`; inferred when omitted. |
 | `hardware` | Override detected hardware string. |
 | `dry_run=true` | Write `labless_submission.json` without posting. |
 | `api_url` | Use a local labless backend for testing. |
+| `leader_run_id` / `leader_commit` | Local testing override for the live leader lookup; both are required when either is set. |
 
 If labless later enables a private submission token, set
 `LABLESS_SUBMIT_TOKEN` in the environment before running the script.
@@ -98,13 +100,14 @@ If labless later enables a private submission token, set
 ## Validation rules
 
 The benchmark score is only meaningful when evaluation stays fixed. The script
-records dirty git state and marks submissions invalid if changed files include:
+marks submissions invalid if the saved W&B source artifact changed:
 
 - `probe.py`
 - anything under `benchmarking/`
 
-Commit or stash unrelated work before submitting. Dirty training-code changes
-are allowed and recorded so maintainers can inspect what produced the point.
+The current checkout can change after training; labless uses the W&B source
+artifact from the run, not the present working tree, when building the review
+diff.
 
 ## What becomes public
 
@@ -113,21 +116,25 @@ The payload intentionally makes the run inspectable. It includes:
 - contributor handle and notes
 - final metric and probe submetrics
 - run family, recipe id, and tier (`baseline` for frozen reference scripts)
-- git remote, branch, commit, dirty flag, changed review files, and a
-  leader-relative patch capped at 120 KB
+- W&B source artifact, git remote, commit, changed review files, and a capped
+  review-file snapshot for selectable diffs
 - hardware, hostname, Python version, and optional GPU summary
 - artifact paths or URLs for `summary.json`, `metrics.jsonl`, W&B, SLURM logs,
   and `labless_submission.json`
 
 The patch is only collected for `train.py`, `model.py`, `dataloader.py`,
 `prepare.py`, and the config YAML used by the run. If none of those files differ
-from the leader, no patch is sent. Untracked review files over 24 KB or with
-binary suffixes are omitted from the patch and listed in the payload. Local
-artifact paths are provenance pointers; the script does not upload model weights
-or raw data.
+from the leader, no leader patch is sent. The capped review-file snapshot lets
+labless diff a run against other logged non-baseline runs. Binary or
+large-file suffixes are omitted from patches and listed in the payload. Local
+artifact paths are provenance pointers; the script does not upload model
+weights or raw data.
 
 ## Maintainer validation
 
 New completed full runs appear on the plot as `pending`. A maintainer can
 replicate a promising run, then mark it `validated` or `leader` in labless.
+Leader promotion stores the full git commit that was pushed to the project
+repo, so the submit script can diff the saved W&B source artifact directly
+against the current leader.
 Failed runs are not accepted as public submissions.

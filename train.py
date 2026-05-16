@@ -260,7 +260,7 @@ def main():
                 continue
             source_artifact.add_file(str(path), name=str(path.relative_to(repo_dir)))
     wandb_run.log_artifact(source_artifact)
-    wandb_meta = {"project": "nanopath", "id": wandb_run.id, "name": cfg["project"]["name"]}
+    wandb_meta = {"entity": wandb_run.entity, "project": "nanopath", "id": wandb_run.id, "name": cfg["project"]["name"], "url": wandb_run.url}
     train_ds = TCGATileDataset(cfg, is_train=True)
     val_ds = TCGATileDataset(cfg, is_train=False)
     probe_state = prepare_probe_state(cfg, output_dir) if probe_enabled(cfg) else None
@@ -597,6 +597,7 @@ def main():
         "family": cfg["project"]["family"],
         "recipe_id": cfg["project"]["recipe_id"],
         "config_path": cfg["config_path"],
+        "wandb": wandb_meta,
         "slurm_job_id": slurm_job_id,
         "backbone_activated_params": backbone_activated_params,
         "batch_size": batch_size,

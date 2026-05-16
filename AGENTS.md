@@ -28,7 +28,7 @@ Experiment and benchmark discipline:
 - Use wandb for logging, plotting, and utilization monitoring throughout pretraining. Log all metrics needed to validate training behavior (i.e., gradient norm).
 - Aim for >80% GPU utilization during GPU runs; investigate and remedy code when utilization is poor.
 - After any completed full run or frozen baseline evaluation worth sharing, run `./labless/submit_to_labless.py output_dir=... contributor=... run_name=... notes=...`; full submissions require `summary.json`, `metrics.jsonl`, and `summary.max_train_flops == 1e18`. Keep smoke checks and failed runs local.
-- Do not submit dirty changes touching `probe.py` or `benchmarking/`; labless marks locked-path changes invalid.
+- Do not submit runs whose W&B source artifact changes `probe.py` or `benchmarking/`; labless marks locked-path changes invalid.
 
 Cluster and storage:
 - The login node has no GPU access, and has a different /tmp folder than the compute nodes. For full training runs (or anything that would take more than a few minutes) you should submit SLURM jobs to H100 nodes (`n-#`) or CPU nodes (`c-1`). If it's a quick single-GPU assessment you can use `ssh n-#` directly (but only when an idle GPU is available!).

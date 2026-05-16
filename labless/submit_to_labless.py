@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-# Dependency-free nanopath -> labless bridge. Run from the nanopath repo root
-# after train.py finishes; it writes output_dir/labless_submission.json,
-# then posts the same payload to labless.
+# nanopath -> labless bridge. Run from the nanopath repo root after train.py
+# finishes; it writes output_dir/labless_submission.json, then posts the same
+# payload to labless.
 
 from __future__ import annotations
 
 import datetime as dt
+import difflib
 import getpass
 import hashlib
 import json
@@ -16,6 +17,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -26,10 +28,8 @@ PROJECT_SLUG = "nanopath"
 PRIMARY_METRIC = "mean_probe_score"
 LOCKED_PATHS = ("probe.py", "benchmarking/")
 FULL_RUN_MIN_FLOPS = 1_000_000_000_000_000_000
-LEADER_RUN_ID = "run_sub_08b694423e"
-LEADER_COMMIT = "86a6b7a523e455dc5dbf1c8cd95179c3f82017b6"
 MAX_REPO_DIFF_BYTES = 120_000
-MAX_UNTRACKED_DIFF_BYTES = 24_000
+MAX_REVIEW_FILES_BYTES = 120_000
 REVIEW_DIFF_PATHS = ("train.py", "model.py", "dataloader.py", "prepare.py")
 LARGE_DIFF_SUFFIXES = (
     ".bin",
@@ -56,6 +56,7 @@ LARGE_DIFF_SUFFIXES = (
     ".zip",
 )
 NUMBER_RE = re.compile(r"^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
+GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def main() -> int:
@@ -74,11 +75,6 @@ def main() -> int:
     metric_value = primary_metric(summary, metric_rows)
     validation_errors = validate_output(output_dir, summary_path, metrics_path, metric_value)
     config_path = str(summary.get("config_path") or "configs/leader.yaml")
-
-    repo = collect_git(opts.get("leader_commit") or LEADER_COMMIT, output_dir, config_path)
-    validation_errors.extend(f"locked path changed: {p}" for p in repo.pop("locked_path_changes"))
-    env = collect_environment(opts)
-    artifacts = collect_artifacts(output_dir, summary_path, metrics_path, opts)
     run_name = str(summary.get("project") or output_dir.name)
     recipe_id = str(summary.get("recipe_id") or "")
     run_tier = opts.get("tier")
@@ -96,6 +92,10 @@ def main() -> int:
     run_label = opts.get("run_name") or opts.get("label") or opts.get("title") or run_name
     if run_tier == "full" and len(run_label) > 20:
         raise ValueError("run_name must be 20 characters or fewer")
+    repo = collect_wandb_source(resolve_leader(opts), summary, opts) if run_tier == "full" and not validation_errors else {"locked_path_changes": []}
+    validation_errors.extend(f"locked path changed: {p}" for p in repo.pop("locked_path_changes"))
+    env = collect_environment(opts)
+    artifacts = collect_artifacts(output_dir, summary_path, metrics_path, opts)
     baseline_commands = {
         "dinov2-vits14-reg-no-continued-pretraining": "python baselines/dinov2_small_baseline.py configs/leader.yaml",
         "dinov2-vitg14-reg-no-continued-pretraining": "python baselines/dinov2_giant_baseline.py configs/leader.yaml",
@@ -186,6 +186,25 @@ def required(opts: dict[str, str], key: str) -> str:
     return opts[key]
 
 
+def resolve_leader(opts: dict[str, str]) -> dict[str, str]:
+    if opts.get("leader_commit") or opts.get("leader_run_id"):
+        leader = {"run_id": required(opts, "leader_run_id"), "commit": required(opts, "leader_commit")}
+    else:
+        api_url = (opts.get("api_url") or API_URL).rstrip("/")
+        project = opts.get("project", PROJECT_SLUG)
+        req = urllib.request.Request(
+            f"{api_url}/api/nano-projects/{project}/leader",
+            headers={"Accept": "application/json", "User-Agent": "labless-submit/0.1"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as response:
+            leader = json.loads(response.read().decode())
+    if not leader.get("run_id"):
+        raise ValueError("current leader response is missing run_id")
+    if not isinstance(leader.get("commit"), str) or not GIT_SHA_RE.match(leader["commit"]):
+        raise ValueError("current leader response is missing a full 40-character git commit")
+    return {"run_id": str(leader["run_id"]), "commit": leader["commit"]}
+
+
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     with path.open() as handle:
@@ -264,83 +283,91 @@ def final_metrics(summary: dict[str, Any], rows: list[dict[str, Any]]) -> dict[s
     return metrics
 
 
-def collect_git(leader_commit: str, output_dir: Path, config_path: str) -> dict[str, Any]:
-    root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
-    ignored_prefix = str(output_dir.relative_to(root)) if output_dir.is_relative_to(root) else ""
-    review_paths = review_diff_paths(root, config_path)
-    changed = [
-        path for path in subprocess.check_output(["git", "diff", "--name-only", "HEAD"], text=True).splitlines()
-        if not ignored_git_path(path, ignored_prefix)
-    ]
-    staged = [
-        path for path in subprocess.check_output(["git", "diff", "--cached", "--name-only"], text=True).splitlines()
-        if not ignored_git_path(path, ignored_prefix)
-    ]
-    untracked = [
-        line[3:]
-        for line in subprocess.check_output(["git", "status", "--porcelain"], text=True).splitlines()
-        if line.startswith("?? ") and not ignored_git_path(line[3:], ignored_prefix)
-    ]
-    all_changed_files = sorted(set(changed + staged + untracked))
-    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    remote = subprocess.check_output(["git", "config", "--get", "remote.origin.url"], text=True).strip()
-    leader_diff = collect_leader_diff(leader_commit, commit, untracked, review_paths)
-    repo = {
-        "root": str(root),
-        "remote": remote,
-        "branch": subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip(),
-        "commit": commit,
-        "dirty": bool(all_changed_files),
-        "changed_files": leader_diff["files"] if leader_diff else [],
-        "diff_summary": leader_diff["summary"] if leader_diff else {"files": 0, "added": 0, "removed": 0},
-        "locked_path_changes": locked_path_changes(all_changed_files),
-    }
-    if leader_diff:
-        repo["leader_diff"] = leader_diff
-    return repo
+def collect_wandb_source(leader: dict[str, str], summary: dict[str, Any], opts: dict[str, str]) -> dict[str, Any]:
+    import wandb
+    run_path = wandb_run_path(summary, opts)
+    api = wandb.Api()
+    run = api.run(run_path)
+    artifact = api.artifact(f"{run.entity}/{run.project}/nanopath-source-{run.id}:latest", type="code")
+    git_meta = run.metadata["git"]
+    root = Path(run.metadata["root"])
+    config_path = Path(run.config["config_path"])
+    config_rel = str(config_path.relative_to(root)) if config_path.is_absolute() else str(config_path)
+    subprocess.run(["git", "cat-file", "-e", f"{leader['commit']}^{{commit}}"], check=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        source_dir = Path(artifact.download(root=tmp))
+        review_paths = [*REVIEW_DIFF_PATHS, *([] if config_rel in REVIEW_DIFF_PATHS else [config_rel])]
+        leader_diff = collect_leader_diff(leader, git_meta["commit"], source_dir, review_paths)
+        review_files = collect_review_files(artifact.qualified_name, source_dir, review_paths)
+        repo = {
+            "root": str(root),
+            "source_artifact": artifact.qualified_name,
+            "review_files": review_files,
+            "remote": git_meta["remote"],
+            "branch": "",
+            "commit": git_meta["commit"],
+            "leader_context": leader,
+            "dirty": bool(leader_diff),
+            "changed_files": leader_diff["files"] if leader_diff else [],
+            "diff_summary": leader_diff["summary"] if leader_diff else {"files": 0, "added": 0, "removed": 0},
+            "locked_path_changes": locked_path_changes(leader["commit"], source_dir),
+        }
+        if leader_diff:
+            repo["leader_diff"] = leader_diff
+        return repo
 
 
-def review_diff_paths(root: Path, config_path: str) -> list[str]:
-    paths = list(REVIEW_DIFF_PATHS)
-    path = Path(config_path)
-    if path.is_absolute():
-        resolved = path.resolve()
-        config_rel = str(resolved.relative_to(root)) if resolved.is_relative_to(root) else ""
-    else:
-        config_rel = str(path)
-    if config_rel.endswith((".yaml", ".yml")) and config_rel not in paths:
-        paths.append(config_rel)
-    return paths
+def collect_review_files(source: str, source_dir: Path, review_paths: list[str]) -> dict[str, Any]:
+    files = {path: snapshot_text(source_dir, path) for path in review_paths}
+    review_files = {"source": source, "files": files}
+    review_bytes = len(json.dumps(review_files, sort_keys=True).encode())
+    if review_bytes > MAX_REVIEW_FILES_BYTES:
+        raise ValueError(f"review files exceed {MAX_REVIEW_FILES_BYTES} bytes")
+    return review_files
 
 
-def locked_path_changes(all_changed_files: list[str]) -> list[str]:
-    return [path for path in all_changed_files if any(path == lock.rstrip("/") or path.startswith(lock) for lock in LOCKED_PATHS)]
+def wandb_run_path(summary: dict[str, Any], opts: dict[str, str]) -> str:
+    url = opts.get("wandb_url") or (summary.get("wandb") if isinstance(summary.get("wandb"), dict) else {}).get("url")
+    if url:
+        match = re.search(r"wandb\.ai/([^/]+)/([^/]+)/runs/([^/?#]+)", url)
+        return f"{match.group(1)}/{match.group(2)}/{match.group(3)}"
+    meta = summary["wandb"]
+    return f"{meta['entity']}/{meta['project']}/{meta['id']}"
 
 
-def collect_leader_diff(leader_commit: str, commit: str, untracked: list[str], review_paths: list[str]) -> dict[str, Any] | None:
-    leader_files = subprocess.check_output(git_diff_command(leader_commit, review_paths, "--name-only"), text=True).splitlines()
-    review_untracked = [path for path in untracked if path in review_paths]
-    if not leader_files and not review_untracked:
+def collect_leader_diff(leader: dict[str, str], commit: str, source_dir: Path, review_paths: list[str]) -> dict[str, Any] | None:
+    changed_files, omitted, chunks, used, truncated = [], [], [], 0, False
+    summary = {"files": 0, "added": 0, "removed": 0}
+    for path in review_paths:
+        leader_data, source_data = leader_file(leader["commit"], path), snapshot_file(source_dir, path)
+        if leader_data == source_data:
+            continue
+        changed_files.append(path)
+        summary["files"] += 1
+        patch, file_summary, reason = file_diff(path, leader_data, source_data)
+        summary["added"] += file_summary["added"]
+        summary["removed"] += file_summary["removed"]
+        if reason:
+            omitted.append(reason)
+        elif used < MAX_REPO_DIFF_BYTES:
+            encoded = patch.encode()
+            room = MAX_REPO_DIFF_BYTES - used
+            chunks.append(encoded[:room])
+            used += min(len(encoded), room)
+            truncated = truncated or len(encoded) > room
+        else:
+            omitted.append(f"{path}: skipped after reaching the {MAX_REPO_DIFF_BYTES} byte patch cap")
+            truncated = True
+    if not changed_files:
         return None
-    raw_patch, truncated = capped_output(
-        git_diff_command(leader_commit, review_paths),
-        MAX_REPO_DIFF_BYTES,
-    )
-    untracked_patch = b""
-    omitted: list[str] = []
-    if len(raw_patch) < MAX_REPO_DIFF_BYTES:
-        untracked_patch, omitted = collect_untracked_diff(review_untracked, MAX_REPO_DIFF_BYTES - len(raw_patch))
-    elif review_untracked:
-        omitted.extend(f"{path}: skipped because tracked diff reached the {MAX_REPO_DIFF_BYTES} byte cap" for path in review_untracked)
-    patch_bytes = raw_patch + untracked_patch
-    patch = patch_bytes.decode("utf-8", "replace")
+    patch_bytes = b"".join(chunks)
     return {
-        "base_run_id": LEADER_RUN_ID,
-        "base_commit": leader_commit,
+        "base_run_id": leader["run_id"],
+        "base_commit": leader["commit"],
         "head_commit": commit,
-        "files": sorted(set(leader_files + review_untracked)),
-        "summary": shortstat(subprocess.check_output(git_diff_command(leader_commit, review_paths, "--shortstat"), text=True).strip()),
-        "patch": patch,
+        "files": changed_files,
+        "summary": summary,
+        "patch": patch_bytes.decode("utf-8", "replace"),
         "patch_bytes": len(patch_bytes),
         "max_patch_bytes": MAX_REPO_DIFF_BYTES,
         "truncated": truncated or bool(omitted),
@@ -348,75 +375,54 @@ def collect_leader_diff(leader_commit: str, commit: str, untracked: list[str], r
     }
 
 
-def ignored_git_path(path: str, ignored_prefix: str) -> bool:
-    return bool(ignored_prefix) and (path == ignored_prefix or path.startswith(f"{ignored_prefix}/"))
+def leader_file(commit: str, path: str) -> bytes | None:
+    exists = subprocess.run(["git", "cat-file", "-e", f"{commit}:{path}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return subprocess.check_output(["git", "show", f"{commit}:{path}"]) if exists.returncode == 0 else None
 
 
-def git_diff_command(leader_commit: str, paths: list[str], *extra: str) -> list[str]:
-    return ["git", "diff", "--no-ext-diff", "--no-color", "--find-renames", *extra, leader_commit, "--", *paths]
+def snapshot_file(source_dir: Path, path: str) -> bytes | None:
+    source_path = source_dir / path
+    return source_path.read_bytes() if source_path.exists() and source_path.is_file() else None
 
 
-def capped_output(args: list[str], max_bytes: int) -> tuple[bytes, bool]:
-    process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    assert process.stdout is not None
-    assert process.stderr is not None
-    stdout = process.stdout.read(max_bytes + 1)
-    if len(stdout) > max_bytes:
-        process.kill()
-        stderr = process.stderr.read()
-        process.wait()
-        if stderr:
-            raise RuntimeError(stderr.decode().strip())
-        return stdout[:max_bytes], True
-    stderr = process.stderr.read()
-    returncode = process.wait()
-    if returncode != 0:
-        raise RuntimeError(stderr.decode().strip())
-    return stdout, False
+def snapshot_text(source_dir: Path, path: str) -> str | None:
+    data = snapshot_file(source_dir, path)
+    if data is None:
+        return None
+    if b"\0" in data or path_suffix_is_large(path):
+        raise ValueError(f"{path}: review file must be text")
+    return data.decode("utf-8")
 
 
-def collect_untracked_diff(untracked: list[str], byte_budget: int) -> tuple[bytes, list[str]]:
-    chunks: list[bytes] = []
-    omitted: list[str] = []
-    used = 0
-    for path in untracked:
-        suffix = Path(path).suffix.lower()
-        file_path = Path(path)
-        if suffix in LARGE_DIFF_SUFFIXES:
-            omitted.append(f"{path}: skipped large/binary file suffix")
-        elif not file_path.is_file():
-            omitted.append(f"{path}: skipped non-file path")
-        elif file_path.stat().st_size > MAX_UNTRACKED_DIFF_BYTES:
-            omitted.append(f"{path}: skipped {file_path.stat().st_size} byte untracked file")
-        else:
-            data = file_path.read_bytes()
-            if b"\0" in data:
-                omitted.append(f"{path}: skipped binary untracked file")
-            else:
-                text = data.decode("utf-8", "replace")
-                lines = text.splitlines(True)
-                patch = (
-                    f"diff --git a/{path} b/{path}\n"
-                    "new file mode 100644\n"
-                    "--- /dev/null\n"
-                    f"+++ b/{path}\n"
-                    f"@@ -0,0 +1,{len(lines)} @@\n"
-                    + "".join("+" + line for line in lines)
-                )
-                encoded = patch.encode()
-                if used + len(encoded) > byte_budget:
-                    omitted.append(f"{path}: skipped after reaching the {MAX_REPO_DIFF_BYTES} byte patch cap")
-                else:
-                    chunks.append(encoded)
-                    used += len(encoded)
-    return b"".join(chunks), omitted
+def file_diff(path: str, leader_data: bytes | None, source_data: bytes | None) -> tuple[str, dict[str, int], str]:
+    if path_suffix_is_large(path) or (leader_data and b"\0" in leader_data) or (source_data and b"\0" in source_data):
+        return "", {"added": 0, "removed": 0}, f"{path}: skipped binary or large-file patch"
+    old_lines = [] if leader_data is None else leader_data.decode("utf-8", "replace").splitlines(True)
+    new_lines = [] if source_data is None else source_data.decode("utf-8", "replace").splitlines(True)
+    header = f"diff --git a/{path} b/{path}\n"
+    if leader_data is None:
+        header += f"new file mode 100644\n--- /dev/null\n+++ b/{path}\n"
+    elif source_data is None:
+        header += f"deleted file mode 100644\n--- a/{path}\n+++ /dev/null\n"
+    else:
+        header += f"--- a/{path}\n+++ b/{path}\n"
+    body = "".join(difflib.unified_diff(old_lines, new_lines, fromfile=f"a/{path}", tofile=f"b/{path}")).splitlines(True)[2:]
+    patch = header + "".join(body)
+    return patch, {
+        "added": sum(1 for line in patch.splitlines() if line.startswith("+") and not line.startswith("+++")),
+        "removed": sum(1 for line in patch.splitlines() if line.startswith("-") and not line.startswith("---")),
+    }, ""
 
-def shortstat(text: str) -> dict[str, int]:
-    return {
-        "files": int(re.search(r"(\d+) files? changed", text).group(1)) if re.search(r"(\d+) files? changed", text) else 0,
-        "added": int(re.search(r"(\d+) insertions?", text).group(1)) if re.search(r"(\d+) insertions?", text) else 0,
-        "removed": int(re.search(r"(\d+) deletions?", text).group(1)) if re.search(r"(\d+) deletions?", text) else 0,
-    }
+
+def locked_path_changes(commit: str, source_dir: Path) -> list[str]:
+    source_files = [p.relative_to(source_dir).as_posix() for p in source_dir.rglob("*") if p.is_file() and p.name != "manifest.json"]
+    leader_files = subprocess.check_output(["git", "ls-tree", "-r", "--name-only", commit, "--", *LOCKED_PATHS], text=True).splitlines()
+    locked_files = sorted(path for path in set(source_files + leader_files) if any(path == lock.rstrip("/") or path.startswith(lock) for lock in LOCKED_PATHS))
+    return [path for path in locked_files if leader_file(commit, path) != snapshot_file(source_dir, path)]
+
+
+def path_suffix_is_large(path: str) -> bool:
+    return Path(path).suffix.lower() in LARGE_DIFF_SUFFIXES
 
 
 def collect_environment(opts: dict[str, str]) -> dict[str, Any]:

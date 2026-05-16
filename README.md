@@ -77,7 +77,7 @@ RUN_DIR=/data/$USER/nanopath/leader/my-run
 
 The `run_name` is the short label shown next to your dot on the Labless plot; keep it under 20 characters and make it describe what changed. A copied config such as `configs/new_config.yaml` is fine if the completed `summary.json` still reports the full `max_train_flops: 1e18` budget. Short smoke-sized runs and failed runs are not public Labless submissions.
 
-To top the leaderboard you must outperform this recipe on `mean_probe_score` by at least 0.01. Submit the run to labless; that public submission is the leaderboard claim, with git state, changed files, notes, metrics, hardware, and optional W&B attached. [@PaulScotti](https://github.com/PaulScotti) will inspect promising submissions, rerun the candidate on his 1 80GB H100 with a different rng seed, and update the README, `configs/leader.yaml`, and labless leader state if it still improves by at least 0.01. **You don't need an H100 or a PR to submit**—train on whatever hardware you have access to, and labless handles the public record and maintainer validation.
+To top the leaderboard you must outperform this recipe on `mean_probe_score` by at least 0.01. Submit the run to labless; that public submission is the leaderboard claim, with the W&B source artifact, changed files, notes, metrics, hardware, and optional W&B attached. [@PaulScotti](https://github.com/PaulScotti) will inspect promising submissions, rerun the candidate on his 1 80GB H100 with a different rng seed, and update the README, `configs/leader.yaml`, and labless leader state if it still improves by at least 0.01. **You don't need an H100 or a PR to submit**—train on whatever hardware you have access to, and labless handles the public record and maintainer validation.
 
 Code-cleanup PRs are still welcome when they simplify the codebase without changing benchmark peformance on the leader recipe. Leaderboard claims should go through labless instead of a pull request.
 
@@ -114,7 +114,7 @@ RUN_DIR=/data/$USER/nanopath/leader/my-run
 ./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub run_name=kde-crops notes="what changed and why"
 ```
 
-The script reads `summary.json` and `metrics.jsonl`, writes `labless_submission.json` into the run directory, verifies full runs from `max_train_flops: 1e18`, and posts to `api.labless.dev`. Smoke checks and failed runs stay local. The labless website, run log, and plot update automatically; new completed full runs stay `pending` until maintainer validation. See [labless/README.md](labless/README.md) for details.
+The script reads `summary.json` and `metrics.jsonl`, downloads the run's W&B source artifact, writes `labless_submission.json` into the run directory, verifies full runs from `max_train_flops: 1e18`, and posts to `api.labless.dev`. Smoke checks and failed runs stay local. The labless website, run log, and plot update automatically; new completed full runs stay `pending` until maintainer validation. See [labless/README.md](labless/README.md) for details.
 
 ## Repository layout
 
