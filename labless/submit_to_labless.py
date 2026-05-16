@@ -290,8 +290,8 @@ def collect_wandb_source(main_ref: dict[str, str], summary: dict[str, Any], opts
     run = api.run(run_path)
     artifact = api.artifact(f"{run.entity}/{run.project}/nanopath-source-{run.id}:latest", type="code")
     git_meta = run.metadata["git"]
-    root = Path(run.metadata["root"])
-    config_path = Path(run.config["config_path"])
+    root = Path.cwd()
+    config_path = Path(summary["config_path"])
     config_rel = str(config_path.relative_to(root)) if config_path.is_absolute() else str(config_path)
     subprocess.run(["git", "cat-file", "-e", f"{main_ref['commit']}^{{commit}}"], check=True)
     with tempfile.TemporaryDirectory() as tmp:
