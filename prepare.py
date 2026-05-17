@@ -3,8 +3,9 @@
 #   - data.dataset_dir/shard-NNNNN.parquet   (the 4M-tile dataset, sharded)
 #   - probe.dataset_roots[name] for each configured probe dataset
 #   - Meta's DINOv2 pretrained weights for cfg["model"]["type"] (torch.hub cache)
-# Defaults to HF for the tile dataset (medarc/nanopath), official/HF probe
-# sources, and dl.fbaipublicfiles.com for DINOv2 weights.
+# Defaults to HF for the tile dataset and mirrored probe assets, official
+# sources for the few probes not mirrored yet, and dl.fbaipublicfiles.com for
+# DINOv2 weights.
 # download_TCGA.sh and prepare_tiles / pack_from_jpeg_dir are only relevant if
 # you want to regenerate the tile dataset from raw SVS files; see README.
 #
@@ -17,14 +18,12 @@
 # selection can decode a fresh JPEG dataset and pack it into parquet shards
 # (see README "Regenerating the tile dataset"); main() does not call them.
 
-import gzip
 import http.client
 import json
 import multiprocessing as mp
 import os
 import re
 import shutil
-import subprocess
 import sys
 import time
 import urllib.error
@@ -314,44 +313,45 @@ def hf_download(filename, dst):
     shutil.copy(src, dst)
 
 
+def hf_probe_dir(name, root):
+    from huggingface_hub import snapshot_download
+    workers = int(os.environ.get("PREPARE_WORKERS", os.cpu_count() or 8))
+    print(f"  using medarc/nanopath probe mirror: {name}", flush=True)
+    snapshot_download(repo_id=HF_REPO_ID, repo_type="dataset", local_dir=str(root), allow_patterns=[f"{HF_PROBE_PREFIX}/{name}/**"], max_workers=workers)
+    src = root / HF_PROBE_PREFIX / name
+    for p in src.iterdir():
+        dst = root / p.name
+        if dst.exists():
+            shutil.rmtree(dst) if dst.is_dir() else dst.unlink()
+        shutil.move(str(p), dst)
+    shutil.rmtree(root / HF_PROBE_PREFIX)
+
+
 def fetch_pannuke(root):
-    for fold in (1, 2, 3):
+    for fold in (1, 2):
         if all((root / f"Fold{fold}/{kind}/fold{fold}/{kind}.npy").exists() for kind in ("images", "masks")):
             continue
         zip_path = root / f"fold_{fold}.zip"
-        http_download(f"https://warwick.ac.uk/fac/cross_fac/tia/data/pannuke/fold_{fold}.zip", zip_path)
+        hf_download(f"pannuke/fold_{fold}.zip", zip_path)
         shutil.unpack_archive(zip_path, root)
         zip_path.unlink()
-        if (root / f"Fold{fold}").exists():
-            shutil.rmtree(root / f"Fold{fold}")
-        (root / f"Fold {fold}").rename(root / f"Fold{fold}")
+        spaced = root / f"Fold {fold}"
+        if spaced.exists():
+            if (root / f"Fold{fold}").exists():
+                shutil.rmtree(root / f"Fold{fold}")
+            spaced.rename(root / f"Fold{fold}")
 
 
 def fetch_pcam(root):
-    base = "https://zenodo.org/api/records/2546921/files"
-    for split in ("train", "valid", "test"):
-        for kind in ("x", "y"):
-            name = f"camelyonpatch_level_2_split_{split}_{kind}.h5"
-            if (root / name).exists(): continue
-            gz = root / (name + ".gz")
-            http_download(f"{base}/{name}.gz/content", gz)
-            with gzip.open(gz, "rb") as fin, (root / name).open("wb") as fout:
-                shutil.copyfileobj(fin, fout)
-            gz.unlink()
+    hf_probe_dir("pcam", root)
 
 
 def fetch_bracs(root):
-    # BRACS is exposed as FTP, easiest to mirror with wget --recursive.
-    cmd = ["wget", "--no-parent", "-nH", "-r", "--directory-prefix", str(root), "ftp://histoimage.na.icar.cnr.it/BRACS_RoI/"]
-    print(f"  $ {' '.join(cmd)}", flush=True)
-    subprocess.run(cmd, check=True)
+    hf_probe_dir("bracs", root)
 
 
 def fetch_break_his(root):
-    tar = root / "BreaKHis_v1.tar.gz"
-    http_download("http://www.inf.ufpr.br/vri/databases/BreaKHis_v1.tar.gz", tar)
-    shutil.unpack_archive(tar, root)
-    tar.unlink()
+    hf_probe_dir("break_his", root)
 
 
 # PathoBench slide tasks are normally run from Trident patch embeddings. The
@@ -419,28 +419,7 @@ def _ucla_lung_extract_one(args):
 
 
 def fetch_ucla_lung(root):
-    base = "https://ftp.ebi.ac.uk/pub/databases/IDR/idr0082-pennycuick-lesions/20200517-ftp"
-    splits = json.loads((Path(__file__).resolve().parent / "benchmarking" / "ucla_lung.json").read_text())
-    slide_ids = sorted(set(splits["train"]["slide_ids"] + splits["val"]["slide_ids"]))
-    wsi_dir, slide_cache = root / "wsi", root / UCLA_LUNG_TILING_VERSION
-    wsi_dir.mkdir(parents=True, exist_ok=True)
-    slide_cache.mkdir(parents=True, exist_ok=True)
-    for sid in slide_ids:
-        ndpi = wsi_dir / f"{sid}.ndpi"
-        if not (ndpi.exists() and ndpi.stat().st_size > 1_000_000):
-            http_download(f"{base}/{sid}.ndpi", ndpi)
-    workers = int(os.environ.get("PREPARE_WORKERS", min(16, os.cpu_count() or 8)))
-    with mp.Pool(workers) as pool:
-        args = [(str(wsi_dir / f"{sid}.ndpi"), sid, str(slide_cache)) for sid in slide_ids]
-        for done, (sid, n) in enumerate(pool.imap_unordered(_ucla_lung_extract_one, args), start=1):
-            if done % 16 == 0 or done == len(args):
-                print(f"  [{done}/{len(args)}] {sid}: {n:,} tiles", flush=True)
-    table = pa.concat_tables([pq.read_table(slide_cache / f"{sid}.parquet") for sid in slide_ids])
-    pq.write_table(table, root / "tiles.parquet", compression="none", row_group_size=PARQUET_ROW_GROUP_SIZE)
-    (root / "tiles.parquet").chmod(0o664)
-    version = root / "tiling_version.txt"
-    version.write_text(UCLA_LUNG_TILING_VERSION + "\n")
-    version.chmod(0o664)
+    hf_probe_dir("ucla_lung", root)
 
 
 # PathoBench SR386 RAS mutation probe. Normal setup pulls our pre-extracted

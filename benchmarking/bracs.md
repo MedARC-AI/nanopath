@@ -8,7 +8,8 @@
 
 - Dataset: BRACS ROI
 - Benchmark family: Thunder tile-classification tasks (`linear_probing`, `knn`, `simple_shot`)
-- Download used by `prepare.py`: `ftp://histoimage.na.icar.cnr.it/BRACS_RoI/`
+- Upstream source: `ftp://histoimage.na.icar.cnr.it/BRACS_RoI/`
+- Download used by `prepare.py`: `medarc/nanopath`, under `probes/bracs/`
 
 ## Split And Labels
 

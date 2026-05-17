@@ -8,7 +8,8 @@
 
 - Task metadata: PathoBench `ucla_lung/progression_regression`
 - Raw images: IDR idr0082 Pennycuick lesions
-- Download base used by `prepare.py`: `https://ftp.ebi.ac.uk/pub/databases/IDR/idr0082-pennycuick-lesions/20200517-ftp`
+- Upstream raw image base: `https://ftp.ebi.ac.uk/pub/databases/IDR/idr0082-pennycuick-lesions/20200517-ftp`
+- Download used by `prepare.py`: pre-extracted `tiles.parquet` in `medarc/nanopath`, under `probes/ucla_lung/`
 
 ## Split And Tiles
 
@@ -25,7 +26,7 @@ Only train and val are read by `probe.py`.
 
 ## Implementation
 
-`prepare.py` downloads fold-0 train NDPIs and extracts a deterministic 20x, 512 px, 0-overlap tissue grid into per-slide parquet caches, then concatenates those rows into `tiles.parquet`. A `pathobench_20x_512_v1` marker makes older capped or differently tiled caches fail verification and regenerate. `probe.py` embeds every cached tile once with a no-crop square resize, mean-pools tile embeddings per slide, then for each fold fits a balanced logistic linear probe (`sklearn.linear_model.LogisticRegression`, `class_weight="balanced"`, `max_iter=5000`) over `C ∈ {0.001, 0.01, 0.1, 0.5, 1.0, 10.0, 100.0}`, averages val AUROC across the three folds at each `C`, and reports the best mean.
+`prepare.py` downloads the pre-extracted deterministic 20x, 512 px, 0-overlap tissue grid as `tiles.parquet`. A `pathobench_20x_512_v1` marker makes older capped or differently tiled caches fail verification. `probe.py` embeds every cached tile once with a no-crop square resize, mean-pools tile embeddings per slide, then for each fold fits a balanced logistic linear probe (`sklearn.linear_model.LogisticRegression`, `class_weight="balanced"`, `max_iter=5000`) over `C ∈ {0.001, 0.01, 0.1, 0.5, 1.0, 10.0, 100.0}`, averages val AUROC across the three folds at each `C`, and reports the best mean.
 
 ## Difference From Original Usage
 

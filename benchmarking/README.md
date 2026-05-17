@@ -37,8 +37,8 @@ Linear, KNN, segmentation-head, logistic, and Coxnet hyperparameters are selecte
 
 The full suite is designed for the final H100 probe window for the standard small Nanopath model by keeping the benchmark small where it can be small, and precomputing expensive slide tiling.
 
-- Whole-slide tasks use pre-extracted tile grids, so the final probe embeds JPEG/parquet tiles rather than opening full WSIs. PathoBench-derived slide tasks use a 20x, 512 px, 0-overlap tissue grid following the Trident/PathoBench tutorial contract. UCLA Lung embeds the full cached grid; SurGen and BoehmK survival prepare the full grid but stream deterministic up-to-768-tile raster-spaced sub-bags per slide so large-slide tasks fit the final-probe window. SurGen and BoehmK survival use pre-extracted `medarc/nanopath` parquet mirrors by default; `prepare.py` keeps official-source regeneration helpers for rebuilding those mirrors. The remaining preprocessing simplification is a deterministic thumbnail tissue mask instead of invoking Trident's HEST segmentation model during `prepare.py`.
-- PCam is a fixed subset of the official train/valid H5 files.
+- Whole-slide tasks use pre-extracted tile grids, so the final probe embeds JPEG/parquet tiles rather than opening full WSIs. PathoBench-derived slide tasks use a 20x, 512 px, 0-overlap tissue grid following the Trident/PathoBench tutorial contract. UCLA Lung embeds the full cached grid; SurGen and BoehmK survival prepare the full grid but stream deterministic up-to-768-tile raster-spaced sub-bags per slide so large-slide tasks fit the final-probe window. UCLA Lung, SurGen, and BoehmK survival use pre-extracted `medarc/nanopath` parquet mirrors by default; `prepare.py` keeps official-source regeneration helpers for rebuilding the SurGen and BoehmK mirrors. The remaining preprocessing simplification is a deterministic thumbnail tissue mask instead of invoking Trident's HEST segmentation model during `prepare.py`.
+- PCam is a fixed subset of the official train/valid H5 files, mirrored as small H5s with the same filenames/schema.
 - Tile classifiers use `Resize((224, 224))` from `model.py::probe_transforms` for trained Nanopath checkpoints. Frozen baseline scripts set their own `probe.transform_policy`. Patch-cache probes keep square resize because their inputs are already extracted tissue tiles.
 - Segmentation runs in a background thread while classification, slide, survival, and robustness probes run in the main worker for DINOv2-style backbones. CUDA kernels still serialize, but CPU-heavy decode/head work overlaps with segmentation head training.
 - The same loaded frozen backbone serves every probe in one subprocess, avoiding repeated model load overhead.
@@ -89,7 +89,7 @@ Split metadata used directly by `probe.py`:
 - `surgen.json`
 - `boehmk_pfs.json`
 
-Datasets without JSON here are split directly by code: PCam uses fixed subsets of official H5 train/valid files, PanNuke uses Fold1/Fold2, MoNuSAC and CoNSeP use deterministic train-folder splits, and PathoROB reads its public parquet subsets directly.
+Datasets without JSON here are split directly by code: PCam uses fixed subset H5s, PanNuke uses Fold1/Fold2, MoNuSAC and CoNSeP use deterministic train-folder splits, and PathoROB reads its public parquet subsets directly.
 
 Dataset-specific notes:
 

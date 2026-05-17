@@ -8,7 +8,8 @@
 
 - Dataset: PanNuke
 - Benchmark family: Thunder segmentation task
-- Download used by `prepare.py`: `https://warwick.ac.uk/fac/cross_fac/tia/data/pannuke/fold_<N>.zip`
+- Upstream source: `https://warwick.ac.uk/fac/cross_fac/tia/data/pannuke/fold_<N>.zip`
+- Download used by `prepare.py`: `medarc/nanopath`, under `probes/pannuke/`
 
 ## Split
 
@@ -19,7 +20,7 @@ Nanopath uses fixed PanNuke folds:
 | train | Fold1 | 2656 |
 | val | Fold2 | 2523 |
 
-Fold3 may be downloaded by `prepare.py`, but it is not part of `mean_probe_score`.
+Fold3 is not downloaded by `prepare.py` and is not part of `mean_probe_score`.
 
 ## Implementation
 

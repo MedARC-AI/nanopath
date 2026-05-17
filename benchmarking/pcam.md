@@ -8,7 +8,8 @@
 
 - Dataset: PatchCamelyon
 - Benchmark family: Thunder tile-classification tasks (`linear_probing`, `knn`, `simple_shot`)
-- Download used by `prepare.py`: `https://zenodo.org/api/records/2546921/files`
+- Upstream source: `https://zenodo.org/api/records/2546921/files`
+- Download used by `prepare.py`: `medarc/nanopath`, under `probes/pcam/`
 
 ## Split And Labels
 
@@ -19,7 +20,7 @@ PCam does not use a checked-in JSON split. `probe.py` reads the official H5 file
 | train | `train` | 3072 |
 | val | `valid` | 768 |
 
-The official test H5 files may be downloaded for completeness, but `probe.py` never reads them.
+The HF mirror stores only those deterministic train/valid subset H5s. `probe.py` never reads the official test H5 files.
 
 ## Implementation
 

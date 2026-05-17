@@ -7,7 +7,8 @@
 ## Source
 
 - Dataset: BreaKHis
-- Download used by `prepare.py`: `http://www.inf.ufpr.br/vri/databases/BreaKHis_v1.tar.gz`
+- Upstream source: `http://www.inf.ufpr.br/vri/databases/BreaKHis_v1.tar.gz`
+- Download used by `prepare.py`: `medarc/nanopath`, under `probes/break_his/`
 - Split provenance: EVA / Thunder 40X four-subtype protocol
 
 ## Split And Labels
