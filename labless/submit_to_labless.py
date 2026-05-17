@@ -11,16 +11,17 @@ import getpass
 import hashlib
 import json
 import os
-import platform
 import re
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
+
+import yaml
 
 
 API_URL = "https://api.labless.dev"
@@ -31,6 +32,17 @@ FULL_RUN_MIN_FLOPS = 1_000_000_000_000_000_000
 MAX_REPO_DIFF_BYTES = 120_000
 MAX_REVIEW_FILES_BYTES = 120_000
 REVIEW_DIFF_PATHS = ("train.py", "model.py", "dataloader.py", "prepare.py")
+NANOPATH_LOCKED_PROBE_CONFIG = {
+    "enabled": True,
+    "model_weights": "ema",
+    "count": 1,
+    "datasets": ["bracs", "break_his", "mhist", "pcam"],
+    "segmentation_datasets": ["pannuke", "monusac", "consep"],
+    "slide_datasets": ["ucla_lung"],
+    "auc_datasets": ["surgen"],
+    "survival_datasets": ["boehmk_pfs"],
+    "robustness_datasets": ["pathorob"],
+}
 LARGE_DIFF_SUFFIXES = (
     ".bin",
     ".ckpt",
@@ -74,7 +86,7 @@ def main() -> int:
     metric_rows = read_jsonl(metrics_path) if metrics_path.exists() else []
     metric_value = primary_metric(summary, metric_rows)
     validation_errors = validate_output(output_dir, summary_path, metrics_path, metric_value)
-    config_path = str(summary.get("config_path") or "configs/main.yaml")
+    config_path = public_config_path(summary.get("config_path") or "configs/main.yaml")
     run_name = str(summary.get("project") or output_dir.name)
     recipe_id = str(summary.get("recipe_id") or "")
     run_tier = opts.get("tier")
@@ -94,8 +106,9 @@ def main() -> int:
         raise ValueError("run_name must be 20 characters or fewer")
     repo = collect_wandb_source(resolve_main(opts), summary, opts) if run_tier == "full" and not validation_errors else {"locked_path_changes": []}
     validation_errors.extend(f"locked path changed: {p}" for p in repo.pop("locked_path_changes"))
+    validation_errors.extend(repo.pop("policy_errors", []))
     env = collect_environment(opts)
-    artifacts = collect_artifacts(output_dir, summary_path, metrics_path, opts)
+    artifacts = collect_artifacts(summary, opts)
     baseline_commands = {
         "dinov2-vits14-reg-no-continued-pretraining": "python baselines/dinov2_small_baseline.py configs/main.yaml",
         "dinov2-vitg14-reg-no-continued-pretraining": "python baselines/dinov2_giant_baseline.py configs/main.yaml",
@@ -104,8 +117,9 @@ def main() -> int:
     if run_tier == "baseline" and recipe_id not in baseline_commands:
         raise ValueError("baseline is not tracked by labless")
     run_command = opts.get("command") or baseline_commands.get(recipe_id) or f"python train.py {config_path}"
+    run_command = public_command(run_command)
     if not opts.get("command") and "output_dir=" not in run_command:
-        run_command = f"{run_command} output_dir={output_dir}"
+        run_command = f"{run_command} output_dir=$OUTPUT_DIR"
     payload = {
         "version": 1,
         "title": run_label,
@@ -184,6 +198,24 @@ def required(opts: dict[str, str], key: str) -> str:
     if not opts.get(key):
         raise ValueError(f"missing required {key}=...")
     return opts[key]
+
+
+def public_config_path(value: Any) -> str:
+    config_path = str(value)
+    match = re.search(r"(?:^|/)(configs/[A-Za-z0-9._-]+\.ya?ml)$", config_path)
+    if match:
+        return match.group(1)
+    if config_path.startswith("/") or "\\" in config_path or not re.match(r"^configs/[A-Za-z0-9._-]+\.ya?ml$", config_path):
+        raise ValueError("summary.config_path must be a repo-relative configs/*.yaml path")
+    return config_path
+
+
+def public_command(value: str) -> str:
+    command = value.strip()
+    command = re.sub(r"(^|\s)(?:~|/)[^\s\"']*/(configs/[A-Za-z0-9._-]+\.ya?ml)", r"\1\2", command)
+    command = re.sub(r"output_dir=['\"](?:~|/)[^'\"]+['\"]", "output_dir=$OUTPUT_DIR", command)
+    command = re.sub(r"output_dir=(?:~|/)[^\s\"']+", "output_dir=$OUTPUT_DIR", command)
+    return re.sub(r"(^|\s)(?:~|/)[^\s\"']+", r"\1$PATH", command)
 
 
 def resolve_main(opts: dict[str, str]) -> dict[str, str]:
@@ -299,8 +331,11 @@ def collect_wandb_source(main_ref: dict[str, str], summary: dict[str, Any], opts
         review_paths = [*REVIEW_DIFF_PATHS, *([] if config_rel in REVIEW_DIFF_PATHS else [config_rel])]
         main_diff = collect_main_diff(main_ref, git_meta["commit"], source_dir, review_paths)
         review_files = collect_review_files(artifact.qualified_name, source_dir, review_paths)
+        source_changed_files = changed_source_paths(main_ref["commit"], source_dir)
+        new_source_files = [path for path in source_changed_files if main_file(main_ref["commit"], path) is None and snapshot_file(source_dir, path) is not None]
+        policy_errors = [f"helper file outside allowed surface changed: {path}" for path in source_changed_files if new_source_path_blocked(path)]
+        policy_errors.extend(locked_probe_config_errors(source_dir, review_paths))
         repo = {
-            "root": str(root),
             "source_artifact": artifact.qualified_name,
             "review_files": review_files,
             "remote": git_meta["remote"],
@@ -309,8 +344,11 @@ def collect_wandb_source(main_ref: dict[str, str], summary: dict[str, Any], opts
             "main_context": main_ref,
             "dirty": bool(main_diff),
             "changed_files": main_diff["files"] if main_diff else [],
+            "source_changed_files": source_changed_files,
+            "new_source_files": new_source_files,
             "diff_summary": main_diff["summary"] if main_diff else {"files": 0, "added": 0, "removed": 0},
             "locked_path_changes": locked_path_changes(main_ref["commit"], source_dir),
+            "policy_errors": policy_errors,
         }
         if main_diff:
             repo["main_diff"] = main_diff
@@ -326,12 +364,53 @@ def collect_review_files(source: str, source_dir: Path, review_paths: list[str])
     return review_files
 
 
+def review_path_allowed(path: str) -> bool:
+    return path in REVIEW_DIFF_PATHS or bool(re.match(r"^configs/[A-Za-z0-9._-]+\.ya?ml$", path))
+
+
+def new_source_path_blocked(path: str) -> bool:
+    return Path(path).suffix.lower() in {".py", ".pyi", ".yaml", ".yml"} and not review_path_allowed(path)
+
+
+def changed_source_paths(commit: str, source_dir: Path) -> list[str]:
+    source_files = [
+        p.relative_to(source_dir).as_posix()
+        for p in source_dir.rglob("*")
+        if p.is_file() and p.name != "manifest.json"
+    ]
+    main_files = subprocess.check_output(["git", "ls-tree", "-r", "--name-only", commit, "--", *REVIEW_DIFF_PATHS, *LOCKED_PATHS], text=True).splitlines()
+    paths = sorted(set(source_files + main_files))
+    return [path for path in paths if main_file(commit, path) != snapshot_file(source_dir, path)]
+
+
+def locked_probe_config_errors(source_dir: Path, review_paths: list[str]) -> list[str]:
+    errors: list[str] = []
+    for path in review_paths:
+        if not re.match(r"^configs/[A-Za-z0-9._-]+\.ya?ml$", path):
+            continue
+        data = snapshot_file(source_dir, path)
+        if data is None:
+            errors.append(f"locked probe config missing: {path}")
+            continue
+        config = yaml.safe_load(data.decode("utf-8"))
+        probe = config["probe"]
+        checked = {key: value for key, value in probe.items() if key != "dataset_roots"}
+        if checked != NANOPATH_LOCKED_PROBE_CONFIG:
+            errors.append(f"locked probe config changed: {path}")
+    return errors
+
+
 def wandb_run_path(summary: dict[str, Any], opts: dict[str, str]) -> str:
     url = opts.get("wandb_url") or (summary.get("wandb") if isinstance(summary.get("wandb"), dict) else {}).get("url")
     if url:
-        match = re.search(r"wandb\.ai/([^/]+)/([^/]+)/runs/([^/?#]+)", url)
-        return f"{match.group(1)}/{match.group(2)}/{match.group(3)}"
-    meta = summary["wandb"]
+        parsed = urlparse(url)
+        parts = [part for part in parsed.path.split("/") if part]
+        if parsed.scheme != "https" or parsed.netloc != "wandb.ai" or len(parts) != 4 or parts[2] != "runs":
+            raise ValueError("wandb_url must be a W&B run URL like https://wandb.ai/<entity>/<project>/runs/<run_id>")
+        return f"{parts[0]}/{parts[1]}/{parts[3]}"
+    meta = summary.get("wandb")
+    if not isinstance(meta, dict) or not meta.get("entity") or not meta.get("project") or not meta.get("id"):
+        raise ValueError("full submissions require W&B run metadata in summary.json or wandb_url=...")
     return f"{meta['entity']}/{meta['project']}/{meta['id']}"
 
 
@@ -367,7 +446,6 @@ def collect_main_diff(main_ref: dict[str, str], commit: str, source_dir: Path, r
         "head_commit": commit,
         "files": changed_files,
         "summary": summary,
-        "patch": patch_bytes.decode("utf-8", "replace"),
         "patch_bytes": len(patch_bytes),
         "max_patch_bytes": MAX_REPO_DIFF_BYTES,
         "truncated": truncated or bool(omitted),
@@ -437,29 +515,14 @@ def collect_environment(opts: dict[str, str]) -> dict[str, Any]:
         if nvidia.returncode == 0:
             gpu = "; ".join(line.strip() for line in nvidia.stdout.splitlines() if line.strip())
     return {
-        "host": socket.gethostname(),
-        "user": getpass.getuser(),
-        "platform": platform.platform(),
         "python": sys.version.split()[0],
-        "hardware": opts.get("hardware") or gpu or f"host:{socket.gethostname()}",
-        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
-        "slurm_node": os.environ.get("SLURMD_NODENAME"),
-        "cwd": str(Path.cwd()),
+        "hardware": opts.get("hardware") or gpu or "not reported",
     }
 
 
-def collect_artifacts(output_dir: Path, summary_path: Path, metrics_path: Path, opts: dict[str, str]) -> list[dict[str, Any]]:
-    artifacts = [file_artifact(kind, path) for kind, path in (("summary", summary_path), ("metrics", metrics_path)) if path.exists()]
-    artifacts.append({"kind": "submission", "path": str(output_dir / "labless_submission.json")})
-    artifacts.extend(file_artifact("slurm_log", path) for path in sorted(Path.cwd().glob("slurm/*.out"), key=lambda p: p.stat().st_mtime)[-3:])
-    if opts.get("wandb_url"):
-        artifacts.append({"kind": "wandb", "uri": opts["wandb_url"]})
-    return artifacts
-
-
-def file_artifact(kind: str, path: Path) -> dict[str, Any]:
-    data = path.read_bytes()
-    return {"kind": kind, "path": str(path), "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+def collect_artifacts(summary: dict[str, Any], opts: dict[str, str]) -> list[dict[str, Any]]:
+    wandb_url = opts.get("wandb_url") or (summary.get("wandb") if isinstance(summary.get("wandb"), dict) else {}).get("url")
+    return [{"kind": "wandb", "uri": wandb_url}] if wandb_url else []
 
 
 def now_iso() -> str:

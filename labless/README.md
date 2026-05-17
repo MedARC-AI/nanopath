@@ -5,7 +5,11 @@ you train a model, one command publishes the run to the public nanopath tracker.
 
 ```bash
 RUN_DIR=/data/$USER/nanopath/main/my-run
-./labless/submit_to_labless.py output_dir=$RUN_DIR contributor=@yourgithub run_name=kde-crops notes="what changed and why"
+./labless/submit_to_labless.py output_dir=$RUN_DIR \
+  contributor=@yourgithub \
+  run_name=kde-crops \
+  wandb_url=https://wandb.ai/... \
+  notes="what changed and why"
 ```
 
 ## What the submit script does
@@ -19,13 +23,15 @@ RUN_DIR=/data/$USER/nanopath/main/my-run
    and diffs that source against the current main commit for `train.py`,
    `model.py`, `dataloader.py`, `prepare.py`, and the config YAML used by the
    run.
-4. Records hardware, Python version, optional W&B URL, and artifact paths.
-5. Writes the exact public payload to `output_dir/labless_submission.json`.
+4. Records hardware, Python version, W&B run link, and the full changed path
+   list from the W&B source artifact.
+5. Writes the submission payload to `output_dir/labless_submission.json`.
 6. Posts it to `https://api.labless.dev/api/nano-projects/nanopath/submissions`.
 
-The labless backend stores the submission as a run with artifact pointers. The
-website fetches the API data and the SVG plot from `api.labless.dev`, so the run
-appears in the project log, run table, and plot without opening a pull request.
+The labless backend stores the submission as a run with W&B source context and a
+W&B run link. The website fetches the API data and the SVG plot from
+`api.labless.dev`, so the run appears in the project log, run table, and plot
+without opening a pull request.
 
 ## Submit a completed run
 
@@ -74,7 +80,7 @@ python baselines/dinov2_small_baseline.py configs/main.yaml
 The submit script detects `summary.family == "baseline"` and marks the run as
 `tier=baseline`. Labless currently tracks GenBio-PathFM plus DINOv2 giant and
 small references; other nanopath baselines can stay in the repo README without
- becoming Labless reference rows. The nanopath leaderboard still ranks validated
+becoming Labless reference rows. The nanopath leaderboard still ranks validated
 completed full runs by score.
 
 ## Useful options
@@ -87,7 +93,7 @@ Arguments are `key=value`; there is no `argparse`.
 | `contributor` | GitHub/Discord handle shown on labless. |
 | `run_name` | Short plot label, 20 characters or fewer. |
 | `notes` | Short explanation of what changed and why. |
-| `wandb_url` | W&B run URL; optional for new runs whose `summary.json` already records `wandb.url`. |
+| `wandb_url` | W&B run URL. Required for full runs unless `summary.json` already records W&B run metadata; private or unlisted W&B URLs are accepted because labless only validates URL shape. |
 | `tier` | `full` or `baseline`; inferred when omitted. |
 | `hardware` | Override detected hardware string. |
 | `dry_run=true` | Write `labless_submission.json` without posting. |
@@ -105,6 +111,13 @@ marks submissions invalid if the saved W&B source artifact changed:
 - `probe.py`
 - anything under `benchmarking/`
 
+The config YAML may only change train/model/data tunables and local
+`probe.dataset_roots`. Labless rejects changes to the locked probe suite keys
+such as dataset lists, probe count, and model weights. Helper code changes must
+stay inside the flat reviewed surface (`train.py`, `model.py`, `dataloader.py`,
+`prepare.py`, or `configs/*.yaml`); hidden helper modules such as `losses.py`
+are rejected.
+
 The current checkout can change after training; labless uses the W&B source
 artifact from the run, not the present working tree, when building the review
 diff.
@@ -116,19 +129,20 @@ The payload intentionally makes the run inspectable. It includes:
 - contributor handle and notes
 - final metric and probe submetrics
 - run family, recipe id, and tier (`baseline` for frozen reference scripts)
-- W&B source artifact, git remote, commit, changed review files, and a capped
-  review-file snapshot for selectable diffs
-- hardware, hostname, Python version, and optional GPU summary
-- artifact paths or URLs for `summary.json`, `metrics.jsonl`, W&B, SLURM logs,
-  and `labless_submission.json`
+- W&B source artifact, git remote, commit, full changed source path list,
+  changed review files, and a capped review-file snapshot for server-built diffs
+- hardware, Python version, and optional GPU summary
+- W&B run URL
 
-The patch is only collected for `train.py`, `model.py`, `dataloader.py`,
-`prepare.py`, and the config YAML used by the run. If none of those files differ
-from main, no main patch is sent. The capped review-file snapshot lets
-labless diff a run against other logged non-baseline runs. Binary or
-large-file suffixes are omitted from patches and listed in the payload. Local
-artifact paths are provenance pointers; the script does not upload model
-weights or raw data.
+The public API redacts local machine paths, hostnames, users, repo roots, and
+local artifact paths from legacy and new rows.
+
+The review snapshot is only collected for `train.py`, `model.py`,
+`dataloader.py`, `prepare.py`, and the config YAML used by the run. Labless
+builds capped patches server-side when it compares two logged snapshots. Binary
+or large-file suffixes are omitted from patches and listed in the payload. Local
+hostnames, users, working directories, repo roots, artifact paths, model weights,
+and raw data are not posted.
 
 ## Maintainer validation
 
