@@ -50,7 +50,7 @@ Score is final `mean_probe_score` across our 11-dataset benchmarking suite, asse
 
 | # | Description | final score | linear | knn | 16-shot | segmentation | progression | mutation | survival | robustness | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | DINOv2-small/14-reg trained on TCGA w KDE| 0.5563 | 0.7656 | 0.7046 | 0.6667 | 0.3000 | 0.6644 | 0.5843 | 0.5070 | 0.6142 | @PaulScotti |
+| 1 | DINOv2-small/14-reg trained on TCGA w KDE| 0.5713 | 0.7544 | 0.6805 | 0.5940 | 0.3185 | 0.6356 | 0.5989 | 0.5354 | 0.8538 | @PaulScotti |
 
 ### Baselines
 
@@ -68,7 +68,7 @@ Score is final `mean_probe_score` across our 11-dataset benchmarking suite, asse
 | 10 | DINOv2-small | Untouched Meta `dinov2_vits14_reg` | 0.5291 | 0.6968 | 0.6249 | 0.5834 | 0.2663 | 0.5827 | 0.6225 | 0.5218 | 0.7543 |
 | 11 | DINOv2-small random | Randomized weights `dinov2_vits14_reg` | 0.4246 | 0.5282 | 0.5066 | 0.4139 | 0.2673 | 0.6922 | 0.5648 | 0.4894 | 0.1905 |
 
-Baseline rows are frozen reference checkpoints evaluated with the same probe suite. They help calibrate the plot, but pathology-specific baselines are not valid initialization points for nanopath leaderboard submissions. The reference scripts live in `baselines/`; run Virchow and GigaPath separately with `baselines/virchow_baseline.py` and `baselines/gigapath_baseline.py`. Historical Labless rows remain useful provenance, but locked benchmark comparisons should use fresh runs after any benchmark-definition change.
+Baseline rows are frozen reference checkpoints evaluated with the same probe suite. They help calibrate the plot, but pathology-specific baselines are not valid initialization points for nanopath leaderboard submissions. The reference scripts live in `baselines/`; run Virchow and GigaPath separately with `baselines/virchow_baseline.py` and `baselines/gigapath_baseline.py`.
 
 ### How to submit to the leaderboard
 
