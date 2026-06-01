@@ -701,6 +701,18 @@ def localize_config_file(config_path):
         print(f"[data] rewrote {len(changes)} missing/unusable root(s) in {config_path} to defaults under {REPO_ROOT / 'data'}.", flush=True)
 
 
+def localize_config_files(config_path):
+    # Smoke is the usual first command on a fresh clone, but users naturally
+    # train main next. Keep both checked-in recipes pointed at the same local
+    # downloaded data once either config triggers localization.
+    seen = set()
+    for path in [config_path, REPO_ROOT / "configs" / "main.yaml", REPO_ROOT / "configs" / "smoke.yaml"]:
+        path = path.resolve()
+        if path.exists() and path not in seen:
+            seen.add(path)
+            localize_config_file(path)
+
+
 # Flat dict of {label: expanded Path} for every data path declared in cfg.
 def get_paths(cfg):
     paths = {"data.dataset_dir": _resolve(cfg["data"]["dataset_dir"])}
@@ -762,10 +774,11 @@ def main():
         raise SystemExit(usage)
     download = sys.argv[2] == "download=True"
 
-    # Off-cluster, correct this config's cluster paths to repo-local defaults on
-    # disk before preparing, so the YAML matches where data actually lands.
+    # Off-cluster, correct the requested config plus the checked-in smoke/main
+    # recipes before preparing, so subsequent train.py commands read the same
+    # local paths that download=True populates.
     if download:
-        localize_config_file(config_path)
+        localize_config_files(config_path)
     cfg = yaml.safe_load(os.path.expandvars(config_path.read_text()))
     paths = get_paths(cfg)
     dataset_dir = paths["data.dataset_dir"]
