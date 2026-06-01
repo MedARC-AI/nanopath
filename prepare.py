@@ -674,13 +674,15 @@ def _local_data_root(s):
     return str(s)
 
 
-# Output/log roots are allowed on writable /data, but still need localizing when
-# the configured absolute mount is absent or read-only.
-def _local_output_root(s):
+# Output/log roots follow repo-local data roots when prepare had to localize a
+# config, otherwise they stay on writable shared /data for MedARC runs.
+def _local_output_root(s, force=False):
     p = _resolve(s)
     mount = Path(*p.parts[:2]) if p.is_absolute() and len(p.parts) > 1 else p
-    if p.is_absolute() and not p.exists() and (not mount.exists() or not os.access(mount, os.W_OK)):
-        return str(REPO_ROOT / "data" / p.name)
+    if force or (p.is_absolute() and not p.exists() and (not mount.exists() or not os.access(mount, os.W_OK))):
+        parts = list(p.parts)
+        tail = parts[parts.index("nanopath") + 1:] if "nanopath" in parts else [p.name]
+        return str(REPO_ROOT / "data" / Path(*tail))
     return str(s)
 
 
@@ -693,7 +695,7 @@ def localize_config_file(config_path):
     data_roots = [cfg["data"]["dataset_dir"], *cfg["probe"]["dataset_roots"].values()]
     output_roots = [cfg["project"]["output_dir"], cfg["project"]["wandb_dir"]]
     changes = {v: nv for v in data_roots if (nv := _local_data_root(v)) != v}
-    changes.update({v: nv for v in output_roots if (nv := _local_output_root(v)) != v})
+    changes.update({v: nv for v in output_roots if (nv := _local_output_root(v, force=bool(changes))) != v})
     for old, new in changes.items():
         raw = raw.replace(f": {old}", f": {new}")
     if changes:

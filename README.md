@@ -161,7 +161,7 @@ The script reads `summary.json` and `metrics.jsonl`, reviews `output_dir/labless
 
 `prepare.py` prepares the necessary data for pretraining and downstream probing. Flag `download=True` to fetch/prepare the configured datasets into the folders specified by the YAML; flag `download=False` to verify that all required paths are already populated.
 
-On the MedARC cluster, the checked-in `/data` and `/block` paths are the intended populated shared defaults. On a fresh clone, `prepare.py … download=True` rewrites any missing or empty checked-in data/probe roots to point into `nanopath/data/<name>`, preserving comments and formatting. It updates the config you pass plus the checked-in `configs/main.yaml` and `configs/smoke.yaml`, so running prepare on smoke first still leaves main directly runnable afterward. This happens even if the machine has a `/data` mount but lacks `/data/nanopath_parquet`. Populated shared roots are left unchanged. `output_dir` and `wandb_dir` are also localized when their absolute mount is absent or read-only. To force a different storage location, edit `data.dataset_dir` and `probe.dataset_roots.*` to existing writable paths before downloading.
+On the MedARC cluster, the checked-in `/data` and `/block` paths are the intended populated shared defaults. On a fresh clone, `prepare.py … download=True` rewrites any missing or empty checked-in data/probe roots to point into `nanopath/data/<name>`, preserving comments and formatting. It also moves `output_dir` and `wandb_dir` into `nanopath/data/` whenever a config's data roots are localized. The rewrite updates the config you pass plus the checked-in `configs/main.yaml` and `configs/smoke.yaml`, so running prepare on smoke first still leaves main directly runnable afterward. This happens even if the machine has a `/data` mount but lacks `/data/nanopath_parquet`. Populated shared roots are left unchanged. To force a different storage location, edit `data.dataset_dir`, `probe.dataset_roots.*`, `project.output_dir`, and `project.wandb_dir` to existing writable paths before downloading.
 
 **What `download=True` does**
 1. **TCGA tiles**: `huggingface_hub.snapshot_download` (filtered to `shard-*.parquet`) pulls the 200 parquet shards (~120 GB total, `{path: string, jpeg: binary}` rows with 64-row row groups) from [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) into `data.dataset_dir`.
@@ -218,10 +218,10 @@ sbatch submit/train_1gpu.sbatch configs/main.yaml
 
 ## Outputs
 
-The `/data`- and `/block`-rooted defaults below are the MedARC cluster layout; `prepare.py … download=True` rewrites missing or empty data/probe defaults in the requested config plus `configs/{main,smoke}.yaml` to live under `nanopath/data/` instead, and then downloads there.
+The `/data`- and `/block`-rooted defaults below are the MedARC cluster layout; `prepare.py … download=True` rewrites missing or empty data/probe defaults in the requested config plus `configs/{main,smoke}.yaml` to live under `nanopath/data/` instead, and it localizes run outputs/W&B logs there too for those rewritten configs.
 
-- run outputs: `project.output_dir` (default is `/data/$USER/nanopath/main/...`). Final probe results log to `metrics.jsonl`.
-- wandb: `/data/$USER/nanopath/wandb`.
+- run outputs: `project.output_dir` (cluster default `/data/$USER/nanopath/main/...`; auto-localized default `nanopath/data/main/...`). Final probe results log to `metrics.jsonl`.
+- wandb: `project.wandb_dir` (cluster default `/data/$USER/nanopath/wandb`; auto-localized default `nanopath/data/wandb`).
 - parquet tile shards: `data.dataset_dir` (defaults to `/data/nanopath_parquet`).
 - probe datasets: `probe.dataset_roots` (defaults to shared `/block/...` and `/data/...` paths on the MedARC cluster).
 - DINOv2 backbone weights: `~/.cache/torch/hub/checkpoints/` for the selected `model.type`.
