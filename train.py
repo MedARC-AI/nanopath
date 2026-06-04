@@ -6,6 +6,7 @@
 # FLOP/sample budgets, batch size); other DINOv2 hyperparameters are hardcoded
 # inline at their use sites.
 
+import atexit
 import contextlib
 import fnmatch
 import json
@@ -66,6 +67,69 @@ def load_config():
             f"README.md before launching train.py."
         )
     return cfg
+
+
+# Arm Labless before any GPU work so direct `python train.py ...` gets the same
+# no-scope GitHub device login path as the SLURM launcher. Noninteractive runs
+# train locally unless the launcher passed a preauthorized token file.
+def maybe_arm_labless_autosubmit(cfg, repo_dir):
+    token_path = os.environ.get("LABLESS_AUTOSUBMIT_FILE", "")
+    eligible = (
+        bool(cfg["probe"]["enabled"])
+        and int(cfg["probe"]["count"]) > 0
+        and int(cfg["train"]["max_train_samples"]) == 1_000_000
+        and int(cfg["train"]["max_train_flops"]) == 1_000_000_000_000_000_000
+    )
+    if token_path:
+        atexit.register(lambda p=Path(token_path): p.unlink(missing_ok=True))
+        return token_path
+    if not eligible:
+        return ""
+    if not sys.stdin.isatty():
+        if not os.environ.get("SLURM_JOB_ID"):
+            print(f"{console_prefix()} Labless  no interactive stdin; training will run without auto-submit.", flush=True)
+        return ""
+    print("This looks like a full Labless-eligible run. Leave either prompt blank to train without auto-submit.", flush=True)
+    run_name = input("Labless run name (<=20 chars): ").strip()
+    notes = input("Labless notes: ").strip()
+    if not run_name or not notes or len(run_name) > 20:
+        print("Labless auto-submit skipped; run name and notes are required, and run name must be <=20 chars.", flush=True)
+        return ""
+    token_path = str(Path(str(Path(cfg["project"]["output_dir"]).expanduser().resolve()) + ".labless_autosubmit.json"))
+    status = subprocess.run(
+        [sys.executable, str(repo_dir / "labless" / "submit_to_labless.py"), "login_only=true", f"token_output={token_path}", f"run_name={run_name}", f"notes={notes}"],
+        cwd=repo_dir,
+    ).returncode
+    if status != 0:
+        print("Labless login did not complete; training will run without auto-submit.", flush=True)
+        Path(token_path).unlink(missing_ok=True)
+        return ""
+    os.environ["LABLESS_AUTOSUBMIT_FILE"] = token_path
+    atexit.register(lambda p=Path(token_path): p.unlink(missing_ok=True))
+    return token_path
+
+
+def finish_labless_autosubmit(token_path, output_dir, repo_dir):
+    token_file = Path(token_path) if token_path else None
+    if token_file is None or not token_file.exists():
+        return
+    token = json.loads(token_file.read_text())
+    status = subprocess.run(
+        [
+            sys.executable,
+            str(repo_dir / "labless" / "submit_to_labless.py"),
+            f"output_dir={output_dir.resolve()}",
+            f"run_name={token['run_name']}",
+            f"notes={token['notes']}",
+            f"github_token_file={token_file}",
+        ],
+        cwd=repo_dir,
+    ).returncode
+    token_file.unlink(missing_ok=True)
+    if status == 2:
+        print(f"{console_prefix()} Labless  auto-submit skipped because the completed run did not satisfy submission restrictions.", flush=True)
+    elif status != 0:
+        raise SystemExit(status)
 
 
 # Cosine schedule from `start` to `end` over fractional progress in [0, 1].
@@ -149,6 +213,8 @@ def update_ema(student_module, teacher_module, momentum):
 # Orchestrates one pretraining run: setup, train+probe loop, checkpoint, summary.
 def main():
     cfg = load_config()
+    repo_dir = Path(__file__).resolve().parent
+    labless_autosubmit_file = maybe_arm_labless_autosubmit(cfg, repo_dir)
     train_cfg = cfg["train"]
     dino_cfg = cfg["dino"]
     save_every = train_cfg["save_every"]
@@ -237,7 +303,6 @@ def main():
         f"layerwise_decay: {dino_cfg['layerwise_decay']}",
         flush=True,
     )
-    repo_dir = Path(__file__).resolve().parent
     git_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_dir, text=True).strip()
     git_remote = subprocess.run(["git", "config", "--get", "remote.origin.url"], cwd=repo_dir, text=True, capture_output=True, check=False).stdout.strip()
     source_id = f"nanopath-source-{wandb_run.id}"
@@ -654,6 +719,7 @@ def main():
     for key in summary.keys():
         wandb_run.summary[key] = summary[key]
     wandb_run.finish()
+    finish_labless_autosubmit(labless_autosubmit_file, output_dir, repo_dir)
 
 
 if __name__ == "__main__":

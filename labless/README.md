@@ -1,10 +1,11 @@
 # labless integration
 
-This folder contains the nanopath-to-labless bridge. The goal is simple: after
-you train a model, one command publishes the run to the public nanopath tracker.
+This folder contains the nanopath-to-labless bridge. The goal is simple: full
+SLURM runs launched through `submit/train_1gpu.sbatch` can publish automatically
+after training, while direct runs can still be submitted with one command.
 
 ```bash
-RUN_DIR=/data/$USER/nanopath/main/my-run
+RUN_DIR=$PWD/data/main/my-run
 ./labless/submit_to_labless.py output_dir=$RUN_DIR \
     run_name=kde-crops \
     notes="what changed and why"
@@ -23,9 +24,9 @@ RUN_DIR=/data/$USER/nanopath/main/my-run
 4. Records hardware, Python version, optional W&B run link, and the full changed
    path list from the saved source snapshot.
 5. Writes the submission payload to `output_dir/labless_submission.json`.
-6. Opens GitHub's device sign-in flow and posts it to
-   `https://api.labless.dev/api/nano-projects/nanopath/submissions` with the
-   resulting bearer token.
+6. Opens GitHub's device sign-in flow, or uses the preauthorized token file
+   written by `submit/train_1gpu.sbatch`, and posts it to
+   `https://api.labless.dev/api/nano-projects/nanopath/submissions`.
 
 The labless backend stores the submission as a run with saved source context and
 an optional W&B run link. It derives the public contributor from the verified
@@ -36,12 +37,24 @@ without opening a pull request.
 
 ## Submit a completed run
 
-Run training first:
+For SLURM runs, use the prompt-aware launcher:
 
 ```bash
-RUN_DIR=/data/$USER/nanopath/main/my-run
-sbatch submit/train_1gpu.sbatch configs/main.yaml output_dir=$RUN_DIR
-# or directly on a GPU machine:
+RUN_DIR=$PWD/data/main/my-run
+./submit/train_1gpu.sbatch configs/main.yaml output_dir=$RUN_DIR
+```
+
+For configs with `max_train_samples=1000000`, `max_train_flops=1e18`, and
+probes enabled, the launcher asks for a Labless run name, notes, and GitHub
+device sign-in before scheduling the GPU job. If any prompt is skipped or login
+does not complete, the job still trains but does not auto-submit. Plain
+`sbatch submit/train_1gpu.sbatch ...` also trains without auto-submit because
+there is no interactive prompt before scheduling.
+
+For direct GPU runs, train first:
+
+```bash
+RUN_DIR=$PWD/data/main/my-run
 python train.py configs/main.yaml output_dir=$RUN_DIR
 ```
 
@@ -71,7 +84,7 @@ Tracked reference baseline scripts write the same `summary.json` and
 ```bash
 python baselines/dinov2_small_baseline.py configs/main.yaml
 ./labless/submit_to_labless.py \
-  output_dir=/data/$USER/nanopath/baselines/dinov2-small \
+  output_dir=$PWD/data/baselines/dinov2-small \
   notes="reran the frozen DINOv2-small reference"
 ```
 
@@ -93,11 +106,13 @@ Arguments are `key=value`; there is no `argparse`.
 | `wandb_url` | Optional W&B run URL for linking the external dashboard; private or unlisted W&B URLs are accepted because labless only validates URL shape. |
 | `tier` | `full` or `baseline`; inferred when omitted. |
 | `hardware` | Override detected hardware string. |
-| `source_dir` / `source_commit` | Manual repair knobs for copied or older runs; normally inferred from `output_dir/labless_source` and `summary.json`. |
+| `source_dir` / `source_commit` | Dry-run repair knobs only; real submissions use `output_dir/labless_source` and summary git metadata. |
 | `review_config` | Repo-relative `configs/*.yaml` to review when `summary.config_path` points at an external launched copy. |
 | `dry_run=true` | Write `labless_submission.json` without posting. |
+| `login_only=true` / `token_output` | Internal launcher path: perform GitHub device sign-in before SLURM scheduling and write a mode-600 token file. |
+| `github_token_file` | Internal launcher path: submit after training with the preauthorized token file instead of prompting inside the compute job. |
 | `api_url` | Use a local labless backend for testing. |
-| `main_run_id` / `main_commit` | Local testing override for the live main lookup; both are required when either is set. |
+| `main_run_id` / `main_commit` | Dry-run testing override only; real submissions compare against the current official GitHub `main`. |
 
 For real submissions, the script prompts you to open
 `https://github.com/login/device` and enter a short code. Dry runs write the

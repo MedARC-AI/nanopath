@@ -2,6 +2,8 @@
 
 `cptac_pda_os` is a pancreatic ductal adenocarcinoma case-level overall-survival probe from PathoBench. It contributes 3-fold validation Harrell's c-index as one of the two datasets averaged into the README survival column.
 
+Nanopath's "survival" score reflects the average of LEOPARD BCR and CPTAC-PDA OS. LEOPARD is the easier survival benchmark and CPTAC is intentionally much harder. Despite baselines showing little reliable survival signal beyond the high randomized-DINOv2 null and nuisance controls, we are keeping CPTAC because a hard survival probe is useful for seeing whether new training recipes can hillclimb on a clinically relevant endpoint. Averaging LEOPARD and CPTAC gives the single survival column a sensible balance between an easier signal-bearing task and a harder stress-test task.
+
 ## Source
 
 - Dataset: [PathoBench](https://huggingface.co/datasets/MahmoodLab/Patho-Bench) `cptac_pda/OS`

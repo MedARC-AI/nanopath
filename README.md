@@ -15,28 +15,27 @@ Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:
 ```bash
 git clone https://github.com/MedARC-AI/nanopath.git && cd nanopath
 uv sync && source .venv/bin/activate
-wandb login  # optional; set WANDB_MODE=offline to keep W&B local
+wandb login  # or: export WANDB_MODE=offline before launching noninteractive SLURM jobs
 
 # download pretraining & probe datasets & DINOv2 pretrained ckpt
 python prepare.py download=True
 
 # smoke test: very short training, then probe evals to ensure no errors
-sbatch submit/train_1gpu.sbatch configs/smoke.yaml
+./submit/train_1gpu.sbatch configs/smoke.yaml
 # or directly on a GPU machine: python train.py configs/smoke.yaml
 
 # train and evaluate the current main nanopath recipe
-RUN_DIR=/data/$USER/nanopath/main/my-run
-sbatch submit/train_1gpu.sbatch configs/main.yaml output_dir=$RUN_DIR
-# or directly on a GPU machine: python train.py configs/main.yaml output_dir=$RUN_DIR
-
-# publish a completed full run to the live labless plot
-# the submitter will ask you to sign in with GitHub in a browser
-./labless/submit_to_labless.py output_dir=$RUN_DIR run_name=kde-crops notes="what changed"
+# auto-submits to Labless if config passes submission requirements and you provide run name/notes & GitHub login
+RUN_DIR=$PWD/data/main/my-run
+./submit/train_1gpu.sbatch configs/main.yaml output_dir=$RUN_DIR
+# or directly on a GPU machine without auto-submit: python train.py configs/main.yaml output_dir=$RUN_DIR
 ```
 
 `pyproject.toml` pins `torch` / `torchvision` against the CUDA 12.9 wheel index. If your GPU/driver needs a different CUDA build, edit the `torch` and `torchvision` lines in `pyproject.toml` before `uv sync`.
 
 A successful model training prints periodic train lines, appends metrics to `metrics.jsonl`, and writes the final comparison artifact to `summary.json`. `configs/smoke.yaml` is simply meant to pretrain briefly and then run the fixed downstream probe suite to ensure everything works without errors.
+
+W&B can run online or offline, but set that up before submitting a noninteractive job: either run `wandb login` once, or export `WANDB_MODE=offline`.
 
 ## Leaderboard
 
@@ -44,9 +43,7 @@ A successful model training prints periodic train lines, appends metrics to `met
   <img src="https://api.labless.dev/api/nano-projects/nanopath/plot.svg" alt="Nanopath progress plot" width="1290">
 </a>
 
-Score is final `mean_probe_score`, the average of linear, knn, 16-shot, segmentation, progression, mutation, survival, and robustness. These columns summarize a 12-dataset suite derived from [THUNDER](https://mics-lab.github.io/thunder/), [PathoBench](https://github.com/mahmoodlab/patho-bench), and LEOPARD, with modifications to keep single-GPU evaluation lightweight. See [benchmarking/README.md](benchmarking/README.md) for more information.
-
-The survival suite now uses LEOPARD BCR plus CPTAC-PDA OS. LEOPARD is the easier survival benchmark: frozen pathology and DINOv2 baselines show clear recurrence-prediction signal. CPTAC is intentionally much harder; under the current split, the baselines show little reliable survival signal beyond the high randomized-DINOv2 null and nuisance controls. We are keeping CPTAC anyway because a hard survival probe is useful for seeing whether new training recipes can hillclimb on a clinically relevant endpoint. Averaging LEOPARD and CPTAC gives the single survival column a sensible balance between an easier signal-bearing task and a harder stress-test task.
+`mean_probe_score`, aka `final_probe_score`, is the average of linear, knn, 16-shot, segmentation, progression, mutation, survival, and robustness. These columns summarize a 12-dataset suite derived from [THUNDER](https://mics-lab.github.io/thunder/), [PathoBench](https://github.com/mahmoodlab/patho-bench), and LEOPARD, with modifications to keep single-GPU evaluation lightweight. See [benchmarking/README.md](benchmarking/README.md) for more information.
 
 ### Nanopath models
 
@@ -70,25 +67,29 @@ The survival suite now uses LEOPARD BCR plus CPTAC-PDA OS. LEOPARD is the easier
 | 10 | DINOv2-small | Untouched Meta `dinov2_vits14_reg` | 0.5841 | 0.6968 | 0.6249 | 0.5834 | 0.2704 | 0.5827 | 0.6225 | 0.5374 | 0.7543 |
 | 11 | DINOv2-small random | Randomized weights `dinov2_vits14_reg` | 0.4703 | 0.5255 | 0.5066 | 0.4139 | 0.2701 | 0.6922 | 0.5648 | 0.5984 | 0.1905 |
 
-Baseline rows are frozen reference checkpoints evaluated with the same probe suite. They help calibrate the plot, but pathology-specific baselines are not valid initialization points for nanopath leaderboard submissions. The reference scripts live in `baselines/`; run Virchow and GigaPath separately with `baselines/virchow_baseline.py` and `baselines/gigapath_baseline.py`.
+Baseline rows are frozen reference checkpoints evaluated with the same probe suite. They help calibrate the plot, but pathology-specific baselines are not valid initialization points for nanopath leaderboard submissions. The reference scripts live in `baselines/`.
 
 ### How to submit to the leaderboard
 
-Labless is the public run ledger and live plot for `nanopath`. You do not need a Labless password or a pull request to make a leaderboard claim; the submitter connects your submission to your GitHub identity through GitHub's no-scope device sign-in flow.
+Labless is our public run ledger and live plot for `nanopath`. You do not need a Labless password or a pull request to make a leaderboard claim; the submitter connects your submission to your GitHub identity through GitHub's device sign-in.
 
-`configs/main.yaml` is the current `nanopath` main-branch training recipe. A normal submission is:
+`configs/main.yaml` is the current `nanopath` main-branch training recipe. A normal SLURM submission is:
 
 ```bash
-RUN_DIR=/data/$USER/nanopath/main/my-run
-./labless/submit_to_labless.py output_dir=$RUN_DIR run_name=kde-crops notes="what changed and why"
+RUN_DIR=$PWD/data/main/my-run
+./submit/train_1gpu.sbatch configs/main.yaml output_dir=$RUN_DIR
 ```
 
 The pipeline is:
 
-1. Train a completed full run with `configs/main.yaml` or a copied `configs/*.yaml` that keeps the locked probe suite intact.
-2. Let `train.py` finish the final probe. The run directory must contain `summary.json`, `metrics.jsonl`, and the source snapshot written at launch under `labless_source/`.
-3. Run `./labless/submit_to_labless.py ...` from the repo root. It writes `labless_submission.json`, checks the run caps and locked benchmark surface, then prints a GitHub device-login URL and one-time code.
-4. Open the URL on any machine, sign in to GitHub, and enter the code. Labless records that verified GitHub login as the contributor, posts the run to `api.labless.dev`, and shows it as `pending` until maintainer validation.
+1. Run `./submit/train_1gpu.sbatch ...` or `python train.py ...` to start your training run. For full runs, the launcher asks for a short `run_name`, notes (a description that will accompany your run on labless), and GitHub device sign-in before scheduling the GPU job. Leaving the prompts blank or failing to sign in will lead to skipping labless submission.
+2. Let `train.py` finish the final probe. The run directory will contain `summary.json`, `metrics.jsonl`, and the source snapshot written at launch under `labless_source/`. The submitter writes `labless_submission.json`, checks the run caps and locked benchmark surface, posts to `api.labless.dev`, and shows the run as `pending` until maintainer validation.
+
+Manual submission is still available for direct `python train.py` runs or copied output directories:
+
+```bash
+./labless/submit_to_labless.py output_dir=$RUN_DIR run_name=kde-crops notes="what changed and why"
+```
 
 Public full-run submissions must satisfy:
 
@@ -101,7 +102,7 @@ Public full-run submissions must satisfy:
 
 The `run_name` is the short label shown next to your dot on the Labless plot; keep it under 20 characters and make it describe what changed. Short smoke-sized runs, failed runs, and runs missing the saved source snapshot stay local. Each verified GitHub login can submit at most 10 runs per 24 hours.
 
-To top the leaderboard you must beat the highest validated Labless run on `mean_probe_score` by at least 0.006. Submit the run to labless; that public submission is the leaderboard claim, with the saved source snapshot, changed files, notes, metrics, hardware, and optional W&B link attached. Public submissions have no wall-clock limit, so train on whatever hardware you have access to. [@PaulScotti](https://github.com/PaulScotti) will inspect promising submissions, independently rerun candidates that pass this threshold on maintainer compute with a different rng seed, and validate them on Labless if training completes within 2 hours and the rerun still improves by at least 0.006. This different-rng replication is intended to weed out lucky runs before validation. If the candidate code is pushed to nanopath `main`, Labless marks that run separately as `main`. **You don't need an H100 or a PR to submit**; labless handles the public record and maintainer validation.
+To top the leaderboard you must beat the highest validated Labless run on `mean_probe_score` by at least 0.006. Public submissions have no wall-clock limit, so train on whatever hardware you have access to. [@PaulScotti](https://github.com/PaulScotti) will inspect promising submissions, independently rerun candidates that pass this threshold on maintainer compute with a different rng seed, and validate them on Labless if training completes within 2 hours and the rerun still improves by at least 0.006. If the candidate code is pushed to nanopath `main`, Labless marks that run separately as `main`. **You don't need an H100 or a PR to submit**; labless handles the public record and maintainer validation.
 
 Code-cleanup PRs are still welcome when they simplify the codebase without changing benchmark performance on the main recipe. Leaderboard claims should go through labless instead of a pull request.
 
@@ -134,17 +135,9 @@ You can use any pretrained model however you want, including for initialization,
 
 ### Labless for live tracking
 
-Submit completed full runs to the live tracker:
+Full training runs auto-submit to the labless live tracker if certain criteria are met (see [How to submit to the leaderboard](#how-to-submit-to-the-leaderboard)).
 
-```bash
-RUN_DIR=/data/$USER/nanopath/main/my-run
-./labless/submit_to_labless.py output_dir=$RUN_DIR run_name=kde-crops notes="what changed and why"
-```
-
-The script reads `summary.json` and `metrics.jsonl`, reviews `output_dir/labless_source` rather than your current working tree, and posts the local payload in `labless_submission.json` after GitHub device sign-in succeeds. W&B can be online or offline; online runs add a public W&B link, while source review always comes from the local snapshot. The labless website, run log, and plot update automatically. See [labless/README.md](labless/README.md) for the exact payload fields, dry-run mode, baseline submission notes, and validation policy.
-Labless publishes the README-facing probe keys `linear`, `knn`, `few_shot`,
-`seg_jaccard`, `progression_auc`, `mutation_auc`, `survival_cindex`, and
-`robustness`.
+The script reads `summary.json` and `metrics.jsonl`, reviews `output_dir/labless_source` rather than your current working tree, and posts the local payload in `labless_submission.json` after GitHub device sign-in succeeds. W&B can be online or offline; online runs add a public W&B link, while source review always comes from the local snapshot. The labless website, run log, and plot update automatically.
 
 ## Repository layout
 
@@ -168,11 +161,11 @@ Labless publishes the README-facing probe keys `linear`, `knn`, `few_shot`,
 
 `prepare.py` prepares the necessary data for pretraining and downstream probing. By default it reads `configs/main.yaml`; pass a YAML path before the flag to prepare a different config, e.g. `python prepare.py configs/smoke.yaml download=True`. Flag `download=True` to fetch/prepare the configured datasets into the folders specified by the YAML; flag `download=False` to verify that all required paths are already populated.
 
-On the MedARC cluster, the checked-in `/data` and `/block` paths are the intended populated shared defaults. On a fresh clone, `prepare.py … download=True` rewrites any missing or empty checked-in data/probe roots to point into `nanopath/data/<name>`, preserving comments and formatting. It also moves `output_dir` and `wandb_dir` into `nanopath/data/` whenever a config's data roots are localized. The rewrite updates the selected config plus the checked-in `configs/main.yaml` and `configs/smoke.yaml`, so running prepare once still leaves both smoke and main directly runnable afterward. This happens even if the machine has a `/data` mount but lacks `/data/nanopath_parquet`. Populated shared roots are left unchanged. To force a different storage location, edit `data.dataset_dir`, `probe.dataset_roots.*`, `project.output_dir`, and `project.wandb_dir` to existing writable paths before downloading.
+On the MedARC cluster, the checked-in `/data` and `/block` paths are the intended populated shared defaults. On a fresh clone, `prepare.py … download=True` rewrites any missing or empty checked-in data/probe roots to point into `nanopath/data/<name>`, preserving comments and formatting. It also moves `output_dir` and `wandb_dir` into `nanopath/data/` whenever a config's data roots are localized. The rewrite updates the selected config plus the checked-in `configs/main.yaml` and `configs/smoke.yaml`, so running prepare once still leaves both smoke and main directly runnable afterward. To force a different storage location, edit `data.dataset_dir`, `probe.dataset_roots.*`, `project.output_dir`, and `project.wandb_dir` to existing writable paths before downloading.
 
 **What `download=True` does**
 1. **TCGA tiles**: `huggingface_hub.snapshot_download` (filtered to `shard-*.parquet`) pulls the 200 parquet shards (~120 GB total, `{path: string, jpeg: binary}` rows with 64-row row groups) from [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) into `data.dataset_dir`.
-2. **Probe datasets**: for each empty configured root, fetches/unpacks and, where needed, pre-extracts the probe data from the [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath/tree/main/probes) probe mirror for portable noninteractive setup. Before fetching LEOPARD BCR, MHIST, or CoNSeP, `prepare.py` prints the relevant upstream provenance/access notice. Slide-level probes cache 20x/512 tissue grids (`tiles.parquet`, `surgen-*.parquet`, or `patches.parquet`) so `probe.py` never opens raw WSIs during training/probing; SurGen and LEOPARD BCR stream deterministic raster-spaced sub-bags for runtime, while CPTAC-PDA OS embeds its full cached grid.
+2. **Probe datasets**: for each empty configured root, fetches/unpacks and, where needed, pre-extracts the probe data from the [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath/tree/main/probes) probe mirror for portable noninteractive setup.
 3. **DINOv2 backbone weights**: `torch.hub.load_state_dict_from_url` fetches the Meta checkpoint for `model.type` from `dl.fbaipublicfiles.com` into `~/.cache/torch/hub/checkpoints/`.
 
 **Prerequisites**
@@ -210,24 +203,26 @@ Point `data.dataset_dir` at the packed parquet directory before training. To pub
 Smoke (short training + full probe):
 
 ```bash
-sbatch submit/train_1gpu.sbatch configs/smoke.yaml
+./submit/train_1gpu.sbatch configs/smoke.yaml
 # or directly on a GPU machine: `python train.py configs/smoke.yaml`
 ```
 
 Full main `nanopath` recipe:
 
 ```bash
-sbatch submit/train_1gpu.sbatch configs/main.yaml
+./submit/train_1gpu.sbatch configs/main.yaml
 # or directly on a GPU machine: `python train.py configs/main.yaml`
 ```
 
-`configs/main.yaml` is sized for an 80 GB H100 at `train.batch_size: 128`. On smaller cards you can set `train.activation_checkpointing: true` if you OOM. Smoke fits comfortably on any 24 GB+ GPU.
+`submit/train_1gpu.sbatch` is a prompt-aware launcher when run directly: it collects Labless run name, notes, and GitHub device login before submitting itself to SLURM, then auto-submits eligible completed full runs. Calling `sbatch submit/train_1gpu.sbatch ...` bypasses that prompt and trains without auto-submit. `configs/main.yaml` is sized for an 80 GB H100 at `train.batch_size: 128`. On smaller cards you can set `train.activation_checkpointing: true` and lower `train.batch_size` if you OOM.
+
+The checked-in `#SBATCH --partition=n` / `--qos=normal` lines are MedARC-specific. On another SLURM cluster, edit those header lines once to match your queue, or run `python train.py ...` directly on an allocated GPU.
 
 ## Outputs
 
 The `/data`- and `/block`-rooted defaults below are the MedARC cluster layout; `prepare.py … download=True` rewrites missing or empty data/probe defaults in the selected config plus `configs/{main,smoke}.yaml` to live under `nanopath/data/` instead, and it localizes run outputs/W&B logs there too for those rewritten configs.
 
-- run outputs: `project.output_dir` (cluster default `/data/$USER/nanopath/main/...`; auto-localized default `nanopath/data/main/...`). Final probe results log to `metrics.jsonl`.
+- run outputs: `project.output_dir` (MedARC cluster default `/data/$USER/nanopath/main/...`; auto-localized default `nanopath/data/main/...`). Final probe results log to `metrics.jsonl`.
 - wandb: `project.wandb_dir` (cluster default `/data/$USER/nanopath/wandb`; auto-localized default `nanopath/data/wandb`).
 - parquet tile shards: `data.dataset_dir` (defaults to `/data/nanopath_parquet`).
 - probe datasets: `probe.dataset_roots` (defaults to shared `/block/...` and `/data/...` paths on the MedARC cluster; LEOPARD BCR defaults to `/data/leopard_bcr` with hpcroot group sharing).
@@ -235,11 +230,12 @@ The `/data`- and `/block`-rooted defaults below are the MedARC cluster layout; `
 - SLURM logs: `slurm/<jobid>.{out,err}` in the repo.
 - labless source snapshot: `project.output_dir/labless_source`.
 - labless submission payload: `project.output_dir/labless_submission.json`.
+- labless auto-submit token: `${project.output_dir}.labless_autosubmit.json` while a prompt-armed SLURM job is running; the launcher removes it after the post-run submission attempt.
 - checkpoints: rolling `latest.pt` written every `train.save_every` steps under `project.output_dir`, plus one final save at end of run. `save_every: null` (smoke) disables both; probes always get their own short-lived checkpoint regardless.
 
 ## Experiment log
 
-See the live [labless nanopath log](https://labless.dev/nano-projects/nanopath) for submitted completed runs, including low-scoring results. Labless is the source of truth for experiment history so the record updates immediately when contributors submit runs.
+See the live [labless nanopath log](https://labless.dev/nano-projects/nanopath) for submitted completed runs.
 
 ## Acknowledgements
 

@@ -972,7 +972,7 @@ def main():
         f"\nAll data ready: {n_shards} parquet shards at {dataset_dir}, {n_probes} probe datasets "
         f"({', '.join(cfg['probe']['dataset_roots'])}), and {cfg['model']['type']} weights at "
         f"{weights_path}. Launch training with `python train.py {config_label}` or "
-        f"`sbatch submit/train_1gpu.sbatch {config_label}`.",
+        f"`./submit/train_1gpu.sbatch {config_label}`.",
         flush=True,
     )
 

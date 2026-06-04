@@ -26,6 +26,7 @@ import yaml
 
 API_URL = "https://api.labless.dev"
 PROJECT_SLUG = "nanopath"
+NANOPATH_MAIN_REMOTE = "https://github.com/MedARC-AI/nanopath.git"
 PRIMARY_METRIC = "mean_probe_score"
 LOCKED_PATHS = ("probe.py", "benchmarking/")
 FULL_RUN_MIN_FLOPS = 1_000_000_000_000_000_000
@@ -74,7 +75,22 @@ GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 def main() -> int:
     opts = parse_args(sys.argv[1:])
+    api_url = (opts.get("api_url") or API_URL).rstrip("/")
+    if truthy(opts.get("login_only", "false")):
+        token_path = Path(required(opts, "token_output")).expanduser().resolve()
+        github_token, github_login = github_sign_in(api_url)
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        token_path.write_text(json.dumps({
+            "github_token": github_token,
+            "github_login": github_login,
+            "run_name": opts.get("run_name", ""),
+            "notes": opts.get("notes", ""),
+        }, indent=2) + "\n")
+        os.chmod(token_path, 0o600)
+        print(f"wrote Labless auto-submit token for {github_login}: {token_path}")
+        return 0
     output_dir = Path(required(opts, "output_dir")).expanduser().resolve()
+    dry_run = truthy(opts.get("dry_run", "false"))
     submission_path = output_dir / "labless_submission.json"
     previous_submission = json.loads(submission_path.read_text()) if submission_path.exists() else {}
     status = opts.get("status", "completed").strip().lower()
@@ -87,7 +103,7 @@ def main() -> int:
     metric_rows = read_jsonl(metrics_path) if metrics_path.exists() else []
     metric_value = primary_metric(summary, metric_rows)
     validation_errors = validate_output(output_dir, summary_path, metrics_path, metric_value)
-    config_path = public_config_path(summary.get("config_path") or "configs/main.yaml")
+    config_path = public_config_path(opts.get("review_config") or summary.get("config_path") or "configs/main.yaml")
     run_name = str(summary.get("project") or output_dir.name)
     recipe_id = str(summary.get("recipe_id") or "")
     run_tier = opts.get("tier")
@@ -111,17 +127,26 @@ def main() -> int:
     run_label = opts.get("run_name") or opts.get("label") or opts.get("title") or run_name
     if run_tier == "full" and len(run_label) > 20:
         raise ValueError("run_name must be 20 characters or fewer")
-    repo = collect_source_snapshot(resolve_main(opts), summary, opts, output_dir) if run_tier == "full" and not validation_errors else {"locked_path_changes": []}
+    if not dry_run and (opts.get("main_commit") or opts.get("main_run_id") or opts.get("source_dir") or opts.get("source_commit") or opts.get("commit")):
+        raise ValueError("main/source overrides are only for dry_run=true; real submissions use current GitHub main and output_dir/labless_source")
+    repo = collect_source_snapshot(resolve_main(opts, dry_run), summary, opts, output_dir) if run_tier == "full" and not validation_errors else {"locked_path_changes": []}
     validation_errors.extend(f"locked path changed: {p}" for p in repo.pop("locked_path_changes"))
     validation_errors.extend(repo.pop("policy_errors", []))
     env = collect_environment(opts)
     artifacts = collect_artifacts(summary, opts)
-    dry_run = truthy(opts.get("dry_run", "false"))
-    api_url = (opts.get("api_url") or API_URL).rstrip("/")
     github_token = ""
     github_login = os.environ.get("GITHUB_USER") or getpass.getuser()
     if not dry_run and not validation_errors:
-        github_token, github_login = github_sign_in(api_url)
+        if opts.get("github_token_file"):
+            token_data = json.loads(Path(opts["github_token_file"]).expanduser().read_text())
+            github_token = str(token_data["github_token"])
+            me_status, me = api_json(api_url, "GET", "/api/auth/github/me", headers={"Authorization": f"Bearer {github_token}"})
+            if me_status >= 400:
+                raise ValueError(me.get("detail") or f"GitHub identity check failed with HTTP {me_status}")
+            github_login = str(me["login"])
+            print(f"GitHub signed in as {github_login}", flush=True)
+        else:
+            github_token, github_login = github_sign_in(api_url)
     baseline_commands = {
         "dinov2-vits14-reg-no-continued-pretraining": "python baselines/dinov2_small_baseline.py configs/main.yaml",
         "dinov2-vitg14-reg-no-continued-pretraining": "python baselines/dinov2_giant_baseline.py configs/main.yaml",
@@ -271,8 +296,10 @@ def github_sign_in(api_url: str) -> tuple[str, str]:
     raise ValueError("GitHub sign-in code expired")
 
 
-def resolve_main(opts: dict[str, str]) -> dict[str, str]:
+def resolve_main(opts: dict[str, str], dry_run: bool) -> dict[str, str]:
     if opts.get("main_commit") or opts.get("main_run_id"):
+        if not dry_run:
+            raise ValueError("main_run_id/main_commit override is only for dry_run=true")
         main_ref = {"run_id": required(opts, "main_run_id"), "commit": required(opts, "main_commit")}
     else:
         api_url = (opts.get("api_url") or API_URL).rstrip("/")
@@ -280,11 +307,21 @@ def resolve_main(opts: dict[str, str]) -> dict[str, str]:
         status, main_ref = api_json(api_url, "GET", f"/api/nano-projects/{project}/main")
         if status >= 400:
             raise ValueError(main_ref.get("detail") or f"main lookup failed with HTTP {status}")
+        if project == PROJECT_SLUG and api_url == API_URL:
+            main_ref["commit"] = current_nanopath_main_commit()
     if not main_ref.get("run_id"):
         raise ValueError("current main response is missing run_id")
     if not isinstance(main_ref.get("commit"), str) or not GIT_SHA_RE.match(main_ref["commit"]):
         raise ValueError("current main response is missing a full 40-character git commit")
     return {"run_id": str(main_ref["run_id"]), "commit": main_ref["commit"]}
+
+
+def current_nanopath_main_commit() -> str:
+    subprocess.run(["git", "fetch", "--depth=1", NANOPATH_MAIN_REMOTE, "refs/heads/main"], check=True)
+    commit = subprocess.check_output(["git", "rev-parse", "FETCH_HEAD"], text=True).strip()
+    if not GIT_SHA_RE.match(commit):
+        raise ValueError("official nanopath main lookup did not return a full git SHA")
+    return commit
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
