@@ -71,7 +71,7 @@ Baseline rows are frozen reference checkpoints evaluated with the same probe sui
 
 ### How to submit to the leaderboard
 
-Labless is our public run ledger and live plot for `nanopath`. You do not need a Labless password or a pull request to make a leaderboard claim; the submitter connects your submission to your GitHub identity through GitHub's device sign-in.
+Labless is our public run ledger and live plot for `nanopath`. You do not need a Labless password or a pull request to make a leaderboard claim; the submitter connects your submission to your GitHub identity through GitHub's device sign-in. Submit every completed full run, including null results and incremental tweaks; the dense public ledger lets maintainers and AI agents mine cross-run patterns that isolated wins would hide.
 
 `configs/main.yaml` is the current `nanopath` main-branch training recipe. A normal SLURM submission is:
 
@@ -100,7 +100,7 @@ Public full-run submissions must satisfy:
 - no saved-source changes to `probe.py` or anything under `benchmarking/`
 - no locked probe config changes except local `probe.dataset_roots`
 
-The `run_name` is the short label shown next to your dot on the Labless plot; keep it under 20 characters and make it describe what changed. Short smoke-sized runs, failed runs, and runs missing the saved source snapshot stay local. Each verified GitHub login can submit at most 20 runs per 24 hours.
+The `run_name` is the short label shown next to your dot on the Labless plot; keep it under 20 characters and make it describe what changed. Short smoke-sized runs, failed runs, and runs missing the saved source snapshot stay local. Each verified GitHub login can submit at most 100 runs per 24 hours.
 
 To top the leaderboard you must beat the highest validated Labless run on `mean_probe_score` by at least 0.006. Public submissions have no wall-clock limit, so train on whatever hardware you have access to. [@PaulScotti](https://github.com/PaulScotti) will inspect promising submissions, independently rerun candidates that pass this threshold on maintainer compute with a different rng seed, and validate them on Labless if training completes within 2 hours and the rerun still improves by at least 0.006. If the candidate code is pushed to nanopath `main`, Labless marks that run separately as `main`. **You don't need an H100 or a PR to submit**; labless handles the public record and maintainer validation.
 
@@ -117,7 +117,7 @@ Every leaderboard run is bounded by two possible caps:
 - **`train.max_train_samples` ≤ 1,000,000 tile presentations**. A training sample is one source TCGA tile emitted as one dataloader item; if the same underlying tile is seen again later, that is another tile presentation. Teacher/student views, global/local crops, masks, or other augmentations derived from that tile do not multiply the sample count, though their compute still counts toward FLOPs. `train.py` never starts a batch that would push `summary.tile_presentations` over the cap.
 - **`train.max_train_flops` ≤ 1e18 training FLOPs**, measured directly via `torch.utils.flop_counter.FlopCounterMode` on the first step (forward + backward + optimizer.step) and reused thereafter since per-step shapes are fixed. This counts everything that touches the GPU during a step (student backbone, EMA teacher forward, projection heads, masking, etc.).
 
-The default LR, weight decay, teacher-temperature, freeze, and KDE schedules are keyed to `train_flops / train.max_train_flops`, not to tile presentations. With the current small model and augmentations, `configs/main.yaml` normally reaches the 1,000,000-tile sample cap at about 19% of the 1e18-FLOP budget, so these schedules intentionally stop early unless you change the caps or schedule fractions.
+LR decay, weight decay, teacher-temperature, freeze, and KDE schedules are keyed to `train_flops / train.max_train_flops`; LR warmup is keyed to tile presentations so it finishes early in the 1,000,000-tile sample-capped run. With the current small model and augmentations, `configs/main.yaml` normally reaches the sample cap at about 19% of the 1e18-FLOP budget, so the FLOP-keyed schedules intentionally stop early unless you change the caps or schedule fractions.
 
 Wall time is logged for diagnostics and standardized reruns, but it is not a public-submission eligibility cap. Maintainer validation is separate: the submitted recipe must complete training on the maintainer's single 80 GB H100 within 2 hours.
 Intensive preprocessing before model training starts, such as tile extraction, data curation, metadata joins, indexing, or embedding generation, is allowed and is not counted as training time.
@@ -137,7 +137,7 @@ You can use any pretrained model however you want, including for initialization,
 
 Full training runs auto-submit to the labless live tracker if certain criteria are met (see [How to submit to the leaderboard](#how-to-submit-to-the-leaderboard)).
 
-The script reads `summary.json` and `metrics.jsonl`, reviews `output_dir/labless_source` rather than your current working tree, and posts the local payload in `labless_submission.json` after GitHub device sign-in succeeds. W&B can be online or offline; online runs add a public W&B link, while source review always comes from the local snapshot. The labless website, run log, and plot update automatically.
+The script reads `summary.json` and `metrics.jsonl`, reviews `output_dir/labless_source` rather than your current working tree, and posts the local payload in `labless_submission.json` after GitHub device sign-in succeeds. W&B can be online or offline; online runs add a public W&B link, while source review always comes from the local snapshot. `AGENTS.md` and `CLAUDE.md` are excluded from Labless source packaging. The labless website, run log, and plot update automatically.
 
 ## Repository layout
 

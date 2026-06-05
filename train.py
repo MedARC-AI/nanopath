@@ -241,7 +241,7 @@ def main():
             p.requires_grad = False
     backbone_activated_params = sum(p.numel() for p in student_backbone.parameters() if p.requires_grad)
     # AdamW param groups carry per-parameter LR/WD multipliers (LWD + patch_embed + biases-no-WD).
-    opt = torch.optim.AdamW(build_param_groups(student_backbone, student_dino_head, student_ibot_head, dino_cfg["layerwise_decay"], dino_cfg["patch_embed_lr_mult"]), lr=1.0, betas=(0.9, 0.999))
+    opt = torch.optim.AdamW(build_param_groups(student_backbone, student_dino_head, student_ibot_head, dino_cfg["layerwise_decay"], dino_cfg["patch_embed_lr_mult"]), lr=1.0, betas=(0.9, dino_cfg["adam_beta2"]))
     step = 0
     batch_size = int(train_cfg["batch_size"])
     max_train_samples = int(train_cfg["max_train_samples"])
@@ -250,6 +250,9 @@ def main():
     train_flops = 0
     output_dir = Path(cfg["project"]["output_dir"])
     wandb_dir = Path(cfg["project"]["wandb_dir"])
+    wandb_name = cfg["project"]["name"]
+    if labless_autosubmit_file:
+        wandb_name = json.loads(Path(labless_autosubmit_file).read_text()).get("run_name") or wandb_name
     slurm_job_id = os.environ.get("SLURM_JOB_ID")
     latest_checkpoint_path = output_dir / "latest.pt"
     # Fresh launches always start from scratch and wipe output_dir.
@@ -279,7 +282,7 @@ def main():
         wandb_meta = dict(checkpoint["wandb"])
     wandb_init = {
         "project": "nanopath",
-        "name": cfg["project"]["name"],
+        "name": wandb_name,
         "dir": str(wandb_dir),
         "config": cfg,
         "settings": wandb.Settings(
@@ -294,11 +297,11 @@ def main():
     for key in ("probe/target_flops", "probe/wall_seconds"):
         wandb_run.define_metric(key, hidden=True, overwrite=True)
     print(
-        f"{console_prefix()} Run  start: {cfg['project']['name']}  "
+        f"{console_prefix()} Run  start: {wandb_name}  "
         f"config: {cfg['config_path']}  batch_size: {batch_size}  max_train_samples: {max_train_samples}  "
         f"max_train_flops: {train_cfg['max_train_flops']}  "
-        f"probe_count: {cfg['probe']['count']}  warmup_flop_fraction: {dino_cfg['warmup_flop_fraction']}  "
-        f"lr: {dino_cfg['lr']}  kde_loss_weight: {dino_cfg['kde_loss_weight']}  "
+        f"probe_count: {cfg['probe']['count']}  warmup_fraction: {dino_cfg['warmup_fraction']}  "
+        f"lr: {dino_cfg['lr']}  adam_beta2: {dino_cfg['adam_beta2']}  kde_loss_weight: {dino_cfg['kde_loss_weight']}  "
         f"kde_concentration: {dino_cfg['kde_concentration']}  drop_path: {dino_cfg['drop_path_rate']}  "
         f"layerwise_decay: {dino_cfg['layerwise_decay']}",
         flush=True,
@@ -309,7 +312,7 @@ def main():
     artifact_ignore = [
         line.strip() for line in (repo_dir / ".gitignore").read_text().splitlines()
         if line.strip() and not line.startswith("#")
-    ] + [".git/", "baselines/", "slurm/"]
+    ] + [".git/", "baselines/", "slurm/", "AGENTS.md", "CLAUDE.md"]
     ignored_roots = [output_dir.resolve(), wandb_dir.resolve()]
 
     def artifact_ignored(path):
@@ -341,7 +344,7 @@ def main():
         target = source_snapshot_dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target)
-    wandb_meta = {"entity": wandb_run.entity, "project": "nanopath", "id": wandb_run.id, "name": cfg["project"]["name"], "url": wandb_run.url,
+    wandb_meta = {"entity": wandb_run.entity, "project": "nanopath", "id": wandb_run.id, "name": wandb_name, "url": wandb_run.url,
                   "mode": getattr(wandb_run.settings, "mode", ""), "source_artifact": source_id,
                   "source_dir": str(source_snapshot_dir), "git": {"commit": git_commit, "remote": git_remote}}
     train_ds = TCGATileDataset(cfg, is_train=True)
@@ -475,7 +478,7 @@ def main():
 
     log_probe_results()
     max_train_flops = int(train_cfg["max_train_flops"])
-    warmup_train_flops = math.ceil(max_train_flops * dino_cfg["warmup_flop_fraction"])
+    warmup_train_samples = math.ceil(max_train_samples * dino_cfg["warmup_fraction"])
     # Probe targets are sample milestones: one tile counts once even with many global/local crops.
     probe_count = int(cfg["probe"]["count"]) if probe_enabled(cfg) else 0
     probe_targets = [math.ceil(max_train_samples * (i + 1) / probe_count) for i in range(probe_count)]
@@ -514,14 +517,13 @@ def main():
                 pending_ids[key].update(int(x) for x in batch[batch_key].tolist())
             global_views, local_views = [batch[key].to(device, non_blocking=True) for key in ("global_views", "local_views")]
             visible_now = batch_size * (train_cfg["global_views"] * global_patches + train_cfg["local_views"] * local_patches)
-            # LR/WD/teacher/freeze/KDE schedules use the public FLOP budget, so a
-            # sample-capped run can stop before the schedule reaches its endpoint.
+            # LR warmup uses the 1M-tile sample cap; decay/WD/teacher/freeze/KDE stay on the public FLOP budget.
             frac = min(1.0, train_flops / max_train_flops)
-            warmup = min(1.0, train_flops / max(1, warmup_train_flops))
+            warmup = min(1.0, examples_seen / max(1, warmup_train_samples))
             if warmup < 1.0:
                 lr = dino_cfg["lr"] * warmup
             else:
-                lr = cosine_schedule(dino_cfg["lr"], dino_cfg["lr_min"], (frac - dino_cfg["warmup_flop_fraction"]) / max(1e-9, 1 - dino_cfg["warmup_flop_fraction"]))
+                lr = cosine_schedule(dino_cfg["lr"], dino_cfg["lr_min"], (frac - dino_cfg["warmup_fraction"]) / max(1e-9, 1 - dino_cfg["warmup_fraction"]))
             wd = cosine_schedule(0.04, 0.2, frac)
             teacher_temp = 0.04 + min(1.0, frac / 0.2727) * (0.07 - 0.04)
             last_layer_lr = 0.0 if frac < dino_cfg["freeze_last_layer_fraction"] else lr
@@ -699,9 +701,10 @@ def main():
         # Average throughput over the train loop; wall time is diagnostic, not an eligibility cap.
         "flops_per_sec": train_flops / max(1.0, train_loop_wall_seconds),
         "visible_patches_per_sec": visible_patch_presentations / max(1.0, train_loop_wall_seconds),
-        "warmup_flop_fraction": dino_cfg["warmup_flop_fraction"],
-        "warmup_train_flops": warmup_train_flops,
+        "warmup_fraction": dino_cfg["warmup_fraction"],
+        "warmup_train_samples": warmup_train_samples,
         "lr": dino_cfg["lr"],
+        "adam_beta2": dino_cfg["adam_beta2"],
         "kde_loss_weight": dino_cfg["kde_loss_weight"],
         "kde_concentration": dino_cfg["kde_concentration"],
         "drop_path_rate": dino_cfg["drop_path_rate"],
