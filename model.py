@@ -6,7 +6,7 @@
 # a strict load.
 #
 # DINOHead is the small MLP + weight-normed classifier used by train.py for the
-# DINO CLS / iBOT patch self-distillation losses. It is intentionally trivial
+# DINO CLS self-distillation loss. It is intentionally trivial
 # (~15 lines) so we have zero runtime dependency on the dinov2 codebase.
 
 import torch
@@ -133,7 +133,7 @@ class DinoV2ViT(nn.Module):
         patch_pos = patch_pos.permute(0, 2, 3, 1).reshape(1, h * w, -1).to(self.pos_embed.dtype)
         return torch.cat([cls_pos, patch_pos], dim=1) if cls_pos is not None else patch_pos
 
-    # Build [cls, registers, patches] tokens; iBOT swaps the masked patch positions for mask_token.
+    # Build [cls, registers, patches] tokens; masked patch positions are replaced by mask_token.
     def _prepare_tokens(self, x, masks=None):
         B, _, H, W = x.shape
         h, w = H // self.patch_size, W // self.patch_size
@@ -183,7 +183,7 @@ def load_dinov2_pretrained(model):
     return model
 
 
-# DINO/iBOT projection head: 3-layer MLP (in -> hidden -> hidden -> bottleneck) + L2 norm +
+# DINO projection head: 3-layer MLP (in -> hidden -> hidden -> bottleneck) + L2 norm +
 # weight-normed Linear(bottleneck -> n_prototypes) with weight_g frozen at 1, matching the
 # behaviour of dinov2.layers.DINOHead. Standalone reimplementation (no xformers, no fvcore).
 class DINOHead(nn.Module):

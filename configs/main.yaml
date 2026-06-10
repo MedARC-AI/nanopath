@@ -1,24 +1,22 @@
 project:
-  name: main-dinov2
+  name: I-JEPA, contiguous patches
   family: nanopath
-  recipe_id: dinov2-vits14-reg-kde
-  output_dir: /data/$USER/nanopath/main/default
+  recipe_id: dinov2-vits14-reg-jepa-mask10
+  output_dir: /data/$USER/nanopath/main/i-jepa-contiguous-patches
   wandb_dir: /data/$USER/nanopath/wandb
 
 data:
-  # dataset_dir holds the parquet shards (shard-NNNNN.parquet) that train.py reads.
-  # `prepare.py … download=True` populates it from the medarc/nanopath HF mirror.
   dataset_dir: /data/nanopath_parquet
   split_seed: 7777
   val_fraction: 0.05
   mean: [0.485, 0.456, 0.406]
   std: [0.229, 0.224, 0.225]
-  global_crop_scale: [0.2, 1.0]
-  local_crop_scale: [0.03, 0.25]
-  color_jitter: 0.45
-  color_jitter_saturation: 0.4
-  hed_jitter: 0.12
-  tissue_thresh: 0.5 # training rejects tiles unless this fraction of pixels has RGB saturation > 0.07
+  global_crop_scale: [0.4, 1.0]
+  local_crop_scale: [0.08, 0.35]
+  color_jitter: 0.3
+  color_jitter_saturation: 0.25
+  hed_jitter: 0.06
+  tissue_thresh: 0.0
 
 model:
   type: dinov2_vits14_reg
@@ -31,24 +29,23 @@ train:
   num_workers: 16
   prefetch_factor: 2
   persistent_workers: true
-  max_train_samples: 1000000 # tile presentations; global/local crops still count as one sample
-  max_train_flops: 1000000000000000000 # 1.0e18, the leaderboard FLOP budget
-  log_every: 20
+  max_train_samples: 1000000
+  max_train_flops: 1000000000000000000
+  log_every: 100
   save_every: 1000
-  # Validation pass every `eval_every` steps over `val_batches` held-out batches
   eval_every: 200
   val_batches: 16
   global_views: 2
   local_views: 8
   global_size: 224
-  local_size: 98
-  resume: null # optional explicit checkpoint path; null means always start fresh and wipe output_dir
+  local_size: 112
+  resume: null
 
 dino:
   lr: 1.0e-4
   lr_min: 1.0e-6
-  adam_beta2: 0.99
-  warmup_fraction: 0.03
+  adam_beta2: 0.999
+  warmup_fraction: 0.0909
   freeze_last_layer_fraction: 0.0091
   layerwise_decay: 0.7
   patch_embed_lr_mult: 0.2
@@ -58,11 +55,15 @@ dino:
   clip_grad: 3.0
   kde_loss_weight: 0.005
   kde_concentration: 10.0
+  jepa_pred_depth: 4
+  jepa_pred_width: 0
+  jepa_blocks: 4
+  jepa_block_scale: 0.10
 
 probe:
   enabled: true
   model_weights: ema
-  count: 1 # 4 means probing at 25%, 50%, 75%, and 100% of the sample cap. 1 means probing just at the end.
+  count: 1
   datasets:
     - bracs
     - break_his
