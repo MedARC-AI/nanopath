@@ -46,6 +46,17 @@ class LayerScale(nn.Module):
     def forward(self, x): return x * self.gamma
 
 
+_diags = []
+
+def clear_diags():
+    _diags.clear()
+
+def collect_diags():
+    d = _diags.copy()
+    _diags.clear()
+    return d
+
+
 # Attention with single qkv Linear + F.scaled_dot_product_attention (Flash-2 backend on H100 bf16).
 class Attention(nn.Module):
     def __init__(self, dim, heads):
@@ -54,11 +65,18 @@ class Attention(nn.Module):
         self.qkv = nn.Linear(dim, dim * 3, bias=True)
         self.proj = nn.Linear(dim, dim, bias=True)
 
-    def forward(self, x):
+    def forward(self, x, log_diagnostics=False):
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.heads, C // self.heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
         out = F.scaled_dot_product_attention(q, k, v).transpose(1, 2).reshape(B, N, C)
+        if log_diagnostics:
+            _diags.append({
+                "q_norm": float(q.norm(dim=-1).mean().detach()),
+                "k_norm": float(k.norm(dim=-1).mean().detach()),
+                "v_norm": float(v.norm(dim=-1).mean().detach()),
+                "qk_sim_max": float((q @ k.transpose(-2, -1)).amax(dim=-1).mean().detach()),
+            })
         return self.proj(out)
 
 
@@ -93,8 +111,8 @@ class Block(nn.Module):
 
     def _ff(self, x): return self.mlp(x) if isinstance(self.mlp, SwiGLU) else self.mlp.fc2(F.gelu(self.mlp.fc1(x)))
 
-    def forward(self, x):
-        x = x + self.drop_path1(self.ls1(self.attn(self.norm1(x))))
+    def forward(self, x, log_diagnostics=False):
+        x = x + self.drop_path1(self.ls1(self.attn(self.norm1(x), log_diagnostics=log_diagnostics)))
         x = x + self.drop_path2(self.ls2(self._ff(self.norm2(x))))
         return x
 
@@ -150,8 +168,23 @@ class DinoV2ViT(nn.Module):
     # Returns the dict shape Meta's `forward_features` returns; used by train.py and probe.py.
     # `checkpoint=True` re-runs each block under torch.utils.checkpoint to trade compute for memory;
     # useful when the 1-GPU batch of 128 (2 globals + 8 locals) does not fit in 80 GB.
-    def forward(self, x, masks=None, checkpoint=False):
+    def forward(self, x, masks=None, checkpoint=False, log_diagnostics=False):
         x = self._prepare_tokens(x, masks)
+        if log_diagnostics:
+            clear_diags()
+            for blk in self.blocks:
+                x = blk(x, log_diagnostics=True)
+            x = self.norm(x)
+            result = {
+                "x_norm_clstoken": x[:, 0],
+                "x_norm_regtokens": x[:, 1 : 1 + self.registers],
+                "x_norm_patchtokens": x[:, 1 + self.registers :],
+            }
+            result["_diagnostics"] = collect_diags()
+            result["_final_norm_cls"] = float(x[:, 0].norm(dim=-1).mean().detach())
+            result["_final_norm_reg"] = float(x[:, 1 : 1 + self.registers].norm(dim=-1).mean().detach())
+            result["_final_norm_patch"] = float(x[:, 1 + self.registers :].norm(dim=-1).mean().detach())
+            return result
         for blk in self.blocks:
             if checkpoint and self.training:
                 x = torch.utils.checkpoint.checkpoint(blk, x, use_reentrant=False)
@@ -205,3 +238,21 @@ class DINOHead(nn.Module):
         x = self.mlp(x)
         x = F.normalize(x, dim=-1, p=2)
         return self.last_layer(x)
+
+
+# I-JEPA predictor head: regresses EMA-teacher patch representations at masked
+# target blocks from the student's block-masked patch tokens.
+class JEPAPredictor(nn.Module):
+    def __init__(self, dim, depth=4, width=0, heads=6):
+        super().__init__()
+        width = width or dim
+        self.proj_in = nn.Linear(dim, width) if width != dim else nn.Identity()
+        self.blocks = nn.ModuleList(Block(width, heads, 4.0, 0.0) for _ in range(depth))
+        self.norm = nn.LayerNorm(width, eps=1e-6)
+        self.proj = nn.Linear(width, dim, bias=True)
+
+    def forward(self, patch_tokens):
+        x = self.proj_in(patch_tokens)
+        for blk in self.blocks:
+            x = blk(x)
+        return self.proj(self.norm(x))
