@@ -210,13 +210,16 @@ class DINOHead(nn.Module):
 # I-JEPA predictor head: regresses EMA-teacher patch representations at masked
 # target blocks from the student's block-masked patch tokens.
 class JEPAPredictor(nn.Module):
-    def __init__(self, dim):
+    def __init__(self, dim, depth=4, width=0, heads=6):
         super().__init__()
-        self.blocks = nn.ModuleList(Block(dim, 6, 4.0, 0.0) for _ in range(4))
-        self.norm = nn.LayerNorm(dim, eps=1e-6)
-        self.proj = nn.Linear(dim, dim, bias=True)
+        width = width or dim
+        self.proj_in = nn.Linear(dim, width) if width != dim else nn.Identity()
+        self.blocks = nn.ModuleList(Block(width, heads, 4.0, 0.0) for _ in range(depth))
+        self.norm = nn.LayerNorm(width, eps=1e-6)
+        self.proj = nn.Linear(width, dim, bias=True)
 
     def forward(self, patch_tokens):
+        patch_tokens = self.proj_in(patch_tokens)
         for blk in self.blocks:
             patch_tokens = blk(patch_tokens)
         return self.proj(self.norm(patch_tokens))

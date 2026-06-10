@@ -1,5 +1,5 @@
 project:
-  name: main-dinov2
+  name: JEPA-contig-patches
   family: nanopath
   recipe_id: dinov2-vits14-reg-jepa-mask10
   output_dir: /data/$USER/nanopath/main/default
@@ -58,6 +58,10 @@ dino:
   clip_grad: 3.0
   kde_loss_weight: 0.005
   kde_concentration: 10.0
+  jepa_pred_depth: 4
+  jepa_pred_width: 0
+  jepa_blocks: 4
+  jepa_block_scale: 0.10
 
 probe:
   enabled: true
