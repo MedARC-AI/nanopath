@@ -23,7 +23,7 @@ cd "${REPO_DIR}"
 # Worktrees share the venv from the main checkout at /admin/home/$USER/nanopath.
 VENV_DIR="${REPO_DIR}/.venv"
 if [[ ! -f "${VENV_DIR}/bin/activate" ]]; then
-  VENV_DIR="${HOME}/nanopath/.venv"
+  VENV_DIR="${HOME}/nanopath/base-models/nanopath-jepa/.venv"
 fi
 source "${VENV_DIR}/bin/activate"
 mkdir -p slurm
