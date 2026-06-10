@@ -47,6 +47,7 @@ checkpoints/
 *.ckpt
 *.log
 slurm/
+slurms/
 core.*
 
 # Data + run outputs under the repo on off-cluster fresh clones, where

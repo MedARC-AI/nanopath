@@ -20,6 +20,7 @@
 
 import hashlib
 import io
+import random
 from pathlib import Path
 
 import numpy as np
@@ -92,6 +93,7 @@ class TCGATileDataset(Dataset):
     def __init__(self, cfg, is_train=True):
         data = cfg["data"]
         train = cfg["train"]
+        self.tissue_thresh = float(data["tissue_thresh"]) if is_train else 0.0
         dataset_dir = Path(data["dataset_dir"])
         self.shards = sorted(dataset_dir.glob("shard-*.parquet"))
         if not self.shards:
@@ -159,22 +161,30 @@ class TCGATileDataset(Dataset):
 
     # Read one JPEG row, decode, apply augmentations, and return train.py fields.
     def __getitem__(self, idx):
-        shard_idx = int(self.shard_of[idx])
-        row_idx = int(self.row_of[idx])
-        reader = self._readers[shard_idx]
-        if reader is None:
-            reader = pq.ParquetFile(str(self.shards[shard_idx]), memory_map=True)
-            self._readers[shard_idx] = reader
-        # Each shard has uniform-size row groups (PARQUET_ROW_GROUP_SIZE in
-        # prepare.py); reading one group is ~2 MB and ~2-3 ms incl. JPEG decode.
-        rg_size = reader.metadata.row_group(0).num_rows
-        rg_idx = row_idx // rg_size
-        row_in_rg = row_idx % rg_size
-        table = reader.read_row_group(rg_idx, columns=["path", "jpeg"])
-        rel = table["path"][row_in_rg].as_py()
-        jpeg_bytes = table["jpeg"][row_in_rg].as_py()
-        with Image.open(io.BytesIO(jpeg_bytes)) as img:
-            tile = self.to_tensor(img.convert("RGB"))
+        idx = int(idx)
+        for _ in range(9):
+            shard_idx = int(self.shard_of[idx])
+            row_idx = int(self.row_of[idx])
+            reader = self._readers[shard_idx]
+            if reader is None:
+                reader = pq.ParquetFile(str(self.shards[shard_idx]), memory_map=True)
+                self._readers[shard_idx] = reader
+            # Each shard has uniform-size row groups (PARQUET_ROW_GROUP_SIZE in
+            # prepare.py); reading one group is ~2 MB and ~2-3 ms incl. JPEG decode.
+            rg_size = reader.metadata.row_group(0).num_rows
+            rg_idx = row_idx // rg_size
+            row_in_rg = row_idx % rg_size
+            table = reader.read_row_group(rg_idx, columns=["path", "jpeg"])
+            rel = table["path"][row_in_rg].as_py()
+            jpeg_bytes = table["jpeg"][row_in_rg].as_py()
+            with Image.open(io.BytesIO(jpeg_bytes)) as img:
+                tile = self.to_tensor(img.convert("RGB"))
+            if self.tissue_thresh <= 0:
+                break
+            sat = (tile.amax(0) - tile.amin(0)) / (tile.amax(0) + 1e-6)
+            if float((sat > 0.07).float().mean()) >= self.tissue_thresh:
+                break
+            idx = random.randint(0, self.shard_of.shape[0] - 1)
         slide_stem = rel.split("/", 1)[0]
         patient_id = "-".join(slide_stem.split("-")[:3])
         slide_key = int.from_bytes(hashlib.blake2b(slide_stem.encode(), digest_size=8).digest(), "big") & 0x7FFFFFFFFFFFFFFF
