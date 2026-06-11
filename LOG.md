@@ -151,3 +151,11 @@ At ViT-S / 1M tiles, the JEPA leader recipe is at a plateau where metadata guida
 trade probe categories. A real gain needs a different axis (scale, data curation, or the objective itself), not
 metadata. FINO's value here is as a *profile knob* (buy survival/knn at the cost of seg/slide), not a mean lift.
 NOTHING submitted to labless (per standing instruction + it's a null anyway).
+
+## FINAL 4v4 paired (13:41) — locked
+CONTROL (no FINO), seeds {7777,1337,2024,7}: 0.6436, 0.6512, 0.6445, 0.6408 -> mean 0.6450 sd 0.0044
+FINO subtype+expr512 g0.5, same seeds:        0.6482, 0.6510, 0.6450, 0.6456 -> mean 0.6475 sd 0.0027
+**FINO - CONTROL = +0.0024, SE~0.0026, t~0.9, p~0.4 -> NOT SIGNIFICANT; ~4x under the +0.01 bar.**
+Point estimate is a hair positive (and FINO has lower variance), but indistinguishable from zero at n=4 given the
+control's large seed-variance (range 0.0104). Verdict: no reliable improvement. FINO mean 0.6475 ~ leader 0.6471.
+CAMPAIGN CLOSED (past 7h window). Nothing submitted. FINO = a probe-profile knob, not a mean lift, on the JEPA base.
