@@ -216,19 +216,24 @@ class DINOHead(nn.Module):
         return self.last_layer(x)
 
 
-# I-JEPA predictor head: regresses EMA-teacher patch representations at masked
-# target blocks from the student's block-masked patch tokens.
+# I-JEPA predictor head: regresses EMA-teacher patch representations at masked target blocks from the student's
+# block-masked patch tokens. FINO/JEPA-T option: n_cond>0 adds a learned per-class embedding (idx 0 = missing/-1)
+# of a discrete metadata factor to every patch token, so the latent-regression target is metadata-aware
+# (a dense-path alternative to CLS-token steering). n_cond=0 is plain I-JEPA.
 class JEPAPredictor(nn.Module):
-    def __init__(self, dim, depth=4, width=0, heads=6):
+    def __init__(self, dim, depth=4, width=0, heads=6, n_cond=0):
         super().__init__()
         width = width or dim
         self.proj_in = nn.Linear(dim, width) if width != dim else nn.Identity()
+        self.cond_emb = nn.Embedding(n_cond + 1, width) if n_cond else None
         self.blocks = nn.ModuleList(Block(width, heads, 4.0, 0.0) for _ in range(depth))
         self.norm = nn.LayerNorm(width, eps=1e-6)
         self.proj = nn.Linear(width, dim, bias=True)
 
-    def forward(self, patch_tokens):
-        patch_tokens = self.proj_in(patch_tokens)
+    def forward(self, patch_tokens, cond=None):
+        x = self.proj_in(patch_tokens)
+        if self.cond_emb is not None and cond is not None:
+            x = x + self.cond_emb(cond + 1).unsqueeze(1)  # broadcast factor embedding over patches; cond=-1 -> idx 0
         for blk in self.blocks:
-            patch_tokens = blk(patch_tokens)
-        return self.proj(self.norm(patch_tokens))
+            x = blk(x)
+        return self.proj(self.norm(x))
