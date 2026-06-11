@@ -101,3 +101,24 @@ gamma peak confirmed at 0.5; at g0.5 seg loss ~vanishes -> seg no longer the lim
 | W4-cancer | jf_cancer_expr512_g05 | cancer+expr512 g0.5 | organ-level anchor cleaner than 40-class subtype? |
 | W4-til | jf_subexpr_til_g05 | subtype+expr512+til g0.5 | TIL was DINO-era best generalist add (E19) |
 | W4-g05s3 | jf_se_g05_s3 | subtype+expr512 g0.5 seed2024 | 3rd seed -> credible mean for the lead claim |
+
+## Wave 4 RESULTS (11:12) — config space converged
+| id | recipe | score | note |
+|----|--------|------:|------|
+| W4-til | subtype+expr512+til g0.5 | 0.6491 | marginal best of wave (1 seed) |
+| W4-g065 | g0.65 | 0.6470 | confirms gamma peak = 0.5 |
+| W4-g05s3 | g0.5 seed2024 | 0.6450 | 3rd seed of best |
+| W4-cancer | cancer+expr512 g0.5 | 0.6444 | subtype > cancer anchor |
+**Best recipe (subtype+expr512 @ gamma0.5) 3-seed = 0.6481 ± 0.0025 {.6482,.6510,.6450}** — tied w/ leader 0.6471,
++0.0045 vs control 0.6436. Sub-threshold (< +0.01), same ceiling as DINO era. Config tuning tapped out.
+
+## Wave 5 (JEPA-T structural lever) — metadata-condition the JEPA predictor
+Idea (novel in pathology): inject a learned subtype embedding into the JEPAPredictor so the masked-patch
+latent-regression target is metadata-aware — a different mechanism than CLS-steering (which caps at the seg/M+
+tradeoff). model.py JEPAPredictor gets n_cond + cond_emb; train.py passes per-image subtype label (crop-major).
+| id | job | recipe | hypothesis |
+|----|-----|--------|-----------|
+| W5-jt | jepa_t_sub | pure JEPA-T (subtype cond, no CLS M+/M-) | does conditioning the predictor alone help dense/knn? |
+| W5-jtf | jepa_t_fino | JEPA-T cond + CLS-FINO subtype+expr512 g0.5 | both mechanisms stacked |
+| W5-s4 | jf_se_g05_s4 | best recipe, seed 7 | 4th seed -> firm mean |
+| W5-base2 | jepa_base_s2 | control, seed 1337 | control reseed -> honest delta |
