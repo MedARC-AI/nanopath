@@ -122,3 +122,32 @@ tradeoff). model.py JEPAPredictor gets n_cond + cond_emb; train.py passes per-im
 | W5-jtf | jepa_t_fino | JEPA-T cond + CLS-FINO subtype+expr512 g0.5 | both mechanisms stacked |
 | W5-s4 | jf_se_g05_s4 | best recipe, seed 7 | 4th seed -> firm mean |
 | W5-base2 | jepa_base_s2 | control, seed 1337 | control reseed -> honest delta |
+
+## Wave 5 RESULTS (12:30) — NULL: FINO is a wash on JEPA (control reseed exposed it)
+| id | recipe | score | note |
+|----|--------|------:|------|
+| W5-base2 | control seed1337 | **0.6512** | control reseed JUMPS from 0.6436 -> control is high-variance |
+| W5-s4 | FINO subtype+expr512 g0.5 seed7 | 0.6456 | 4th FINO seed |
+| W5-jt | pure JEPA-T (subtype cond) | 0.6435 | = control; conditioning predictor alone does NOTHING |
+| W5-jtf | JEPA-T + CLS-FINO | 0.6414 | WORSE; surv crash 0.547. JEPA-T net-negative |
+
+### Honest conclusion (the headline)
+- **FINO subtype+expr512 @ g0.5:** 4 seeds {0.6482,0.6510,0.6450,0.6456} = **0.6475 ± 0.0026**
+- **JEPA control (no FINO):** 2 seeds {0.6436,0.6512} = **0.6474 ± 0.0038** (4v4 confirmation 82135/82136 running)
+- **=> FINO provides ZERO net lift on the JEPA base.** The earlier "+0.0046" was a single-seed artifact: the
+  first control draw (0.6436) was a low outlier; reseeding it -> 0.6512 collapses the effect. FINO only RESHUFFLES
+  the probe profile (knn +0.02, survival +0.025 / seg -0.005..-0.02, slide -0.006), mean unchanged.
+- **JEPA-T conditioned predictor:** neutral (pure, =control) to negative (stacked). Dead end.
+- Mirrors & strengthens the DINO-era read: on a strong, well-tuned SSL base, metadata guidance is redundant. The
+  single-seed noise floor here (~0.003) is LARGER than the effect; the DINO-era +0.0074 was likely also seed luck.
+
+### What worked / didn't (quantitative)
+- gamma_max sweep is real & monotonic (0.5>1.0>1.5>2.0) — but it's tuning the *shape* of a zero-mean perturbation.
+- subtype > cancer anchor; stacking (morph/fga/til) neutral-to-negative; ramp:run no help.
+- Integration itself is clean & validated (FINO grafts onto JEPA with no interaction bug; smoke + 14 full runs, 0 errors).
+
+### Ceiling read
+At ViT-S / 1M tiles, the JEPA leader recipe is at a plateau where metadata guidance can't move the *mean* — only
+trade probe categories. A real gain needs a different axis (scale, data curation, or the objective itself), not
+metadata. FINO's value here is as a *profile knob* (buy survival/knn at the cost of seg/slide), not a mean lift.
+NOTHING submitted to labless (per standing instruction + it's a null anyway).
