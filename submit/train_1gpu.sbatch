@@ -110,4 +110,6 @@ if [[ "${LABLESS_ELIGIBLE}" == "1" && -z "${LABLESS_AUTOSUBMIT_FILE:-}" ]]; then
   echo "Labless auto-submit is not armed. Run ./submit/train_1gpu.sbatch from the login node to enable the pre-run prompt."
 fi
 
+# Reduce CUDA fragmentation so larger batches fit (suggested by torch OOM message).
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 python train.py "${CONFIG_FILE}" "$@"

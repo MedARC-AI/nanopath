@@ -27,7 +27,7 @@ train:
   seed: 1337
   bf16: true
   activation_checkpointing: false
-  batch_size: 256 # raised 128->256 to fill GPU
+  batch_size: 192 # raised 128->192 to fill GPU (256 OOMs the 80GB H100)
   num_workers: 16
   prefetch_factor: 2
   persistent_workers: true
