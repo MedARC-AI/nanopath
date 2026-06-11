@@ -43,3 +43,23 @@ Results + Wave 2 design pending (~1 hr).
 - if jf_sub_expr512 > jepa_base by >+0.01: push M+ stacking (subtype+expr512+morphology / +fga) + gamma_max sweep.
 - if FINO ~flat on JEPA: gradnorm-match meta (raise gamma_max), OR try the JEPA-T metadata-conditioned predictor.
 - paired cancer-M+/TSS-M- (entanglement-safe suppression) as a separate track once an M+ anchor is confirmed.
+
+## Wave 1 RESULTS (2026-06-11 07:39) — FINO stacks on JEPA
+| id | job | final | Δ vs base | decision |
+|----|-----|------:|----------:|----------|
+| W1-base | jepa_base | 0.6436 | — | control (≈ board I-JEPA-contig 0.6444 ref; mask10 recipe, not the 0.6471 mask25) |
+| W1-se | jf_sub_expr512 | **0.6473** | **+0.0037** | KEEP — best; ≈ live leader 0.6471 |
+| W1-s | jf_sub | 0.6454 | +0.0018 | subtype alone weaker than +expr512 |
+| W1-se-rr | jf_sub_expr512_rr | 0.6453 | +0.0017 | ramp:run no better than flop -> DROP ramp:run |
+
+Components (jf_sub_expr512 vs base): knn +0.022, survival +0.025, fewshot +0.008 (FINO M+ wins) | seg -0.023,
+slide -0.006 (CLS steering hurts dense/local). Net +0.0037 (below +0.01 bar). **Seg loss is the drag.** FINO helps
+LESS on JEPA (+0.0037) than on DINO+iBOT (+0.0074) — JEPA's patch objective already captures some of what FINO adds.
+
+## Wave 2 (launched 07:39, 4-wide) — map gamma_max + anchor stacking on the best recipe
+| id | job | recipe Δ vs jf_sub_expr512 | hypothesis |
+|----|-----|---------------------------|-----------|
+| W2-g05 | jf_se_g05 | gamma_max 1.0->0.5 | gentler guidance preserves seg/slide, keeps some knn/surv -> better net |
+| W2-g15 | jf_se_g15 | gamma_max 1.0->1.5 | stronger (gradnorm-match) -> more M+ gain if seg loss sublinear |
+| W2-g20 | jf_se_g20 | gamma_max 1.0->2.0 | upper bound of the gamma curve |
+| W2-morph | jf_se_morph | + morphology M+ (gamma 1.0) | 2nd-best DINO anchor; does stacking add on JEPA |
