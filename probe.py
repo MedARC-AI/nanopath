@@ -984,7 +984,6 @@ def run_probe_job(request_path):
     std = torch.tensor(cfg["data"]["std"], device=device).view(1, 3, 1, 1)
     transform, patch_transform = worker_probe_transforms(cfg)
 
-    # Keep segmentation sequential: DataLoader workers below fork, so avoid a live CUDA thread.
     seg_results = {}
     def run_segmentation():
         for dataset in segmentation:
