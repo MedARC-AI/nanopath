@@ -159,3 +159,18 @@ FINO subtype+expr512 g0.5, same seeds:        0.6482, 0.6510, 0.6450, 0.6456 -> 
 Point estimate is a hair positive (and FINO has lower variance), but indistinguishable from zero at n=4 given the
 control's large seed-variance (range 0.0104). Verdict: no reliable improvement. FINO mean 0.6475 ~ leader 0.6471.
 CAMPAIGN CLOSED (past 7h window). Nothing submitted. FINO = a probe-profile knob, not a mean lift, on the JEPA base.
+
+## SWEEP (Wave 6+) — broad M+/M- factor exploration (20-config matrix from 4-lens design workflow)
+Extended fino_meta.json: 34 discrete + 22 continuous (curated 33 + 12 dense raw TCGA cols: project_id/race/
+ethnicity/country/year_of_diagnosis + slide_percent_{tumor_nuclei,stromal,necrosis,lymphocyte,normal} +
+cbio_{mutation_count,fraction_genome_altered,msi_score,subtype} + ajcc_stage/t/n/m + tumor_grade + lymph_nodes_pos).
+Reference: jepa control 0.6450 (4-seed), best-so-far jf_se_g05 (=matrix #3) 0.6481 (4-seed). 20 configs ranked by EV;
+running 4-wide, M-suppression + M+morphology (the untested theory-backed levers) first.
+
+## Wave 6 (launched) — one bet per untested regime
+| rank | job | recipe | regime / hypothesis |
+|-----:|-----|--------|---------------------|
+| #1 | jf_supp_scanner_sub_expr_g08 | subtype+ scanner- expr512+, g0.8 | M- scanner suppression (AdvDINO domain-gen) on the proven anchor — THE untested lever |
+| #2 | jf_sub_morph_comp | subtype+ slide_%_tumor_nuclei+, g0.5 | M+ tile-readable morphology (vs latent expr) |
+| #4 | jf_stack_sub_expr512_fga | subtype+ expr512+ fga+, g0.5 | DINO-era's one robust lever: orthogonal histotype+transcriptome+CNV stack |
+| #5 | jf_sub_comp_immune | subtype+ tumor_nuclei+ lymphocyte+, g0.5 | orthogonal morphology stack (composition + immune) |
