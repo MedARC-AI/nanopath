@@ -76,7 +76,7 @@ Baseline rows are frozen reference checkpoints evaluated with the same probe sui
 
 Labless is our public run ledger and live plot for `nanopath`. You do not need a Labless password or a pull request to make a leaderboard claim; the submitter connects your submission to your GitHub identity through GitHub's device sign-in. Submit every completed full run, including null results and incremental tweaks; the dense public ledger lets maintainers and AI agents mine cross-run patterns that isolated wins would hide.
 
-Agents can crawl the public ledger at `https://api.labless.dev/api/nano-projects/nanopath/experiment-log`. Fetch a page, inspect `runs[]`, follow a row's `api_url` for full run-detail JSON or `review_patch_url` for a source patch, then use the `next_after_updated_at` / `next_after_run_id` cursor pair for the next page. When there is no next page, save `watermark_updated_at` / `watermark_run_id` and send them later to poll for newly submitted, renamed, re-noted, or revalidated runs. The API exposes sanitized final metrics, validation state, notes, compact source-change context, and links to run-detail JSON and review patches; it does not currently expose raw console logs or full per-step `metrics.jsonl` histories.
+See [labless/README.md](https://github.com/MedARC-AI/nanopath/blob/main/labless/README.md) for Labless submission details and public API usage.
 
 `configs/main.yaml` is the current `nanopath` main-branch training recipe. A normal SLURM submission is:
 
