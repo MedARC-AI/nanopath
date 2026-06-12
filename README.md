@@ -44,12 +44,13 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
 </a>
 
 `mean_probe_score`, aka `final_probe_score`, is the average of linear, knn, 16-shot, segmentation, progression, mutation, survival, and robustness. These columns summarize a 12-dataset suite derived from [THUNDER](https://mics-lab.github.io/thunder/), [PathoBench](https://github.com/mahmoodlab/patho-bench), and LEOPARD, with modifications to keep single-GPU evaluation lightweight. See [benchmarking/README.md](benchmarking/README.md) for more information.
+On Labless, the run labeled `main` reflects the current GitHub `main` branch, and the run labeled `leader` reflects the GitHub `leader` branch.
 
 ### Nanopath models
 
 | # | Description | final score | linear | knn | 16-shot | segmentation | progression | mutation | survival | robustness | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | [I-JEPA contig patch](https://labless.dev/runs/run_sub_816fc5d0ca) | 0.6444 | 0.7842 | 0.7061 | 0.6383 | 0.2891 | 0.6575 | 0.6162 | 0.5783 | 0.8855 | @NimaAsh |
+| 1 | [I-JEPA contig patch](https://github.com/MedARC-AI/nanopath/tree/leader) | 0.6444 | 0.7842 | 0.7061 | 0.6383 | 0.2891 | 0.6575 | 0.6162 | 0.5783 | 0.8855 | @NimaAsh |
 | 2 | [lr-and-curation](https://labless.dev/runs/run_sub_6c6c051f71) | 0.6357 | 0.7701 | 0.7005 | 0.6120 | 0.3077 | 0.6494 | 0.6084 | 0.5758 | 0.8612 | @nevasini1 |
 | 3 | [dinov2-s-kde](https://labless.dev/runs/run_sub_0d8aeb2511) | 0.6277 | 0.7555 | 0.6839 | 0.5890 | 0.3089 | 0.6418 | 0.5994 | 0.5898 | 0.8531 | @PaulScotti |
 
