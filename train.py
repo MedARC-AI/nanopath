@@ -264,6 +264,9 @@ def main():
     opt = torch.optim.AdamW(param_groups, lr=1.0, betas=(0.9, dino_cfg["adam_beta2"]))
     # FINO prototype banks: one unit vector per discrete-factor value, EMA-updated from teacher CLS in compute_losses.
     protos = {f: F.normalize(torch.randn(fino_meta["n"][f], student_backbone.embed_dim, device=device), dim=-1) for f, _ in fino_disc} if fino_cfg else {}
+    # FINO grad-equalisation EMA bank (one running grad-norm per factor); init 1.0 -> s_t~1 early. Not checkpointed
+    # (mu=0.99 -> ~100-step memory, re-warms quickly on resume). Used only when fino.grad_equalize is set.
+    grad_eq_ema = {f: torch.ones((), device=device) for f, _ in (fino_disc + fino_cont)} if fino_cfg else {}
     step = 0
     batch_size = int(train_cfg["batch_size"])
     max_train_samples = int(train_cfg["max_train_samples"])
@@ -461,23 +464,37 @@ def main():
             gamma, md, mc = meta  # md (B,n_disc) int64 (-1 missing); mc {factor: (B,dim) float, nan missing}
             phi_s = F.normalize(sg["x_norm_clstoken"].float(), dim=-1)
             phi_t = F.normalize(t["x_norm_clstoken"].float(), dim=-1)
+            terms = []  # (factor, per-branch loss 0.03*L_t); combined below, optionally gradient-equalized
             with torch.autocast(device_type="cuda", enabled=False):
                 for j, (f, sign) in enumerate(fino_disc):
                     lab = md[:, j].repeat(train_cfg["global_views"]); ok = lab >= 0  # repeat, NOT interleave
                     if ok.any():
                         logits = (GradScale.apply(phi_s[ok], sign * gamma) @ protos[f].t()) / 0.023
-                        meta_loss = meta_loss + 0.03 * F.cross_entropy(logits, lab[ok])
+                        terms.append((f, 0.03 * F.cross_entropy(logits, lab[ok])))
                         with torch.no_grad():
                             pt, lt = phi_t[ok], lab[ok]
                             upd = torch.zeros_like(protos[f]).index_add_(0, lt, pt)
                             cnt = torch.zeros(protos[f].shape[0], 1, device=device).index_add_(0, lt, torch.ones_like(pt[:, :1]))
                             seen = cnt.squeeze(1) > 0; new = protos[f].clone()
                             new[seen] = F.normalize(0.99 * new[seen] + 0.01 * (upd[seen] / cnt[seen]), dim=-1); protos[f] = new
+                # FINO Eq.3 regresses continuous factors from the RAW backbone CLS; phi_s is L2-normalized (needed only
+                # for the cosine discrete branch and it strips the radial magnitude). raw_cls=True feeds the raw CLS.
+                cls_cont = sg["x_norm_clstoken"].float() if fino_cfg.get("raw_cls") else phi_s
                 for f, sign in fino_cont:
                     val = mc[f].repeat(train_cfg["global_views"], 1); ok = ~torch.isnan(val).any(dim=1)
                     if ok.any():
-                        cpred = predictors[f](GradScale.apply(phi_s[ok], sign * gamma))
-                        meta_loss = meta_loss + 0.03 * F.mse_loss(cpred, val[ok])
+                        cpred = predictors[f](GradScale.apply(cls_cont[ok], sign * gamma))
+                        terms.append((f, 0.03 * F.mse_loss(cpred, val[ok])))
+                # FINO Alg A.3 per-branch gradient equalisation: rescale each branch by n_bar/EMA(||dL_t/dCLS||) so the
+                # discrete-CE and continuous-MSE gradients reach the encoder at matched magnitudes (detached -> reweight
+                # only; geometric-mean target; no-op for <2 branches). grad_eq_ema = per-factor EMA bank (mu=0.99).
+                if fino_cfg.get("grad_equalize") and len(terms) > 1:
+                    g = {f: torch.autograd.grad(L, sg["x_norm_clstoken"], retain_graph=True)[0].norm() for f, L in terms}
+                    for f in g: grad_eq_ema[f] = 0.99 * grad_eq_ema[f] + 0.01 * g[f].detach().float()
+                    nbar = torch.exp(torch.stack([grad_eq_ema[f].log() for f, _ in terms]).mean())
+                    meta_loss = sum((nbar / grad_eq_ema[f]).detach() * L for f, L in terms)
+                else:
+                    for _, L in terms: meta_loss = meta_loss + L
         return local_loss + global_loss, jepa_loss, kde, meta_loss
 
     # Held-out validation pass: same DINO + JEPA + KDE losses on `val_batches` of the val split.
@@ -571,22 +588,28 @@ def main():
                 pending_ids[key].update(int(x) for x in batch[batch_key].tolist())
             global_views, local_views = [batch[key].to(device, non_blocking=True) for key in ("global_views", "local_views")]
             visible_now = batch_size * (train_cfg["global_views"] * global_patches + train_cfg["local_views"] * local_patches)
-            # LR warmup uses the 1M-tile sample cap; decay/WD/teacher/freeze/KDE stay on the public FLOP budget.
+            # LR warmup uses the 1M-tile sample cap; decay/WD/teacher/freeze/KDE default to the public FLOP budget.
+            # But this run hits the sample cap at ~19% of the FLOP budget, so a FLOP-keyed cosine only traverses ~0.11
+            # of its arc (LR never anneals, KDE peaks at 0.22, WD ~0.05). lr_key/reg_key="sample" re-key the decay/reg
+            # schedules to SAMPLE progress so they complete over the actual 1M-tile run (same fix as the FINO gamma ramp).
             frac = min(1.0, train_flops / max_train_flops)
+            sfrac = min(1.0, examples_seen / max_train_samples)
+            lr_frac = sfrac if dino_cfg.get("lr_key") == "sample" else frac
+            reg_frac = sfrac if dino_cfg.get("reg_key") == "sample" else frac
             warmup = min(1.0, examples_seen / max(1, warmup_train_samples))
             if warmup < 1.0:
                 lr = dino_cfg["lr"] * warmup
             else:
-                lr = cosine_schedule(dino_cfg["lr"], dino_cfg["lr_min"], (frac - dino_cfg["warmup_fraction"]) / max(1e-9, 1 - dino_cfg["warmup_fraction"]))
-            wd = cosine_schedule(0.04, 0.2, frac)
-            teacher_temp = 0.04 + min(1.0, frac / 0.2727) * (0.07 - 0.04)
+                lr = cosine_schedule(dino_cfg["lr"], dino_cfg["lr_min"], (lr_frac - dino_cfg["warmup_fraction"]) / max(1e-9, 1 - dino_cfg["warmup_fraction"]))
+            wd = cosine_schedule(0.04, 0.2, reg_frac)
+            teacher_temp = 0.04 + min(1.0, reg_frac / 0.2727) * (0.07 - 0.04)
             last_layer_lr = 0.0 if frac < dino_cfg["freeze_last_layer_fraction"] else lr
             for group in opt.param_groups:
                 base_lr = last_layer_lr if group["last_layer"] else lr
                 group["lr"] = base_lr * group["lr_mult"]
                 group["weight_decay"] = wd * group["wd_mult"]
             masks, mask_idx, mask_w = make_block_mask(batch_size * train_cfg["global_views"], global_grid, device, n_blocks=int(dino_cfg["jepa_blocks"]), block_scale=float(dino_cfg["jepa_block_scale"]))
-            kde_scale = min(1.0, max(0.0, (frac - 0.1) / 0.4))
+            kde_scale = min(1.0, max(0.0, (reg_frac - 0.1) / 0.4))
             # Wrap forward + backward + opt.step in FlopCounterMode on the first step only;
             # subsequent steps reuse measured_flops_per_step (fixed shapes => fixed cost).
             flop_ctx = FlopCounterMode(display=False) if measured_flops_per_step is None else contextlib.nullcontext()
@@ -624,7 +647,7 @@ def main():
                 print(f"{console_prefix()} measured_flops_per_step: {measured_flops_per_step:,}", flush=True)
             step_train_flops = measured_flops_per_step
             with torch.no_grad():
-                m = cosine_schedule(0.994, 1.0, frac)
+                m = cosine_schedule(0.994, 1.0, reg_frac)
                 update_ema(student_backbone, teacher_backbone, m)
                 update_ema(student_dino_head, teacher_dino_head, m)
             step_seconds = time.monotonic() - batch_started_at
