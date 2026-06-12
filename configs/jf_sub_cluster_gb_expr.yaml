@@ -1,8 +1,8 @@
 project:
-  name: jf-sub-cluster-h0
+  name: jf-sub-cluster-gb-expr
   family: nanopath
   recipe_id: dinov2-vits14-reg-jepa-mask10
-  output_dir: /data/hm/nanopath/jepafino/jf_sub_cluster_h0
+  output_dir: /data/hm/nanopath/jepafino/jf_sub_cluster_gb_expr
   wandb_dir: /data/$USER/nanopath/wandb
 data:
   dataset_dir: /data/nanopath_parquet
@@ -108,6 +108,8 @@ fino:
     - 1
   - - cluster
     - 1
-  continuous: []
+  continuous:
+  - - expr512
+    - 1
   tile_npy:
-    cluster: cluster_hoptimus4k.npy
+    cluster: cluster_genbio4k.npy
