@@ -86,7 +86,7 @@ RUN_DIR=$PWD/data/main/my-run
 The pipeline is:
 
 1. Run `./submit/train_1gpu.sbatch ...` or `python train.py ...` to start your training run. For full runs, the launcher asks for a short `run_name`, notes (a description that will accompany your run on labless), and GitHub device sign-in before scheduling the GPU job. Leaving the prompts blank or failing to sign in will lead to skipping labless submission.
-2. Let `train.py` finish the final probe. The run directory will contain `summary.json`, `metrics.jsonl`, and the source snapshot written at launch under `labless_source/`. The submitter writes `labless_submission.json`, checks the run caps and locked benchmark surface, posts to `api.labless.dev`, and shows the run as `pending` until maintainer validation.
+2. Let `train.py` finish the final probe. The run directory will contain `summary.json`, `metrics.jsonl`, and the source snapshot written at launch under `labless_source/`. The submitter writes `labless_submission.json`, checks the run caps and locked benchmark surface, posts to `api.labless.dev`, and shows the run as `unvalidated` until maintainer validation.
 
 Manual submission is still available for direct `python train.py` runs or copied output directories:
 

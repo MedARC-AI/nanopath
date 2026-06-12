@@ -68,7 +68,7 @@ Then point the submit script at the same run directory:
 ```
 
 Completed submissions require both `summary.json` and `metrics.jsonl`. The run
-is shown as `pending` until the organizer validates it. A copied config such as
+is shown as `unvalidated` until the organizer validates it. A copied config such as
 `configs/new_config.yaml` is accepted if the completed `summary.json` reports
 `max_train_samples: 1000000`, `tile_presentations <= 1000000`, and
 `max_train_flops: 1e18`; short local configs are rejected even if they are not named smoke.
@@ -164,7 +164,7 @@ and raw data are not posted.
 
 ## Maintainer validation
 
-New completed full runs appear on the plot as `pending`. A maintainer can
+New completed full runs appear on the plot as `unvalidated`. A maintainer can
 replicate a promising run, then mark it `validated` in labless. The public
 leader label is the highest scoring validated run. Maintainers mark a separate
 `main` state with the full git commit pushed to the project repo, so the submit
