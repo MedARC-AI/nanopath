@@ -32,7 +32,6 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import torch
@@ -985,7 +984,7 @@ def run_probe_job(request_path):
     std = torch.tensor(cfg["data"]["std"], device=device).view(1, 3, 1, 1)
     transform, patch_transform = worker_probe_transforms(cfg)
 
-    # Overlap CPU-heavy classification fitting with segmentation unless a baseline wrapper opts out.
+    # Keep segmentation sequential: DataLoader workers below fork, so avoid a live CUDA thread.
     seg_results = {}
     def run_segmentation():
         for dataset in segmentation:
@@ -997,13 +996,10 @@ def run_probe_job(request_path):
                 f"inline_seg_done: {dataset}  jaccard={seg_results[dataset]['seg_val_jaccard']:.4f}  wall={seg_wall:.2f}s",
                 flush=True,
             )
-    parallel_segmentation = bool(segmentation) and cfg["probe"].get("parallel_segmentation", True)
-    seg_executor = ThreadPoolExecutor(max_workers=1) if parallel_segmentation else None
-    seg_future = seg_executor.submit(run_segmentation) if seg_executor is not None else None
-
     inline_metrics = {}
     for dataset in classification:
         # Thunder-style tile probes share embeddings, then evaluate KNN, SimpleShot, and linear heads.
+        print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_start: {dataset}", flush=True)
         embed_started = time.monotonic()
         train_embs, train_labels = embed_classification_dataset(model, mean, std, dataset, "train", device, transform)
         val_embs, val_labels = embed_classification_dataset(model, mean, std, dataset, "val", device, transform)
@@ -1049,11 +1045,7 @@ def run_probe_job(request_path):
             flush=True,
         )
 
-    if seg_future is not None:
-        # .result() re-raises any exception from the segmentation thread so the probe job fails loudly.
-        seg_future.result()
-        seg_executor.shutdown()
-    elif segmentation:
+    if segmentation:
         run_segmentation()
 
     # Aggregate per-dataset metrics into the result file consumed by train.py.

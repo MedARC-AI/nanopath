@@ -99,7 +99,6 @@ def main():
     cfg["probe"]["count"] = 1
     cfg["probe"]["model_loader"] = "baselines.genbio_pathfm_baseline:load_probe_model"
     cfg["probe"]["transform_policy"] = "resize_crop_224"
-    cfg["probe"]["parallel_segmentation"] = False
 
     if output_dir.exists():
         shutil.rmtree(output_dir)
