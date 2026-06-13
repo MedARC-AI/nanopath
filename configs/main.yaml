@@ -1,8 +1,8 @@
 project:
-  name: dino-fino-s2026
+  name: jepa-fino-s2026
   family: nanopath
   recipe_id: dinov2-vits14-reg-jepa-mask10
-  output_dir: /data/$USER/nanopath/dino-fino/s2026
+  output_dir: /data/$USER/nanopath/jepa-fino/s2026
   wandb_dir: /data/$USER/nanopath/wandb
 data:
   dataset_dir: /data/nanopath_parquet

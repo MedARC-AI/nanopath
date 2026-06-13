@@ -46,7 +46,7 @@ collapse, `expr*` vectors) are not reproduced by the generic path — use raw co
 artifact (omit `csv_dir`).
 
 ## Rebuilding the curated artifact
-`build_fino_meta.py` rebuilds the curated factors used by the dino-fino recipe. The expression path expects either
+`build_fino_meta.py` rebuilds the curated factors used by the jepa-fino recipe. The expression path expects either
 a patient-level target directory with `patient_npy/*.npy`, `dx_slide_to_patient_target.csv`, and
 `gene_ensembl_ids.txt`, or a raw patient-by-gene FPKM-UQ CSV with `patient_id` rows and Ensembl gene columns.
 
@@ -74,5 +74,5 @@ python metadata/build_fino_meta.py \
   out=metadata/fino_meta.rebuilt.json
 ```
 
-The dino-fino run needs `subtype`, `expr512`, and `fga`; those are rebuilt by the commands above. Scanner-derived
+The jepa-fino run needs `subtype`, `expr512`, and `fga`; those are rebuilt by the commands above. Scanner-derived
 fields are emitted only when the raw table includes scanner/appmag/mpp columns.
