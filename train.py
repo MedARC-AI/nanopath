@@ -531,6 +531,41 @@ def main():
     def log_probe_results():
         if probe_state is not None:
             collect_probe_results(probe_state, wandb_run, metrics_path)
+            log_main_outcomes()
+
+    # Logging-only: surface the headline downstream probe scores in a clean
+    # `main-outcomes/` wandb panel (plus per-dataset `main-outcomes-datasets/`)
+    # instead of the flat probe/* keys. Guarded so it can never crash training.
+    def log_main_outcomes():
+        if wandb_run is None or probe_state is None:
+            return
+        try:
+            results = sorted(probe_state["paths"]["results_dir"].glob("step_*.json"))
+            if not results:
+                return
+            result = json.loads(results[-1].read_text())
+            metrics = result["metrics"]
+            train_step = int(result["train_step"])
+            headline = {
+                "main-outcomes/linear": "linear_mean_f1",
+                "main-outcomes/knn": "knn_mean_f1",
+                "main-outcomes/16shot": "fewshot_mean_f1",
+                "main-outcomes/segmentation": "seg_mean_jaccard",
+                "main-outcomes/progression": "slide_mean_auc",
+                "main-outcomes/mutation": "auc_mean",
+                "main-outcomes/survival": "survival_mean_cindex",
+                "main-outcomes/robustness": "robustness_mean",
+                "main-outcomes/mean_score": "mean_probe_score",
+            }
+            mean_keys = set(headline.values())
+            payload = {panel: float(metrics[src]) for panel, src in headline.items() if src in metrics}
+            for key, value in metrics.items():
+                if key.endswith("_score") and key not in mean_keys:
+                    payload[f"main-outcomes-datasets/{key[:-len('_score')]}"] = float(value)
+            if payload:
+                wandb_run.log(payload, step=train_step)
+        except Exception as exc:
+            print(f"{console_prefix()} log_main_outcomes skipped: {exc}", flush=True)
 
     # Queue a probe at `checkpoint_step` for the given sample target; no-op if already done.
     def run_probe_at(checkpoint_step, target_samples):
