@@ -745,6 +745,9 @@ def main():
                     handle.write(json.dumps(val_log) + "\n")
                 wandb_run.log({f"val/{k}": v for k, v in val.items()}, step=completed_step)
                 print(f"{console_prefix()} Validation  [{completed_step}]  total: {val['total']:.4f}  dino: {val['dino']:.4f}  jepa: {val['jepa']:.4f}  kde: {val['kde']:.4f}", flush=True)
+                # Reset rate clocks after validation so the next train log is train-rate only.
+                last_console_step, last_console_monotonic = completed_step, time.monotonic()
+                last_time, last_examples, last_visible_patch_presentations, last_train_flops = time.time(), examples_seen, visible_patch_presentations, train_flops
             step = completed_step
             data_wait_started_at = time.monotonic()
             if train_flops >= max_train_flops or examples_seen + batch_size > max_train_samples:

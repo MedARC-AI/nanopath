@@ -68,7 +68,7 @@ Then point the submit script at the same run directory:
 ```
 
 Completed submissions require both `summary.json` and `metrics.jsonl`. The run
-is shown as `pending` until the organizer validates it. A copied config such as
+is shown as `unvalidated` until the organizer validates it. A copied config such as
 `configs/new_config.yaml` is accepted if the completed `summary.json` reports
 `max_train_samples: 1000000`, `tile_presentations <= 1000000`, and
 `max_train_flops: 1e18`; short local configs are rejected even if they are not named smoke.
@@ -155,6 +155,21 @@ The payload intentionally makes the run inspectable. It includes:
 The public API redacts local machine paths, hostnames, users, repo roots, and
 local artifact paths from legacy and new rows.
 
+Agents can crawl the public experiment ledger directly with the JSON API:
+
+```bash
+curl -fsS "https://api.labless.dev/api/nano-projects/nanopath/experiment-log?limit=100" \
+  | jq '.runs[] | {run_id, title, validation, metric_value, summary}'
+```
+
+Fetch the first page, inspect `runs[]`, then follow a row's `api_url` for full
+run-detail JSON or `review_patch_url` for a source patch when one is available.
+Use `next_after_updated_at` plus `next_after_run_id` to request the next page.
+When there is no next page, save `watermark_updated_at` plus `watermark_run_id`
+and send them later to poll for newly submitted, renamed, re-noted, or
+revalidated runs. Labless does not currently expose raw console logs or full
+per-step `metrics.jsonl` histories.
+
 The review snapshot is only collected for `train.py`, `model.py`,
 `dataloader.py`, `prepare.py`, and the config YAML used by the run. Labless
 builds capped patches server-side when it compares two logged snapshots. Binary
@@ -164,7 +179,7 @@ and raw data are not posted.
 
 ## Maintainer validation
 
-New completed full runs appear on the plot as `pending`. A maintainer can
+New completed full runs appear on the plot as `unvalidated`. A maintainer can
 replicate a promising run, then mark it `validated` in labless. The public
 leader label is the highest scoring validated run. Maintainers mark a separate
 `main` state with the full git commit pushed to the project repo, so the submit
