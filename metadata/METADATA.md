@@ -77,5 +77,6 @@ necrosis/til/stromal and the heavy tail in mutcount are exactly why). Vector fac
 ## Notes
 - **Coverage** = patients with that attribute / 9,389 tile-patients. Low-coverage factors (grade 31%, til 38%,
   subtype 40%) still train fine — absent patients are masked per-branch — but on fewer examples.
-- **`expr*` raw data isn't in the repo** (1.1 GB FPKM-UQ matrices); only the derived vectors live in `fino_meta.json`.
-- Figures regenerated from source CSVs + `fino_meta.json`; the generator is intentionally not shipped (see [README](README.md)).
+- **`expr*` raw matrices are not committed** (multi-GB FPKM-UQ tables); the derived vectors live in
+  `fino_meta.json`, and `build_fino_meta.py` rebuilds them from patient-level FPKM-UQ input.
+- Figures regenerated from source CSVs + `fino_meta.json`.

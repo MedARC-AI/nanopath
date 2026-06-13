@@ -1,52 +1,55 @@
 project:
-  name: JEPA-contig-patches
+  name: jf-i-hed07-s2026
   family: nanopath
   recipe_id: dinov2-vits14-reg-jepa-mask10
-  output_dir: /data/$USER/nanopath/main/default
+  output_dir: /data/$USER/nanopath/validation/jf_i_hed07_s2026
   wandb_dir: /data/$USER/nanopath/wandb
-
 data:
-  # dataset_dir holds the parquet shards (shard-NNNNN.parquet) that train.py reads.
-  # `prepare.py … download=True` populates it from the medarc/nanopath HF mirror.
   dataset_dir: /data/nanopath_parquet
   split_seed: 7777
   val_fraction: 0.05
-  mean: [0.485, 0.456, 0.406]
-  std: [0.229, 0.224, 0.225]
-  global_crop_scale: [0.4, 1.0]
-  local_crop_scale: [0.08, 0.35]
+  mean:
+  - 0.485
+  - 0.456
+  - 0.406
+  std:
+  - 0.229
+  - 0.224
+  - 0.225
+  global_crop_scale:
+  - 0.4
+  - 1.0
+  local_crop_scale:
+  - 0.08
+  - 0.35
   color_jitter: 0.3
   color_jitter_saturation: 0.25
-  hed_jitter: 0.06
-  tissue_thresh: 0.0 # 0 disables tissue rejection; >0 requires this saturated-pixel fraction
-
+  hed_jitter: 0.07
+  tissue_thresh: 0.0
 model:
   type: dinov2_vits14_reg
-
 train:
-  seed: 7777
+  seed: 2026
   bf16: true
   activation_checkpointing: false
   batch_size: 128
   num_workers: 16
   prefetch_factor: 2
   persistent_workers: true
-  max_train_samples: 1000000 # tile presentations; global/local crops still count as one sample
-  max_train_flops: 1000000000000000000 # 1.0e18, the leaderboard FLOP budget
+  max_train_samples: 1000000
+  max_train_flops: 1000000000000000000
   log_every: 20
   save_every: 1000
-  # Validation pass every `eval_every` steps over `val_batches` held-out batches
   eval_every: 200
   val_batches: 16
   global_views: 2
   local_views: 8
   global_size: 224
   local_size: 112
-  resume: null # optional explicit checkpoint path; null means always start fresh and wipe output_dir
-
+  resume: null
 dino:
-  lr: 1.0e-4
-  lr_min: 1.0e-6
+  lr: 0.000125
+  lr_min: 1.0e-06
   adam_beta2: 0.999
   warmup_fraction: 0.0909
   freeze_last_layer_fraction: 0.0091
@@ -61,30 +64,30 @@ dino:
   jepa_pred_depth: 4
   jepa_pred_width: 0
   jepa_blocks: 4
-  jepa_block_scale: 0.10
-
+  jepa_block_scale: 0.1
+  freeze_backbone_fraction: 0.0
 probe:
   enabled: true
   model_weights: ema
-  count: 1 # 4 means probing at 25%, 50%, 75%, and 100% of the sample cap. 1 means probing just at the end.
+  count: 1
   datasets:
-    - bracs
-    - break_his
-    - mhist
-    - pcam
+  - bracs
+  - break_his
+  - mhist
+  - pcam
   segmentation_datasets:
-    - pannuke
-    - monusac
-    - consep
+  - pannuke
+  - monusac
+  - consep
   slide_datasets:
-    - ucla_lung
+  - ucla_lung
   auc_datasets:
-    - surgen
+  - surgen
   survival_datasets:
-    - leopard_bcr
-    - cptac_pda_os
+  - leopard_bcr
+  - cptac_pda_os
   robustness_datasets:
-    - pathorob
+  - pathorob
   dataset_roots:
     bracs: /data/eva-data/bracs
     break_his: /data/eva-data/breakhis
@@ -98,3 +101,14 @@ probe:
     pathorob: /data/pathorob
     surgen: /data/surgen
     ucla_lung: /data/ucla-lung
+fino:
+  enabled: true
+  gamma_max: 0.7
+  discrete:
+  - - subtype
+    - 1
+  continuous:
+  - - expr512
+    - 1
+  - - fga
+    - 1
