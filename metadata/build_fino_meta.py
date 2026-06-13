@@ -156,8 +156,6 @@ def store_vector(meta, name, bcs, z):
 
 
 def add_expr(meta, cfg, df, barcodes):
-    if not cfg["rnaseq_dir"] and not cfg["rnaseq_csv"]:
-        return
     bcs, org, genes, x = load_expression(cfg, df, barcodes)
     x = np.log1p(x)
     keep_rows = np.isfinite(x).all(1)

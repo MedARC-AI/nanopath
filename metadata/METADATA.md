@@ -5,7 +5,7 @@ coverage over the **9,389 TCGA tile-patients**, processing, and an example. Each
 `fino.discrete: [[name, sign]]` or `fino.continuous: [[name, sign]]` — `sign > 0` = **M+** (encourage; embedding
 learns to predict it), `sign < 0` = **M−** (suppress; gradient-reversed). Discrete factors use a prototype-
 contrastive loss over a dense integer id; continuous factors are z-scored and regressed by an MLP. Patients absent
-from a factor's map are masked out of that branch. Which factors actually helped is in [`../ABLATIONS.md`](../ABLATIONS.md).
+from a factor's map are masked out of that branch. The validated dino-fino recipe uses `subtype`, `expr512`, and `fga`.
 
 ## Continuous attributes (regression targets)
 

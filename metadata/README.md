@@ -2,8 +2,8 @@
 
 `fino_meta.json` — the **final processed metadata** for FINO, committed so the repo is self-contained. A fresh
 clone needs nothing else: `prepare.py` copies it next to the tile dataset, and `dataloader.py` / `train.py` read
-it from there. `build_fino_meta.py` is the raw-to-artifact path for rebuilding it from TCGA clinical/cBioPortal
-CSVs plus patient-level RNA-seq.
+it from there. `build_fino_meta.py` rebuilds it from the committed TCGA clinical/cBioPortal CSVs plus a local
+patient-level FPKM-UQ RNA-seq export.
 
 ## Format
 ```
@@ -21,7 +21,8 @@ Discrete: cancer, tss, msi, year, subtype, grade, site, organ, resection, tstage
 section, stageedition, gender, priortx, scanner, appmag, morphology, diseasetype, classif.
 Continuous: necrosis, fga, mutcount, til, age, stromal, mpp, expr, expr512, expr_pca, expr_path.
 
-A config selects which to use as M+/M− via `fino.discrete` / `fino.continuous` (see configs/abl_*.yaml).
+A config selects which to use as M+/M− via `fino.discrete` / `fino.continuous`; `configs/main.yaml` uses
+`subtype`, `expr512`, and `fga`.
 
 ## Evaluating *any* metadata selection (generic builder)
 The shipped `fino_meta.json` is one curated artifact, but FINO is general: `prepare.py:build_fino_meta` turns **any
@@ -45,7 +46,7 @@ collapse, `expr*` vectors) are not reproduced by the generic path — use raw co
 artifact (omit `csv_dir`).
 
 ## Rebuilding the curated artifact
-`build_fino_meta.py` rebuilds the curated factors used by the jepa-fino recipe. The expression path expects either
+`build_fino_meta.py` rebuilds the curated factors used by the dino-fino recipe. The expression path expects either
 a patient-level target directory with `patient_npy/*.npy`, `dx_slide_to_patient_target.csv`, and
 `gene_ensembl_ids.txt`, or a raw patient-by-gene FPKM-UQ CSV with `patient_id` rows and Ensembl gene columns.
 
@@ -63,7 +64,7 @@ each selected gene across patients. `expr` is the top 256 by the same ranking; `
 log-expression. `expr_path` is optional and requires `pathway_mask_csv=... gene_map_csv=...`.
 
 If starting from GDC instead of an existing patient-level target directory, first export TCGA STAR-Counts FPKM-UQ to
-a patient-by-gene CSV with one primary-tumor sample per patient, then run:
+a patient-by-gene CSV with one primary-tumor sample per patient, then run the same artifact builder:
 
 ```bash
 python metadata/build_fino_meta.py \
@@ -73,5 +74,5 @@ python metadata/build_fino_meta.py \
   out=metadata/fino_meta.rebuilt.json
 ```
 
-The jepa-fino run needs `subtype`, `expr512`, and `fga`; those are rebuilt by the commands above. Scanner-derived
+The dino-fino run needs `subtype`, `expr512`, and `fga`; those are rebuilt by the commands above. Scanner-derived
 fields are emitted only when the raw table includes scanner/appmag/mpp columns.
