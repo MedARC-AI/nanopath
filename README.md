@@ -55,8 +55,6 @@ On Labless, the run labeled `main` reflects the current GitHub `main` branch, an
 | 3 | [lr-and-curation](https://labless.dev/runs/run_sub_6c6c051f71) | 0.6357 | 0.7701 | 0.7005 | 0.6120 | 0.3077 | 0.6494 | 0.6084 | 0.5758 | 0.8612 | @nevasini1 |
 | 4 | [dinov2-s-kde](https://labless.dev/runs/run_sub_0d8aeb2511) | 0.6277 | 0.7555 | 0.6839 | 0.5890 | 0.3089 | 0.6418 | 0.5994 | 0.5898 | 0.8531 | @PaulScotti |
 
-`jepa-fino` is a seed-2026 validated retrain of Hassan/ml-and-ml's unvalidated [`jf-hed07`](https://labless.dev/runs/run_sub_3cd4be1e0c) recipe. It is validated but not the Labless leader because its +0.0041 improvement over the current leader is below the 0.006 promotion threshold.
-
 ### Baselines
 
 | # | Name | Description | final score | linear | knn | 16-shot | segmentation | progression | mutation | survival | robustness |
