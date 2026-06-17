@@ -2,8 +2,7 @@
 
 `fino_meta.json` — the **final processed metadata** for FINO, committed so the repo is self-contained. A fresh
 clone needs nothing else: `prepare.py` copies it next to the tile dataset, and `dataloader.py` / `train.py` read
-it from there. `build_fino_meta.py` rebuilds it from the committed TCGA clinical/cBioPortal CSVs plus a local
-patient-level FPKM-UQ RNA-seq export.
+it from there.
 
 ## Format
 ```
@@ -45,34 +44,5 @@ Unknown column names fail loudly. The curated artifact's special encodings (msi 
 collapse, `expr*` vectors) are not reproduced by the generic path — use raw column names there, or the shipped
 artifact (omit `csv_dir`).
 
-## Rebuilding the curated artifact
-`build_fino_meta.py` rebuilds the curated factors used by the jepa-fino recipe. The expression path expects either
-a patient-level target directory with `patient_npy/*.npy`, `dx_slide_to_patient_target.csv`, and
-`gene_ensembl_ids.txt`, or a raw patient-by-gene FPKM-UQ CSV with `patient_id` rows and Ensembl gene columns.
-
-```bash
-python metadata/build_fino_meta.py \
-  dataset_dir=/data/nanopath_parquet \
-  csv_dir=metadata \
-  rnaseq_dir=/data/hassan/tcga-rnaseq/fpkm_uq_nonzero_ge_50pct \
-  out=metadata/fino_meta.rebuilt.json
-```
-
-For `expr512`, the script uses patient-level FPKM-UQ values, applies `log1p`, computes gene variance inside each
-TCGA organ, averages those variances across organs with at least 10 patients, takes the top 512 genes, and z-scores
-each selected gene across patients. `expr` is the top 256 by the same ranking; `expr_pca` is PCA-128 on standardized
-log-expression. `expr_path` is optional and requires `pathway_mask_csv=... gene_map_csv=...`.
-
-If starting from GDC instead of an existing patient-level target directory, first export TCGA STAR-Counts FPKM-UQ to
-a patient-by-gene CSV with one primary-tumor sample per patient, then run the same artifact builder:
-
-```bash
-python metadata/build_fino_meta.py \
-  dataset_dir=/data/nanopath_parquet \
-  csv_dir=metadata \
-  rnaseq_csv=/path/to/tcga_rnaseq_fpkm_uq.csv \
-  out=metadata/fino_meta.rebuilt.json
-```
-
-The jepa-fino run needs `subtype`, `expr512`, and `fga`; those are rebuilt by the commands above. Scanner-derived
-fields are emitted only when the raw table includes scanner/appmag/mpp columns.
+For `expr512`, the committed artifact used patient-level FPKM-UQ values, `log1p`, gene variance inside each TCGA
+organ, the top 512 genes averaged across organs with at least 10 patients, and z-scoring across patients.
