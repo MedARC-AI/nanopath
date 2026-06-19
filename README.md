@@ -44,13 +44,13 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
 </a>
 
 `mean_probe_score`, aka `final_probe_score`, is the average of linear, knn, 16-shot, segmentation, progression, mutation, survival, and robustness. These columns summarize a 12-dataset suite derived from [THUNDER](https://mics-lab.github.io/thunder/), [PathoBench](https://github.com/mahmoodlab/patho-bench), and LEOPARD, with modifications to keep single-GPU evaluation lightweight. See [benchmarking/README.md](benchmarking/README.md) for more information.
-On Labless, the run labeled `main` reflects the current GitHub `main` branch, and the run labeled `leader` reflects the branch listed as #1 in the nanopath models table below. A validated nanopath run must beat the current leader by at least 0.006 to become the new leader.
+On Labless, the run labeled `main` reflects the current GitHub `main` branch, and the run labeled `leader` reflects the branch highest in the nanopath models table below that passed threshold. A validated nanopath run must beat the current leader by at least 0.006 to become the new leader.
 
 ### Nanopath models
 
 | # | Description | final score | linear | knn | 16-shot | segmentation | progression | mutation | survival | robustness | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | [block-strided-cls](https://github.com/MedARC-AI/nanopath/tree/block-strided-cls) | 0.6592 | 0.8126 | 0.7474 | 0.6807 | 0.3310 | 0.6298 | 0.6137 | 0.5666 | 0.8920 | @RyanKim17920, @PaulScotti |
+| 1 | [block-strided-cls](https://github.com/MedARC-AI/nanopath/tree/block-strided-cls) | 0.6592 | 0.8126 | 0.7474 | 0.6807 | 0.3310 | 0.6298 | 0.6137 | 0.5666 | 0.8920 | @RyanKim17920 |
 | 2 | [jepa-fino](https://github.com/MedARC-AI/nanopath/tree/jepa-fino) | 0.6485 | 0.7863 | 0.7251 | 0.6435 | 0.2924 | 0.6590 | 0.6268 | 0.5661 | 0.8886 | @ml-and-ml |
 | 3 | [I-JEPA contig patch](https://github.com/MedARC-AI/nanopath/tree/JEPA-contig-patch) | 0.6444 | 0.7842 | 0.7061 | 0.6383 | 0.2891 | 0.6575 | 0.6162 | 0.5783 | 0.8855 | @NimaAsh |
 | 4 | [lr-and-curation](https://labless.dev/runs/run_sub_6c6c051f71) | 0.6357 | 0.7701 | 0.7005 | 0.6120 | 0.3077 | 0.6494 | 0.6084 | 0.5758 | 0.8612 | @nevasini1 |
@@ -76,7 +76,7 @@ Baseline rows are frozen reference checkpoints evaluated with the same probe sui
 
 ### How to submit to the leaderboard
 
-Labless is our public run ledger and live plot for `nanopath`. You do not need a Labless password or a pull request to make a leaderboard claim; the submitter connects your submission to your GitHub identity through GitHub's device sign-in. Submit every completed full run, including null results and incremental tweaks; the dense public ledger lets maintainers and AI agents mine cross-run patterns that isolated wins would hide.
+Labless is our public run ledger and live plot for `nanopath`. You do not need a Labless password or a pull request to make a leaderboard claim; the submitter connects your submission to your GitHub identity through GitHub's device sign-in. We encourage you to submit *all* completed full runs, including null results and incremental tweaks; a dense public ledger lets you (and AI agents, see our [Agent API](https://labless.dev/docs/agent-api)) mine through everyones runs to uncover new insights.
 
 See [labless/README.md](https://github.com/MedARC-AI/nanopath/blob/main/labless/README.md) for Labless submission details and public API usage.
 
@@ -134,9 +134,8 @@ Intensive preprocessing before model training starts, such as tile extraction, d
 - Public non-tile information is fair game: metadata, clinical/genomic labels, text, ontologies, annotations, or other non-image-tile signals from any public source may be used however you want.
 
 **Probe evaluation must be untouched**
-- All of `probe.py` and `benchmarking/`
+- All of `probe.py` and `benchmarking/` (note this means you *can* modify model.py however you wish!)
 - All probe config variables in `configs/main.yaml`.
-- `model.py` is still part of the submitted model: `probe_features()` may return your chosen frozen feature representation (for example, the last four layers' CLS tokens concatenated for tile-classification probes), as long as `probe.py` itself is unchanged.
 
 **Pretraining must not use pathology-specific pretrained models**
 Non-pathology pretrained models such as DINOv2 may be used for initialization, teachers, data curation, or preprocessing. Pathology-trained checkpoints such as H-optimus-0 or OpenMidnight may not initialize weights or guide training, but they may be used before and separately from training for TCGA-tile curation or preprocessing.
@@ -228,7 +227,7 @@ The checked-in `#SBATCH --partition=n` / `--qos=normal` lines are MedARC-specifi
 
 ## Outputs
 
-The `/data`- and `/block`-rooted defaults below are the MedARC cluster layout; `prepare.py … download=True` rewrites missing or empty data/probe defaults in the selected config plus `configs/{main,smoke}.yaml` to live under `nanopath/data/` instead, and it localizes run outputs/W&B logs there too for those rewritten configs.
+`prepare.py … download=True` rewrites missing or empty data/probe defaults in the selected config plus `configs/{main,smoke}.yaml` to live under `nanopath/data/`, and localizes run outputs/W&B logs there too for those rewritten configs.
 
 - run outputs: `project.output_dir` (MedARC cluster default `/data/$USER/nanopath/main/...`; auto-localized default `nanopath/data/main/...`). Final probe results log to `metrics.jsonl`.
 - wandb: `project.wandb_dir` (cluster default `/data/$USER/nanopath/wandb`; auto-localized default `nanopath/data/wandb`).
