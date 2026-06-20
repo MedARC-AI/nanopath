@@ -34,6 +34,9 @@ train:
   max_train_samples: 1000000 # tile presentations; global/local crops still count as one sample
   max_train_flops: 1000000000000000000 # 1.0e18, the leaderboard FLOP budget
   log_every: 20
+  # 0 = off. When > 0, every Nth log step runs an extra diagnostic forward pass that records
+  # per-layer attention q/k/v norms, qk similarity, and token norms under the wandb diag/* panel.
+  log_diagnostics_every: 0
   save_every: 1000
   # Validation pass every `eval_every` steps over `val_batches` held-out batches
   eval_every: 200

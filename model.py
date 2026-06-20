@@ -46,6 +46,14 @@ class LayerScale(nn.Module):
     def forward(self, x): return x * self.gamma
 
 
+# Module-level list for per-layer attention diagnostics; populated during log_diagnostics forward passes.
+_diags = []
+
+def clear_diags(): _diags.clear()
+def collect_diags():
+    d = _diags.copy(); _diags.clear(); return d
+
+
 # Attention with single qkv Linear + F.scaled_dot_product_attention (Flash-2 backend on H100 bf16).
 class Attention(nn.Module):
     def __init__(self, dim, heads):
@@ -54,11 +62,18 @@ class Attention(nn.Module):
         self.qkv = nn.Linear(dim, dim * 3, bias=True)
         self.proj = nn.Linear(dim, dim, bias=True)
 
-    def forward(self, x):
+    def forward(self, x, log_diagnostics=False):
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.heads, C // self.heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
         out = F.scaled_dot_product_attention(q, k, v).transpose(1, 2).reshape(B, N, C)
+        if log_diagnostics:
+            _diags.append({
+                "q_norm": float(q.norm(dim=-1).mean().detach()),
+                "k_norm": float(k.norm(dim=-1).mean().detach()),
+                "v_norm": float(v.norm(dim=-1).mean().detach()),
+                "qk_sim_max": float((q @ k.transpose(-2, -1)).amax(dim=-1).mean().detach()),
+            })
         return self.proj(out)
 
 
@@ -93,8 +108,8 @@ class Block(nn.Module):
 
     def _ff(self, x): return self.mlp(x) if isinstance(self.mlp, SwiGLU) else self.mlp.fc2(F.gelu(self.mlp.fc1(x)))
 
-    def forward(self, x):
-        x = x + self.drop_path1(self.ls1(self.attn(self.norm1(x))))
+    def forward(self, x, log_diagnostics=False):
+        x = x + self.drop_path1(self.ls1(self.attn(self.norm1(x), log_diagnostics=log_diagnostics)))
         x = x + self.drop_path2(self.ls2(self._ff(self.norm2(x))))
         return x
 
@@ -150,8 +165,41 @@ class DinoV2ViT(nn.Module):
     # Returns the dict shape Meta's `forward_features` returns; used by train.py and probe.py.
     # `checkpoint=True` re-runs each block under torch.utils.checkpoint to trade compute for memory;
     # useful when the 1-GPU batch of 128 (2 globals + 8 locals) does not fit in 80 GB.
-    def forward(self, x, masks=None, checkpoint=False):
+    def forward(self, x, masks=None, checkpoint=False, log_diagnostics=False):
         x = self._prepare_tokens(x, masks)
+        if log_diagnostics:
+            clear_diags()
+            _token_norms = []
+            for blk in self.blocks:
+                # Honor activation checkpointing exactly like the normal path below so a diagnostic
+                # step keeps the same memory/compute profile. The backward recompute re-appends to
+                # _diags, but collect_diags() below already captured the forward-pass values and the
+                # next clear_diags() at the top of this branch discards the stale recompute entries.
+                if checkpoint and self.training:
+                    x = torch.utils.checkpoint.checkpoint(blk, x, use_reentrant=False, log_diagnostics=True)
+                else:
+                    x = blk(x, log_diagnostics=True)
+                r = self.registers
+                _token_norms.append({
+                    "cls_norm":   float(x[:, 0].norm(dim=-1).mean().detach()),
+                    "reg_norm":   float(x[:, 1:1 + r].norm(dim=-1).mean().detach()) if r > 0 else 0.0,
+                    "patch_norm": float(x[:, 1 + r:].norm(dim=-1).mean().detach()),
+                })
+            x = self.norm(x)
+            result = {
+                "x_norm_clstoken": x[:, 0],
+                "x_norm_regtokens": x[:, 1 : 1 + self.registers],
+                "x_norm_patchtokens": x[:, 1 + self.registers :],
+            }
+            _layers = collect_diags()
+            for i, tn in enumerate(_token_norms):
+                if i < len(_layers):
+                    _layers[i].update(tn)
+            result["_diagnostics"] = _layers
+            result["_final_norm_cls"] = float(x[:, 0].norm(dim=-1).mean().detach())
+            result["_final_norm_reg"] = float(x[:, 1 : 1 + self.registers].norm(dim=-1).mean().detach())
+            result["_final_norm_patch"] = float(x[:, 1 + self.registers :].norm(dim=-1).mean().detach())
+            return result
         for blk in self.blocks:
             if checkpoint and self.training:
                 x = torch.utils.checkpoint.checkpoint(blk, x, use_reentrant=False)
