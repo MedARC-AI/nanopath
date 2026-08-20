@@ -151,6 +151,7 @@ def main() -> int:
             github_token, github_login = github_sign_in(api_url)
     baseline_commands = {
         "dinov2-vits14-reg-no-continued-pretraining": "python baselines/dinov2_small_baseline.py configs/main.yaml",
+        "dinov2-vitl14-reg-no-continued-pretraining": "python baselines/dinov2_large_baseline.py configs/main.yaml",
         "dinov2-vitg14-reg-no-continued-pretraining": "python baselines/dinov2_giant_baseline.py configs/main.yaml",
         "genbio-pathfm-vitg16-rope-untouched": "python baselines/genbio_pathfm_baseline.py configs/main.yaml",
     }

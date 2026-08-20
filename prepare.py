@@ -940,7 +940,7 @@ def main():
         raise SystemExit("\n".join(lines))
 
     # Stage 3 — Meta's pretrained weights for the model variant in cfg
-    # (dinov2_vits14_reg ~84 MB, dinov2_vitb14_reg ~330 MB, giant ~4 GB) live in
+    # (small ~84 MB, base ~330 MB, large ~1.2 GB, giant ~4 GB) live in
     # ~/.cache/torch/hub/checkpoints. model.py:load_dinov2_pretrained streams
     # them on the first forward pass, but pulling them at prep time means
     # train.py never blocks on the network.

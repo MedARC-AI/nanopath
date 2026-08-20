@@ -69,9 +69,10 @@ On Labless, the run labeled `main` reflects the current GitHub `main` branch, an
 | 6 | GigaPath | Prov-GigaPath tile encoder ViT-G/16 | 0.6456 | 0.7977 | 0.7149 | 0.6537 | 0.3304 | 0.7041 | 0.6262 | 0.5932 | 0.7448 |
 | 7 | Midnight-12K | Kaiko Midnight-12K ViT-G/14 | 0.6204 | 0.7684 | 0.6807 | 0.5758 | 0.2722 | 0.6840 | 0.6087 | 0.5907 | 0.7823 |
 | 8 | DINOv2-giant | Untouched Meta `dinov2_vitg14_reg` | 0.6196 | 0.7689 | 0.7208 | 0.5834 | 0.2826 | 0.6000 | 0.6174 | 0.5849 | 0.7985 |
-| 9 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.6114 | 0.7926 | 0.7135 | 0.4335 | 0.3087 | 0.6993 | 0.6091 | 0.5907 | 0.7438 |
-| 10 | DINOv2-small | Untouched Meta `dinov2_vits14_reg` | 0.5841 | 0.6968 | 0.6249 | 0.5834 | 0.2704 | 0.5827 | 0.6225 | 0.5374 | 0.7543 |
-| 11 | DINOv2-small random | Randomized weights `dinov2_vits14_reg` | 0.4703 | 0.5255 | 0.5066 | 0.4139 | 0.2701 | 0.6922 | 0.5648 | 0.5984 | 0.1905 |
+| 9 | DINOv2-large | Untouched Meta `dinov2_vitl14_reg` | 0.6122 | 0.7458 | 0.7104 | 0.5868 | 0.2755 | 0.6301 | 0.6063 | 0.5608 | 0.7816 |
+| 10 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.6114 | 0.7926 | 0.7135 | 0.4335 | 0.3087 | 0.6993 | 0.6091 | 0.5907 | 0.7438 |
+| 11 | DINOv2-small | Untouched Meta `dinov2_vits14_reg` | 0.5841 | 0.6968 | 0.6249 | 0.5834 | 0.2704 | 0.5827 | 0.6225 | 0.5374 | 0.7543 |
+| 12 | DINOv2-small random | Randomized weights `dinov2_vits14_reg` | 0.4703 | 0.5255 | 0.5066 | 0.4139 | 0.2701 | 0.6922 | 0.5648 | 0.5984 | 0.1905 |
 
 Baseline rows are frozen reference checkpoints evaluated with the same probe suite. They help calibrate the plot, but pathology-specific baselines are not valid initialization points for nanopath leaderboard submissions. The reference scripts live in `baselines/`.
 

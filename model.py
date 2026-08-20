@@ -1,4 +1,4 @@
-# DinoV2ViT: clean ViT + 4 register tokens that loads Meta's `dinov2_vit{s,b,g}14_reg`
+# DinoV2ViT: clean ViT + 4 register tokens that loads Meta's `dinov2_vit{s,b,l,g}14_reg`
 # pretrained weights via state_dict (no xformers, no dinov2 codebase imports).
 # Attention runs on `F.scaled_dot_product_attention` so we get FlashAttention-2
 # on H100 bf16 with no third-party kernel dependency. Module names below match
@@ -19,6 +19,7 @@ from torchvision import transforms
 DINOV2_VARIANTS = {
     "dinov2_vits14_reg": (384, 12, 6, 37, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vits14/dinov2_vits14_reg4_pretrain.pth"),
     "dinov2_vitb14_reg": (768, 12, 12, 37, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitb14/dinov2_vitb14_reg4_pretrain.pth"),
+    "dinov2_vitl14_reg": (1024, 24, 16, 37, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitl14/dinov2_vitl14_reg4_pretrain.pth"),
     "dinov2_vitg14_reg": (1536, 40, 24, 37, "swiglu", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitg14/dinov2_vitg14_reg4_pretrain.pth"),
 }
 
@@ -99,7 +100,7 @@ class Block(nn.Module):
         return x
 
 
-# ViT-S/B-14 with 4 register tokens; key layout matches Meta's DINOv2 register checkpoints
+# ViT-S/B/L/G-14 with 4 register tokens; key layout matches Meta's DINOv2 register checkpoints
 # (cls_token, register_tokens, pos_embed (1, 1+37^2, dim), mask_token (1, dim), patch_embed.proj,
 # blocks.{i}.{norm1,norm2,attn.qkv,attn.proj,ls1,ls2,mlp.fc1,mlp.fc2}, norm).
 # Pos embed is bicubically interpolated at runtime to the current patch grid.
