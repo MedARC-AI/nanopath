@@ -1,8 +1,8 @@
 project:
-  name: ryan-validation-s12
+  name: robust-norm-s9876
   family: nanopath
   recipe_id: dinov2-vits14-reg-jepa-mask10
-  output_dir: /data/$USER/nanopath/ryan-validation/s12
+  output_dir: /data/$USER/nanopath/robust-norm/s9876
   wandb_dir: /data/$USER/nanopath/wandb
 data:
   dataset_dir: /data/nanopath_parquet
@@ -29,7 +29,8 @@ data:
 model:
   type: dinov2_vits14_reg
 train:
-  seed: 12
+  robust_norm: true
+  seed: 9876
   bf16: true
   activation_checkpointing: false
   batch_size: 128
@@ -43,9 +44,9 @@ train:
   eval_every: 200
   val_batches: 16
   global_views: 2
-  local_views: 8
+  local_views: 14
   global_size: 224
-  local_size: 112
+  local_size: 128
   resume: null
 dino:
   lr: 0.000125
@@ -59,7 +60,7 @@ dino:
   head_hidden_dim: 2048
   head_bottleneck_dim: 384
   clip_grad: 3.0
-  kde_loss_weight: 0.005
+  kde_loss_weight: 0.1
   kde_concentration: 10.0
   jepa_pred_depth: 4
   jepa_pred_width: 0

@@ -9,6 +9,7 @@
 import atexit
 import contextlib
 import fnmatch
+import io
 import json
 import math
 import os
@@ -21,13 +22,17 @@ from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
+import pyarrow.parquet as pq
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import wandb
 import yaml
+from PIL import Image
 from torch.utils.data import DataLoader
 from torch.utils.flop_counter import FlopCounterMode
+from torchvision import transforms
+from torchvision.transforms import functional as TF
 
 from dataloader import TCGATileDataset, TILE_SIZE
 from model import DINOHead, DinoV2ViT, GradScale, JEPAPredictor, load_dinov2_pretrained
@@ -270,6 +275,8 @@ def main():
     step = 0
     batch_size = int(train_cfg["batch_size"])
     max_train_samples = int(train_cfg["max_train_samples"])
+    robust_norm_tiles = 6144 if train_cfg.get("robust_norm") else 0
+    train_sample_budget = max_train_samples - robust_norm_tiles
     examples_seen = 0
     visible_patch_presentations = 0
     train_flops = 0
@@ -572,9 +579,9 @@ def main():
     # 1e18 leaderboard cap reflects real GPU work.
     measured_flops_per_step = None
 
-    while examples_seen + batch_size <= max_train_samples and train_flops < max_train_flops:
+    while examples_seen + batch_size <= train_sample_budget and train_flops < max_train_flops:
         for batch in train_loader:
-            if examples_seen + batch_size > max_train_samples or train_flops >= max_train_flops:
+            if examples_seen + batch_size > train_sample_budget or train_flops >= max_train_flops:
                 break
             batch_started_at = time.monotonic()
             data_seconds = batch_started_at - data_wait_started_at
@@ -678,7 +685,7 @@ def main():
                 console_gap_ms = 1000.0 * (console_now - last_console_monotonic)
                 steps_since_console = max(1, completed_step - last_console_step)
                 flop_steps_remaining = math.ceil(max(0, max_train_flops - train_flops) / max(1, step_train_flops))
-                sample_steps_remaining = max(0, max_train_samples - examples_seen) // batch_size
+                sample_steps_remaining = max(0, train_sample_budget - examples_seen) // batch_size
                 steps_remaining = min(flop_steps_remaining, sample_steps_remaining)
                 total_steps_estimate = completed_step + steps_remaining
                 eta_seconds = int(max(0.0, steps_remaining * console_gap_ms / 1000.0 / steps_since_console))
@@ -738,7 +745,7 @@ def main():
             # Probe at intermediate sample milestones (probe.count > 1); the final probe
             # always runs after the loop exits, regardless of milestones.
             maybe_run_probe(completed_step)
-            if completed_step % int(train_cfg["eval_every"]) == 0 or train_flops >= max_train_flops or examples_seen + batch_size > max_train_samples:
+            if completed_step % int(train_cfg["eval_every"]) == 0 or train_flops >= max_train_flops or examples_seen + batch_size > train_sample_budget:
                 val = evaluate(completed_step, teacher_temp, kde_scale)
                 val_log = {"step": completed_step, **{f"val_{k}": v for k, v in val.items()}}
                 with metrics_path.open("a") as handle:
@@ -750,7 +757,7 @@ def main():
                 last_time, last_examples, last_visible_patch_presentations, last_train_flops = time.time(), examples_seen, visible_patch_presentations, train_flops
             step = completed_step
             data_wait_started_at = time.monotonic()
-            if train_flops >= max_train_flops or examples_seen + batch_size > max_train_samples:
+            if train_flops >= max_train_flops or examples_seen + batch_size > train_sample_budget:
                 break
     train_loop_wall_seconds = time.monotonic() - train_loop_started_at
     stop_reason = "max_train_flops" if train_flops >= max_train_flops else "max_train_samples"
@@ -763,6 +770,50 @@ def main():
                 train_loader._iterator = None
         # Probes get their own short-lived checkpoint via run_probe_at; only persist latest.pt
         # at end-of-run when periodic saving is on (save_every set) so smoke runs leave nothing.
+        if robust_norm_tiles:
+            # Fit scanner-response directions after optimization so training is unchanged.
+            started = time.monotonic()
+            data_dir = Path(cfg["data"]["dataset_dir"])
+            jpegs = [jpeg for shard in range(128) for jpeg in pq.ParquetFile(data_dir / f"shard-{shard:05d}.parquet").read_row_group(0, columns=["jpeg"])["jpeg"].to_pylist()[:48]]
+            assert len(jpegs) == robust_norm_tiles
+            resize = transforms.Compose([transforms.Resize((224, 224), antialias=True), transforms.ToTensor()])
+            mean = torch.tensor(cfg["data"]["mean"], device=device).view(1, 3, 1, 1)
+            std = torch.tensor(cfg["data"]["std"], device=device).view(1, 3, 1, 1)
+            generator = torch.Generator().manual_seed(555)
+            gamma = torch.empty(robust_norm_tiles, 3, 1, 1).uniform_(0.8, 1.25, generator=generator)
+            gain = torch.empty_like(gamma).uniform_(0.85, 1.18, generator=generator)
+            huesat = torch.empty(robust_norm_tiles, 2).uniform_(0, 1, generator=generator)
+
+            @torch.no_grad()
+            def robust_features(images):
+                with autocast:
+                    x, taps = teacher_backbone._prepare_tokens((images.to(device) - mean) / std), []
+                    for i, block in enumerate(teacher_backbone.blocks):
+                        x = block(x)
+                        if i in (2, 4, 6, 8, 11):
+                            taps.append(teacher_backbone.norm(x)[:, 0])
+                    x = teacher_backbone.norm(x)
+                return torch.stack([x[:, 0], x[:, 1 + teacher_backbone.registers :].mean(1), *taps], 1).float().cpu()
+
+            bases, deltas = [], []
+            for start in range(0, robust_norm_tiles, batch_size):
+                base = torch.stack([resize(Image.open(io.BytesIO(jpeg)).convert("RGB")) for jpeg in jpegs[start : start + batch_size]])
+                base_features = robust_features(base)
+                views = (
+                    base.clamp_min(1e-6) ** gamma[start : start + batch_size],
+                    (base * gain[start : start + batch_size]).clamp(0, 1),
+                    torch.stack([TF.adjust_saturation(TF.adjust_hue(tile, float((hs[0] - 0.5) * 0.1)), float(0.7 + hs[1] * 0.7)) for tile, hs in zip(base, huesat[start : start + batch_size])]),
+                )
+                bases.append(base_features)
+                deltas.extend(robust_features(view) - base_features for view in views)
+            base_features, delta_features = torch.cat(bases), torch.cat(deltas)
+            centered = delta_features - delta_features.mean(0)
+            directions = torch.linalg.svd(centered.movedim(1, 0).to(device), full_matrices=False)[2]
+            for model in (student_backbone, teacher_backbone):
+                model.rn_mu.copy_(base_features.mean(0)[:2]); model.rn_v.copy_(directions[:2, :32])
+                model.pf_mu.copy_(base_features.mean(0)[2:]); model.pf_v.copy_(directions[2:, :1])
+                model.rn_fitted.fill_(True); model.pf_fitted.fill_(True)
+            print(f"{console_prefix()} RobustNorm  [{step}]  fitted rank 32 + per-tap rank 1 from {len(jpegs)} tiles in {time.monotonic() - started:.0f}s", flush=True)
         if save_checkpoints and step != last_saved_step:
             save_latest_checkpoint(step)
         run_probe_at(step, examples_seen)

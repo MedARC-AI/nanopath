@@ -131,6 +131,13 @@ class DinoV2ViT(nn.Module):
         rates = [drop_path_rate * i / max(1, depth - 1) for i in range(depth)]
         self.blocks = nn.ModuleList(Block(dim, heads, mlp_ratio, p, ffn=ffn) for p in rates)
         self.norm = nn.LayerNorm(dim, eps=1e-6)
+        # Post-training scanner directions are checkpointed like normalization statistics.
+        self.register_buffer("rn_fitted", torch.zeros((), dtype=torch.bool))
+        self.register_buffer("rn_mu", torch.zeros(2, dim))
+        self.register_buffer("rn_v", torch.zeros(2, 32, dim))
+        self.register_buffer("pf_fitted", torch.zeros((), dtype=torch.bool))
+        self.register_buffer("pf_mu", torch.zeros(5, dim))
+        self.register_buffer("pf_v", torch.zeros(5, 1, dim))
 
     # Bicubic resample of the checkpoint patch-pos grid to the current (h, w) grid.
     def _interpolate_pos_embed(self, h, w):
@@ -159,6 +166,10 @@ class DinoV2ViT(nn.Module):
     # Returns the dict shape Meta's `forward_features` returns; used by train.py and probe.py.
     # `checkpoint=True` re-runs each block under torch.utils.checkpoint to trade compute for memory;
     # useful when the 1-GPU batch of 128 (2 globals + 8 locals) does not fit in 80 GB.
+    def _suppress(self, x, mu, v):
+        centered = x.float() - mu
+        return (centered - (centered @ v.T) @ v + mu).to(x.dtype)
+
     def forward(self, x, masks=None, checkpoint=False):
         x = self._prepare_tokens(x, masks)
         for blk in self.blocks:
@@ -167,10 +178,15 @@ class DinoV2ViT(nn.Module):
             else:
                 x = blk(x)
         x = self.norm(x)
+        cls, patches = x[:, 0], x[:, 1 + self.registers :]
+        if not self.training and self.rn_fitted:
+            cls = self._suppress(cls, self.rn_mu[0], self.rn_v[0])
+            patch_mean = patches.mean(1)
+            patches = patches + (self._suppress(patch_mean, self.rn_mu[1], self.rn_v[1]) - patch_mean).unsqueeze(1)
         return {
-            "x_norm_clstoken": x[:, 0],
+            "x_norm_clstoken": cls,
             "x_norm_regtokens": x[:, 1 : 1 + self.registers],
-            "x_norm_patchtokens": x[:, 1 + self.registers :],
+            "x_norm_patchtokens": patches,
         }
 
     # Probe readouts fuse intermediate normalized tokens: denser patch detail for seg,
@@ -199,8 +215,10 @@ class DinoV2ViT(nn.Module):
         xt, feats = self._prepare_tokens(x), []
         for i, blk in enumerate(self.blocks):
             xt = blk(xt)
-            if i in (4, 6, 8, 11):
-                feats.append(self.norm(xt)[:, 0])
+            if i in (2, 4, 6, 8, 11):
+                f = self.norm(xt)[:, 0]
+                j = len(feats)
+                feats.append(self._suppress(f, self.pf_mu[j], self.pf_v[j]) if not self.training and self.pf_fitted else f)
         return torch.cat(feats, dim=-1)
 
 
@@ -209,7 +227,8 @@ class DinoV2ViT(nn.Module):
 def load_dinov2_pretrained(model):
     *_, url = DINOV2_VARIANTS[model.variant]
     state = torch.hub.load_state_dict_from_url(url, progress=False, map_location="cpu")
-    model.load_state_dict(state, strict=True)
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    assert not unexpected and all(k.startswith(("rn_", "pf_")) for k in missing), (missing, unexpected)
     return model
 
 
