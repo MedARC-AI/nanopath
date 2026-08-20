@@ -50,11 +50,12 @@ On Labless, the run labeled `main` reflects the current GitHub `main` branch, an
 
 | # | Description | final score | linear | knn | 16-shot | segmentation | progression | mutation | survival | robustness | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | [block-strided-cls](https://github.com/MedARC-AI/nanopath/tree/block-strided-cls) | 0.6592 | 0.8126 | 0.7474 | 0.6807 | 0.3310 | 0.6298 | 0.6137 | 0.5666 | 0.8920 | @RyanKim17920 |
-| 2 | [jepa-fino](https://github.com/MedARC-AI/nanopath/tree/jepa-fino) | 0.6485 | 0.7863 | 0.7251 | 0.6435 | 0.2924 | 0.6590 | 0.6268 | 0.5661 | 0.8886 | @ml-and-ml |
-| 3 | [I-JEPA contig patch](https://github.com/MedARC-AI/nanopath/tree/JEPA-contig-patch) | 0.6444 | 0.7842 | 0.7061 | 0.6383 | 0.2891 | 0.6575 | 0.6162 | 0.5783 | 0.8855 | @NimaAsh |
-| 4 | [lr-and-curation](https://labless.dev/runs/run_sub_6c6c051f71) | 0.6357 | 0.7701 | 0.7005 | 0.6120 | 0.3077 | 0.6494 | 0.6084 | 0.5758 | 0.8612 | @nevasini1 |
-| 5 | [dinov2-s-kde](https://labless.dev/runs/run_sub_0d8aeb2511) | 0.6277 | 0.7555 | 0.6839 | 0.5890 | 0.3089 | 0.6418 | 0.5994 | 0.5898 | 0.8531 | @PaulScotti |
+| 1 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm) | 0.6676 | 0.7917 | 0.7399 | 0.6944 | 0.3354 | 0.6949 | 0.6013 | 0.5730 | 0.9100 | @anishdulal |
+| 2 | [block-strided-cls](https://github.com/MedARC-AI/nanopath/tree/block-strided-cls) | 0.6592 | 0.8126 | 0.7474 | 0.6807 | 0.3310 | 0.6298 | 0.6137 | 0.5666 | 0.8920 | @RyanKim17920 |
+| 3 | [jepa-fino](https://github.com/MedARC-AI/nanopath/tree/jepa-fino) | 0.6485 | 0.7863 | 0.7251 | 0.6435 | 0.2924 | 0.6590 | 0.6268 | 0.5661 | 0.8886 | @ml-and-ml |
+| 4 | [I-JEPA contig patch](https://github.com/MedARC-AI/nanopath/tree/JEPA-contig-patch) | 0.6444 | 0.7842 | 0.7061 | 0.6383 | 0.2891 | 0.6575 | 0.6162 | 0.5783 | 0.8855 | @NimaAsh |
+| 5 | [lr-and-curation](https://labless.dev/runs/run_sub_6c6c051f71) | 0.6357 | 0.7701 | 0.7005 | 0.6120 | 0.3077 | 0.6494 | 0.6084 | 0.5758 | 0.8612 | @nevasini1 |
+| 6 | [dinov2-s-kde](https://labless.dev/runs/run_sub_0d8aeb2511) | 0.6277 | 0.7555 | 0.6839 | 0.5890 | 0.3089 | 0.6418 | 0.5994 | 0.5898 | 0.8531 | @PaulScotti |
 
 ### Baselines
 
