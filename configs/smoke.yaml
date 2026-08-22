@@ -34,6 +34,7 @@ train:
   max_train_samples: 1000000 # full-run sample cap; smoke normally reaches max_train_flops first
   max_train_flops: 5000000000000000 # 5.0e15 — short enough to finish in a few minutes
   log_every: 5
+  log_diagnostics_every: 0 # 0 = off; see configs/main.yaml for what the diag/* panel records
   # Smoke leaves no persistent checkpoints; final probes still use a temporary checkpoint.
   save_every: null
   eval_every: 50

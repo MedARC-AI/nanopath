@@ -294,6 +294,10 @@ def main():
         wandb_init["id"] = wandb_meta["id"]
         wandb_init["resume"] = "must"
     wandb_run = wandb.init(**wandb_init)
+    # Headline losses are additionally mirrored into a clean main-train-results/ glance panel
+    # (train + val losses together). The stable train/*/val/* keys are kept untouched so cross-run
+    # history still works; main-train-results/* is an additive copy, not a rename.
+    headline_losses = {"dino", "ibot", "kde", "total", "grad_norm", "lr"}
     for key in ("probe/target_flops", "probe/wall_seconds"):
         wandb_run.define_metric(key, hidden=True, overwrite=True)
     print(
@@ -409,13 +413,13 @@ def main():
 
     # Compute (dino_loss, ibot_loss, kde) for one batch of (gf, lf) crops with the given masks +
     # schedule values. Used by both the train step and evaluate() (no_grad).
-    def compute_losses(gf, lf, b, masks, mask_idx, mask_w, t_temp, k_scale, ckpt=False):
+    def compute_losses(gf, lf, b, masks, mask_idx, mask_w, t_temp, k_scale, ckpt=False, log_diag=False):
         with torch.no_grad():
             t = teacher_backbone(gf)
             t_cls = teacher_dino_head(t["x_norm_clstoken"]).chunk(train_cfg["global_views"])
             t_prob = sinkhorn(torch.cat((t_cls[1], t_cls[0])), t_temp).view(2, b, -1)
             t_patch_prob = sinkhorn(teacher_ibot_head(t["x_norm_patchtokens"].flatten(0, 1)[mask_idx]), t_temp)
-        sg = student_backbone(gf, masks=masks, checkpoint=ckpt)
+        sg = student_backbone(gf, masks=masks, checkpoint=ckpt, log_diagnostics=log_diag)
         sl = student_backbone(lf, checkpoint=ckpt)
         sg_cls, sl_cls = student_dino_head(sg["x_norm_clstoken"]), student_dino_head(sl["x_norm_clstoken"])
         L = train_cfg["local_views"]
@@ -424,7 +428,15 @@ def main():
         s_patch = student_ibot_head(sg["x_norm_patchtokens"].flatten(0, 1)[mask_idx])
         ibot_loss = -(t_patch_prob * F.log_softmax(s_patch / 0.1, dim=-1)).sum(-1).mul(mask_w).sum() / max(1, b * 2)
         kde = dino_cfg["kde_loss_weight"] * k_scale * sum(kde_loss(x, dino_cfg["kde_concentration"]) for x in sg["x_norm_clstoken"].chunk(train_cfg["global_views"]))
-        return local_loss + global_loss, ibot_loss, kde
+        diag = None
+        if log_diag:
+            diag = {
+                "layers": sg.get("_diagnostics"),
+                "final_cls": sg.get("_final_norm_cls"),
+                "final_reg": sg.get("_final_norm_reg"),
+                "final_patch": sg.get("_final_norm_patch"),
+            }
+        return local_loss + global_loss, ibot_loss, kde, diag
 
     # Held-out validation pass: same DINO + iBOT + KDE losses on `val_batches` of the val split.
     # Schedule terms (teacher_temp, kde_scale) drift over training, so read val curves as same-step
@@ -445,7 +457,7 @@ def main():
             with torch.no_grad(), autocast:
                 gf, lf = vg.transpose(0, 1).flatten(0, 1), vl.transpose(0, 1).flatten(0, 1)
                 masks, mask_idx, mask_w = make_masks(b * train_cfg["global_views"], global_patches, device)
-                dino_l, ibot_l, kde_v = compute_losses(gf, lf, b, masks, mask_idx, mask_w, eval_teacher_temp, eval_kde_scale)
+                dino_l, ibot_l, kde_v, _ = compute_losses(gf, lf, b, masks, mask_idx, mask_w, eval_teacher_temp, eval_kde_scale)
             sums += torch.tensor([float(dino_l), float(ibot_l), float(kde_v), float(dino_l + ibot_l + kde_v)], device=device)
             n_batches += 1
         random.setstate(py_rng)
@@ -454,9 +466,50 @@ def main():
         return dict(zip(("dino", "ibot", "kde", "total"), (sums / max(1, n_batches)).tolist()))
 
     # Ingest completed probe result JSONs into metrics.jsonl and wandb.
+    last_main_outcomes_step = -1
+
     def log_probe_results():
         if probe_state is not None:
             collect_probe_results(probe_state, wandb_run, metrics_path)
+            log_main_outcomes()
+
+    # Logging-only: surface the headline downstream probe scores in a clean `main-outcomes/`
+    # wandb panel (plus per-dataset `main-outcomes-datasets/`) alongside the flat probe/* keys.
+    # log_probe_results() runs on every train log step, so guard on the last logged train_step to
+    # emit each probe result exactly once instead of re-logging the latest one at the same step.
+    def log_main_outcomes():
+        nonlocal last_main_outcomes_step
+        if wandb_run is None or probe_state is None:
+            return
+        results = sorted(probe_state["paths"]["results_dir"].glob("step_*.json"))
+        if not results:
+            return
+        result = json.loads(results[-1].read_text())
+        train_step = int(result["train_step"])
+        if train_step <= last_main_outcomes_step:
+            return
+        metrics = result["metrics"]
+        headline = {
+            "main-outcomes/linear": "linear_mean_f1",
+            "main-outcomes/knn": "knn_mean_f1",
+            "main-outcomes/16-shot": "fewshot_mean_f1",
+            "main-outcomes/segmentation": "seg_mean_jaccard",
+            "main-outcomes/progression": "slide_mean_auc",
+            "main-outcomes/mutation": "auc_mean",
+            "main-outcomes/survival": "survival_mean_cindex",
+            "main-outcomes/robustness": "robustness_mean",
+            "main-outcomes/mean": "mean_probe_score",
+        }
+        headline_srcs = set(headline.values())
+        payload = {panel: float(metrics[src]) for panel, src in headline.items() if src in metrics}
+        for key, value in metrics.items():
+            # Per-dataset scores are named probe_<dataset>_score; mirror collect_probe_results and
+            # strip the probe_ prefix so these match the probe/<dataset>_score keys (keep _score).
+            if key.endswith("_score") and key not in headline_srcs:
+                payload[f"main-outcomes-datasets/{key.removeprefix('probe_')}"] = float(value)
+        if payload:
+            wandb_run.log(payload, step=train_step)
+            last_main_outcomes_step = train_step
 
     # Queue a probe at `checkpoint_step` for the given sample target; no-op if already done.
     def run_probe_at(checkpoint_step, target_samples):
@@ -478,6 +531,7 @@ def main():
 
     log_probe_results()
     max_train_flops = int(train_cfg["max_train_flops"])
+    diag_every = int(train_cfg["log_diagnostics_every"])
     warmup_train_samples = math.ceil(max_train_samples * dino_cfg["warmup_fraction"])
     # Probe targets are sample milestones: one tile counts once even with many global/local crops.
     probe_count = int(cfg["probe"]["count"]) if probe_enabled(cfg) else 0
@@ -512,6 +566,11 @@ def main():
             student_ibot_head.train()
             completed_step = step + 1
             should_log = completed_step == 1 or completed_step % train_cfg["log_every"] == 0
+            # Skip diagnostics on the FLOP-measurement step (measured_flops_per_step is None until
+            # the first wrapped step completes) so the reused per-step FLOP estimate excludes
+            # diagnostic-only work.
+            should_diag = (diag_every > 0 and should_log and completed_step % diag_every == 0
+                           and measured_flops_per_step is not None)
             # Data identifiers stay on CPU and feed coverage metrics; image tensors move below.
             for key, batch_key in (("sample", "sample_idx"), ("slide", "slide_id"), ("patient", "patient_id")):
                 pending_ids[key].update(int(x) for x in batch[batch_key].tolist())
@@ -542,9 +601,9 @@ def main():
                     # so [crop0_img0, crop0_img1, ..., crop1_img0, ...] for clean teacher/student alignment.
                     gf = global_views.transpose(0, 1).flatten(0, 1)
                     lf = local_views.transpose(0, 1).flatten(0, 1)
-                    dino_loss_value, ibot_loss, kde = compute_losses(
+                    dino_loss_value, ibot_loss, kde, diag = compute_losses(
                         gf, lf, batch_size, masks, mask_idx, mask_w, teacher_temp, kde_scale,
-                        ckpt=activation_checkpointing,
+                        ckpt=activation_checkpointing, log_diag=should_diag,
                     )
                     total_loss = dino_loss_value + ibot_loss + kde
                 opt.zero_grad(set_to_none=True)
@@ -624,6 +683,23 @@ def main():
                     "grad_norm": float(grad_norm.detach()),
                 }
                 train_log.update(unique_counts)
+                if diag is not None:
+                    layer_diags = diag.get("layers") or []
+                    if layer_diags:
+                        stride = max(1, len(layer_diags) // 4)
+                        sampled_indices = list(range(0, len(layer_diags), stride))
+                        for idx in sampled_indices:
+                            for k, v in layer_diags[idx].items():
+                                train_log[f"diag/{k}/L{idx}"] = v
+                        all_vals = {}
+                        for layer_d in layer_diags:
+                            for k, v in layer_d.items():
+                                all_vals.setdefault(k, []).append(v)
+                        for k, vals in all_vals.items():
+                            train_log[f"diag/{k}/mean"] = sum(vals) / len(vals)
+                    for key in ("final_cls", "final_reg", "final_patch"):
+                        if diag.get(key) is not None:
+                            train_log[f"diag/{key}"] = diag[key]
                 print(
                     f"{console_prefix()} Training  "
                     f"[{completed_step}/{total_steps_estimate}]  eta: {eta_string}  gap: {console_gap_ms:.2f} ms  "
@@ -638,10 +714,15 @@ def main():
                 last_console_monotonic = console_now
                 with metrics_path.open("a") as handle:
                     handle.write(json.dumps(train_log) + "\n")
-                wandb_run.log(
-                    {f"train/{key}": value for key, value in train_log.items() if key != "step"},
-                    step=completed_step,
-                )
+                wandb_payload = {}
+                for key, value in train_log.items():
+                    if key == "step":
+                        continue
+                    # diag/* is its own top-level panel; everything else stays under stable train/*.
+                    wandb_payload[key if key.startswith("diag/") else f"train/{key}"] = value
+                    if key in headline_losses:
+                        wandb_payload[f"main-train-results/{key}"] = value
+                wandb_run.log(wandb_payload, step=completed_step)
                 log_probe_results()
                 torch.cuda.reset_peak_memory_stats(device)
             if save_checkpoints and completed_step % save_every == 0:
@@ -656,7 +737,10 @@ def main():
                 val_log = {"step": completed_step, **{f"val_{k}": v for k, v in val.items()}}
                 with metrics_path.open("a") as handle:
                     handle.write(json.dumps(val_log) + "\n")
-                wandb_run.log({f"val/{k}": v for k, v in val.items()}, step=completed_step)
+                # val/* stays stable; mirror into main-train-results/ so train+val losses sit together.
+                val_payload = {f"val/{k}": v for k, v in val.items()}
+                val_payload.update({f"main-train-results/val_{k}": v for k, v in val.items()})
+                wandb_run.log(val_payload, step=completed_step)
                 print(f"{console_prefix()} Validation  [{completed_step}]  total: {val['total']:.4f}  dino: {val['dino']:.4f}  ibot: {val['ibot']:.4f}  kde: {val['kde']:.4f}", flush=True)
                 # Reset rate clocks after validation so the next train log is train-rate only.
                 last_console_step, last_console_monotonic = completed_step, time.monotonic()
