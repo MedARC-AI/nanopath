@@ -28,6 +28,7 @@ API_URL = "https://api.labless.dev"
 PROJECT_SLUG = "nanopath"
 NANOPATH_MAIN_REMOTE = "https://github.com/MedARC-AI/nanopath.git"
 PRIMARY_METRIC = "mean_probe_score"
+PROBE_PROTOCOL_VERSION = 2
 LOCKED_PATHS = ("probe.py", "benchmarking/")
 FULL_RUN_MIN_FLOPS = 1_000_000_000_000_000_000
 FULL_RUN_MAX_SAMPLES = 1_000_000
@@ -39,8 +40,8 @@ NANOPATH_LOCKED_PROBE_CONFIG = {
     "enabled": True,
     "model_weights": "ema",
     "count": 1,
-    "datasets": ["bracs", "break_his", "mhist", "pcam"],
-    "segmentation_datasets": ["pannuke", "monusac", "consep"],
+    "datasets": ["break_his", "mhist", "pcam", "ccrcc", "tcga_uniform", "spider_skin"],
+    "segmentation_datasets": ["pannuke", "ocelot", "segpath_epithelial", "segpath_lymphocytes"],
     "slide_datasets": ["ucla_lung"],
     "auc_datasets": ["surgen"],
     "survival_datasets": ["leopard_bcr", "cptac_pda_os"],
@@ -163,6 +164,7 @@ def main() -> int:
         run_command = f"{run_command} output_dir=$OUTPUT_DIR"
     payload = {
         "version": 1,
+        "probe_protocol_version": PROBE_PROTOCOL_VERSION,
         "title": run_label,
         "status": status,
         "notes": opts.get("notes", ""),
@@ -348,6 +350,13 @@ def validate_output(output_dir: Path, summary_path: Path, metrics_path: Path, me
         errors.append("metrics.jsonl missing")
     if metric_value is None:
         errors.append(f"completed run is missing {PRIMARY_METRIC} / final_probe_score")
+    summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
+    rows = read_jsonl(metrics_path) if metrics_path.exists() else []
+    protocol = number(summary.get("final_probe_protocol_version"))
+    if protocol is None:
+        protocol = next((number(row.get("probe_protocol_version")) for row in reversed(rows) if number(row.get("probe_protocol_version")) is not None), None)
+    if protocol != PROBE_PROTOCOL_VERSION:
+        errors.append(f"probe_protocol_version must be {PROBE_PROTOCOL_VERSION}, got {protocol}")
     return errors
 
 
@@ -377,14 +386,18 @@ def primary_metric(summary: dict[str, Any], rows: list[dict[str, Any]]) -> float
 def final_metrics(summary: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, float]:
     name_map = {
         "score": PRIMARY_METRIC,
+        "protocol_version": "probe_protocol_version",
+        "classification_mean_f1": "classification_f1",
         "linear_mean_f1": "linear",
         "knn_mean_f1": "knn",
         "fewshot_mean_f1": "few_shot",
         "seg_mean_jaccard": "seg_jaccard",
+        "seg_mean_f1": "seg_f1",
         "slide_mean_auc": "progression_auc",
         "auc_mean": "mutation_auc",
         "survival_mean_cindex": "survival_cindex",
-        "robustness_mean": "robustness",
+        "robustness_mean": "robustness_index",
+        "robustness_quality_mean": "robustness_quality",
     }
     metrics: dict[str, float] = {}
     for key, value in summary.items():

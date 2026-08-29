@@ -17,7 +17,7 @@ RUN_DIR=$PWD/data/main/my-run
 `train.py` finishes. It:
 
 1. Reads `summary.json` and `metrics.jsonl` from `output_dir`.
-2. Extracts the final `mean_probe_score` and probe submetrics.
+2. Requires `probe_protocol_version == 2` and extracts the final `mean_probe_score` plus diagnostic probe metrics.
 3. Uses the local `output_dir/labless_source` snapshot written by `train.py` and
    diffs that source against the current main commit for `train.py`, `model.py`,
    `dataloader.py`, `prepare.py`, and the config YAML used by the run.
@@ -72,8 +72,8 @@ is shown as `unvalidated` until the organizer validates it. A copied config such
 `configs/new_config.yaml` is accepted if the completed `summary.json` reports
 `max_train_samples: 1000000`, `tile_presentations <= 1000000`, and
 `max_train_flops: 1e18`; short local configs are rejected even if they are not named smoke.
-Use the same config you prepared and trained with; off the MedARC cluster, copy
-the config and point its data paths at writable local storage before training.
+Use the same config you prepared and trained with. THUNDER probe roots remain
+locked to the canonical prepared train/validation data layout.
 Smoke runs are local setup checks only and are not accepted by labless.
 
 ## Submit a baseline/reference run
@@ -143,9 +143,10 @@ may be online or offline because source review never depends on the W&B API.
 The payload intentionally makes the run inspectable. It includes:
 
 - verified GitHub login and notes
-- final metric and public probe submetrics: `linear`, `knn`, `few_shot`,
-  `seg_jaccard`, `progression_auc`, `mutation_auc`, `survival_cindex`, and
-  `robustness`
+- `probe_protocol_version=2`, the final metric, and public probe submetrics:
+  `classification_f1`, `linear`, `knn`, `few_shot`, `seg_f1`, diagnostic
+  `seg_jaccard`, `progression_auc`, `mutation_auc`, `survival_cindex`,
+  `robustness_index`, and `robustness_quality`
 - run family, recipe id, and tier (`baseline` for frozen reference scripts)
 - source snapshot id, optional git remote, commit, full changed source path list,
   changed review files, and a capped review-file snapshot for server-built diffs

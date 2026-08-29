@@ -3,8 +3,8 @@
 #   - data.dataset_dir/shard-NNNNN.parquet   (the 4M-tile dataset, sharded)
 #   - probe.dataset_roots[name] for each configured probe dataset
 #   - Meta's DINOv2 pretrained weights for cfg["model"]["type"] (torch.hub cache)
-# Defaults to HF for the tile dataset and probe assets. Official-source helper
-# functions are maintainer rebuild paths for creating the HF probe mirrors.
+# The tile dataset and slide probes use their existing prepared assets. THUNDER
+# v2 always reads the official shared train/validation roots under /data/thunder-data.
 # download_TCGA.sh and prepare_tiles / pack_from_jpeg_dir are only relevant if
 # you want to regenerate the tile dataset from raw SVS files; see README.
 #
@@ -38,16 +38,12 @@ import openslide
 import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
-from PIL import Image, ImageDraw
+from PIL import Image
 
 
 REPO_ROOT = Path(__file__).resolve().parent
 HF_REPO_ID = "medarc/nanopath"
 HF_PROBE_PREFIX = "probes"
-PROBE_ACCESS_NOTICES = {
-    "consep": "you MUST satisfy the official CoNSeP/Warwick access terms at https://warwick.ac.uk/fac/sci/dcs/research/tia/data/hovernet/ before using these data; this mirror download is only for portable setup.",
-    "mhist": "you MUST complete MHIST's Dataset Research Use Agreement at https://bmirds.github.io/MHIST/ before using these data; this mirror download is only for portable setup.",
-}
 TILE_SIZE = 224
 JPEG_QUALITY = 95
 TARGET_TILE_COUNT = 4_000_000
@@ -305,14 +301,6 @@ def http_download(url, dst):
     os.replace(tmp, dst)
 
 
-def hf_download(filename, dst):
-    if dst.exists() and dst.stat().st_size > 0: print(f"  [skip] {dst}", flush=True); return
-    from huggingface_hub import hf_hub_download
-    src = Path(hf_hub_download(repo_id=HF_REPO_ID, repo_type="dataset", filename=f"{HF_PROBE_PREFIX}/{filename}"))
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy(src, dst)
-
-
 def hf_probe_dir(name, root):
     from huggingface_hub import snapshot_download
     workers = int(os.environ.get("PREPARE_WORKERS", os.cpu_count() or 8))
@@ -333,33 +321,6 @@ def make_hpcroot_writable(root):
     for p in [root, *root.rglob("*")]:
         os.chown(p, -1, gid)
         p.chmod(p.stat().st_mode | 0o660 | (0o110 if p.is_dir() else 0))
-
-
-def fetch_pannuke(root):
-    for fold in (1, 2):
-        if all((root / f"Fold{fold}/{kind}/fold{fold}/{kind}.npy").exists() for kind in ("images", "masks")):
-            continue
-        zip_path = root / f"fold_{fold}.zip"
-        hf_download(f"pannuke/fold_{fold}.zip", zip_path)
-        shutil.unpack_archive(zip_path, root)
-        zip_path.unlink()
-        spaced = root / f"Fold {fold}"
-        if spaced.exists():
-            if (root / f"Fold{fold}").exists():
-                shutil.rmtree(root / f"Fold{fold}")
-            spaced.rename(root / f"Fold{fold}")
-
-
-def fetch_pcam(root):
-    hf_probe_dir("pcam", root)
-
-
-def fetch_bracs(root):
-    hf_probe_dir("bracs", root)
-
-
-def fetch_break_his(root):
-    hf_probe_dir("break_his", root)
 
 
 # PathoBench slide tasks are normally run from Trident patch embeddings. The
@@ -687,66 +648,9 @@ def fetch_pathorob(root):
     hf_probe_dir("pathorob", root)
 
 
-def fetch_monusac(root):
-    hf_probe_dir("monusac", root)
-
-
-def fetch_monusac_from_official_source(root):
-    import gdown
-    Image.MAX_IMAGE_PIXELS = None
-    zip_path = root / "monusac_train.zip"
-    gdown.download(id="1lxMZaAPSpEHLSxGA9KKMt_r-4S8dwLhq", output=str(zip_path), quiet=False)
-    shutil.unpack_archive(zip_path, root)
-    class_id = {"Epithelial": 1, "Lymphocyte": 2, "Macrophage": 3, "Neutrophil": 4}
-    for tif in sorted((root / "MoNuSAC_images_and_annotations").glob("*/*.tif")):
-        xml_path, npy_path = tif.with_suffix(".xml"), tif.with_suffix(".npy")
-        w, h = Image.open(tif).size
-        label = Image.new("L", (w, h), 0)
-        draw = ImageDraw.Draw(label)
-        for ann in ET.parse(xml_path).getroot().findall(".//Annotation"):
-            fill = class_id.get(ann.find("./Attributes/Attribute").get("Name"), 0)
-            if fill == 0:
-                continue
-            for region in ann.findall("./Regions/Region"):
-                pts = [(float(v.get("X")), float(v.get("Y"))) for v in region.findall("./Vertices/Vertex")]
-                if len(pts) >= 3:
-                    draw.polygon(pts, fill=fill)
-        np.save(npy_path, np.asarray(label, dtype=np.uint8))
-
-
-# CoNSeP's Warwick landing page is sign-in gated from batch jobs, so use our
-# byte-for-byte probe mirror after warning users about the upstream terms.
-def fetch_consep(root):
-    zip_path = root / "consep.zip"
-    hf_download("consep/consep.zip", zip_path)
-    shutil.unpack_archive(zip_path, root)
-    for name in ("Train", "Test"):
-        if (root / name).exists():
-            shutil.rmtree(root / name)
-    for p in (root / "CoNSeP").iterdir():
-        shutil.move(str(p), root / p.name)
-    shutil.rmtree(root / "CoNSeP")
-    shutil.rmtree(root / "__MACOSX")
-
-
-# MHIST's official site is agreement-gated; mirror the exact probe files on HF
-# so a fresh `prepare.py ... download=True` run is noninteractive.
-def fetch_mhist(root):
-    hf_download("mhist/annotations.csv", root / "annotations.csv")
-    hf_download("mhist/images.zip", root / "images.zip")
-    shutil.unpack_archive(root / "images.zip", root)
-
-
 FETCHERS = {
-    "bracs": fetch_bracs,
-    "break_his": fetch_break_his,
-    "consep": fetch_consep,
     "cptac_pda_os": fetch_cptac_pda_os,
     "leopard_bcr": fetch_leopard_bcr,
-    "mhist": fetch_mhist,
-    "monusac": fetch_monusac,
-    "pcam": fetch_pcam,
-    "pannuke": fetch_pannuke,
     "pathorob": fetch_pathorob,
     "surgen": fetch_surgen,
     "ucla_lung": fetch_ucla_lung,
@@ -758,12 +662,15 @@ def _resolve(s):
     return Path(os.path.expanduser(os.path.expandvars(str(s))))
 
 
-# Missing checked-in /data and /block dataset defaults are shared-cluster paths,
-# not portable user choices. Retarget empty/missing ones into repo-local data/
-# so `prepare.py ... download=True` makes a fresh clone runnable by itself.
+# Keep protocol-v2 probe roots canonical; only unrelated missing shared defaults
+# can be retargeted into repo-local data/ for portable setup.
 def _local_data_root(s):
     p = _resolve(s)
-    if p == Path("/data/leopard_bcr") and Path("/data").exists() and os.access("/data", os.W_OK):
+    canonical = {
+        Path("/data/surgen"), Path("/data/leopard_bcr"), Path("/data/CPTAC-PDA"),
+        Path("/data/pathorob"), Path("/data/ucla-lung"),
+    }
+    if p in canonical or p.is_relative_to("/data/thunder-data"):
         return str(s)
     if p.is_absolute() and len(p.parts) > 3 and p.parts[1] == "data" and p.parts[3] == "nanopath" and Path("/data").exists() and os.access("/data", os.W_OK):
         return str(s)
@@ -827,13 +734,26 @@ def is_populated(name, p):
     if not p.exists() or not any(p.iterdir()):
         return False
     bench = Path(__file__).resolve().parent / "benchmarking"
-    if name in {"bracs", "break_his", "mhist"}:
-        splits = json.loads((bench / f"{name}.json").read_text())
-        return all((p / rel).exists() for split in ("train", "val") for rel in splits[split]["images"])
-    if name == "pcam":
-        return all((p / f"camelyonpatch_level_2_split_{s}_{k}.h5").exists() for s in ("train", "valid") for k in ("x", "y"))
-    if name == "pannuke":
-        return all((p / f"Fold{fold}/{kind}/fold{fold}/{kind}.npy").exists() for fold in (1, 2) for kind in ("images", "masks"))
+    thunder = json.loads((bench / "thunder_v2.json").read_text())
+    assert thunder["protocol_version"] == 2
+    assert all(set(spec) == {"root", "train", "val"} for family in ("classification", "segmentation") for spec in thunder[family].values())
+    if name in thunder["classification"]:
+        spec = thunder["classification"][name]
+        train_counts = np.bincount(np.asarray(spec["train"]["labels"], dtype=np.int64))
+        val_counts = np.bincount(np.asarray(spec["val"]["labels"], dtype=np.int64), minlength=len(train_counts))
+        if len(train_counts) == 0 or train_counts.min() < 16 or val_counts.min() == 0:
+            return False
+        if name == "pcam":
+            return all((p / f"camelyonpatch_level_2_split_{split}_{kind}.h5").exists() for split in ("train", "valid") for kind in ("x", "y"))
+        return not (set(spec["train"]["images"]) & set(spec["val"]["images"])) and all((p / rel).is_file() for split in ("train", "val") for rel in spec[split]["images"])
+    if name in thunder["segmentation"]:
+        spec = thunder["segmentation"][name]
+        if name == "pannuke":
+            return spec["train"]["images"] != spec["val"]["images"] and all((p / spec[split][kind]).is_file() for split in ("train", "val") for kind in ("images", "labels"))
+        train_images, val_images = set(map(tuple, spec["train"]["images"])), set(map(tuple, spec["val"]["images"]))
+        train_labels, val_labels = set(map(tuple, spec["train"]["labels"])), set(map(tuple, spec["val"]["labels"]))
+        records = [record for split in ("train", "val") for kind in ("images", "labels") for record in spec[split][kind]]
+        return not (train_images & val_images) and not (train_labels & val_labels) and all((p / record[0]).is_file() for record in records)
     if name == "ucla_lung":
         splits = json.loads((bench / "ucla_lung.json").read_text())
         expected = set(splits["train"]["slide_ids"] + splits["val"]["slide_ids"])
@@ -861,10 +781,6 @@ def is_populated(name, p):
         version = p / "tiling_version.txt"
         return version.exists() and version.read_text().strip() == CPTAC_PDA_OS_TILING_VERSION and (p / "labels.tsv").exists() and expected <= got
     if name == "pathorob" and not all(list((p / s / "data").glob("*.parquet")) for s in ("camelyon", "tolkach_esca")):
-        return False
-    if name == "monusac" and not any((p / "MoNuSAC_images_and_annotations").glob("*/*.npy")):
-        return False
-    if name == "consep" and not ((p / "Train" / "Images").exists() and (p / "Train" / "Labels").exists()):
         return False
     return True
 
@@ -923,7 +839,8 @@ def main():
             missing.append((name, root))
             continue
         root.mkdir(parents=True, exist_ok=True)
-        if name in PROBE_ACCESS_NOTICES: print(f"[notice] probe/{name}: {PROBE_ACCESS_NOTICES[name]}", flush=True)
+        if name in json.loads((REPO_ROOT / "benchmarking" / "thunder_v2.json").read_text())["classification"] | json.loads((REPO_ROOT / "benchmarking" / "thunder_v2.json").read_text())["segmentation"]:
+            raise FileNotFoundError(f"probe/{name} must be installed at its canonical THUNDER root: {root}")
         print(f"[fetch] probe/{name} -> {root}", flush=True)
         FETCHERS[name](root)
         assert is_populated(name, root), f"probe/{name} is still missing, empty, or stale after fetch: {root}"

@@ -43,10 +43,12 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
   <img src="https://api.labless.dev/api/nano-projects/nanopath/plot.svg" alt="Nanopath progress plot" width="1290">
 </a>
 
-`mean_probe_score`, aka `final_probe_score`, is the average of linear, knn, 16-shot, segmentation, progression, mutation, survival, and robustness. These columns summarize a 12-dataset suite derived from [THUNDER](https://mics-lab.github.io/thunder/), [PathoBench](https://github.com/mahmoodlab/patho-bench), and LEOPARD, with modifications to keep single-GPU evaluation lightweight. See [benchmarking/README.md](benchmarking/README.md) for more information.
+Protocol v2 defines `mean_probe_score`, aka `final_probe_score`, as 95% of the equally weighted classification, segmentation, progression, mutation, and survival mean plus 5% quality-adjusted robustness. Classification is one family even though linear, KNN, and 16-shot heads remain visible diagnostically. See [benchmarking/README.md](benchmarking/README.md) for the frozen train/validation-only protocol.
 On Labless, the run labeled `main` reflects the current GitHub `main` branch, and the run labeled `leader` reflects the branch highest in the nanopath models table below that passed threshold. A validated nanopath run must beat the current leader by at least 0.006 to become the new leader.
 
-### Nanopath models
+### Protocol-v1 legacy NanoPath models
+
+These rows use the retired v1 score and are retained only as historical records. They are not comparable to protocol v2 and will be replaced after the v2 promotion gates pass.
 
 | # | Description | final score | linear | knn | 16-shot | segmentation | progression | mutation | survival | robustness | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
@@ -57,7 +59,9 @@ On Labless, the run labeled `main` reflects the current GitHub `main` branch, an
 | 5 | [lr-and-curation](https://labless.dev/runs/run_sub_6c6c051f71) | 0.6357 | 0.7701 | 0.7005 | 0.6120 | 0.3077 | 0.6494 | 0.6084 | 0.5758 | 0.8612 | @nevasini1 |
 | 6 | [dinov2-s-kde](https://labless.dev/runs/run_sub_0d8aeb2511) | 0.6277 | 0.7555 | 0.6839 | 0.5890 | 0.3089 | 0.6418 | 0.5994 | 0.5898 | 0.8531 | @PaulScotti |
 
-### Baselines
+### Protocol-v1 legacy baselines
+
+These reference rows also use the retired v1 score. The v2 reference table is rebuilt only from complete protocol-v2 evaluations.
 
 | # | Name | Description | final score | linear | knn | 16-shot | segmentation | progression | mutation | survival | robustness |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -106,6 +110,7 @@ Public full-run submissions must satisfy:
 - `summary.tile_presentations <= 1000000`
 - `summary.max_train_flops == 1e18`
 - final `mean_probe_score` / `final_probe_score` is present
+- `final_probe_protocol_version == 2`
 - no saved-source changes to `probe.py` or anything under `benchmarking/`
 - no locked probe config changes except local `probe.dataset_roots`
 
@@ -170,16 +175,16 @@ The script reads `summary.json` and `metrics.jsonl`, reviews `output_dir/labless
 
 `prepare.py` prepares the necessary data for pretraining and downstream probing. By default it reads `configs/main.yaml`; pass a YAML path before the flag to prepare a different config, e.g. `python prepare.py configs/smoke.yaml download=True`. Flag `download=True` to fetch/prepare the configured datasets into the folders specified by the YAML; flag `download=False` to verify that all required paths are already populated.
 
-On the MedARC cluster, the checked-in `/data` and `/block` paths are the intended populated shared defaults. On a fresh clone, `prepare.py … download=True` rewrites any missing or empty checked-in data/probe roots to point into `nanopath/data/<name>`, preserving comments and formatting. It also moves `output_dir` and `wandb_dir` into `nanopath/data/` whenever a config's data roots are localized. The rewrite updates the selected config plus the checked-in `configs/main.yaml` and `configs/smoke.yaml`, so running prepare once still leaves both smoke and main directly runnable afterward. To force a different storage location, edit `data.dataset_dir`, `probe.dataset_roots.*`, `project.output_dir`, and `project.wandb_dir` to existing writable paths before downloading.
+On the MedARC cluster, the checked-in `/data` paths are the intended shared defaults. Protocol-v2 THUNDER data is deliberately not mirrored or relocated: it must already follow the official train/validation layout under `/data/thunder-data`, and preparation fails loudly if it does not. Other missing portable data roots may still be localized for a fresh clone.
 
 **What `download=True` does**
 1. **TCGA tiles**: `huggingface_hub.snapshot_download` (filtered to `shard-*.parquet`) pulls the 200 parquet shards (~120 GB total, `{path: string, jpeg: binary}` rows with 64-row row groups) from [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) into `data.dataset_dir`.
-2. **Probe datasets**: for each empty configured root, fetches/unpacks and, where needed, pre-extracts the probe data from the [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath/tree/main/probes) probe mirror for portable noninteractive setup.
+2. **Probe datasets**: verifies every manifest-selected THUNDER train/validation path at `/data/thunder-data`; existing slide/PathoROB probe fetchers populate their canonical configured roots when absent. THUNDER roots are never downloaded from a NanoPath mirror.
 3. **DINOv2 backbone weights**: `torch.hub.load_state_dict_from_url` fetches the Meta checkpoint for `model.type` from `dl.fbaipublicfiles.com` into `~/.cache/torch/hub/checkpoints/`.
 
 **Prerequisites**
 - ~120 GB free wherever `data.dataset_dir` lives for the parquet shards (cluster default: `/data/nanopath_parquet`).
-- Probe data disk varies by suite. Expect that it might take a few hours for one-time downloading all mirrored probe datasets.
+- Access to the canonical prepared THUNDER train/validation datasets at `/data/thunder-data` and the slide/PathoROB roots listed in `configs/main.yaml`.
 
 ### Regenerating the tile dataset from raw SVS
 
@@ -225,16 +230,16 @@ Full main `nanopath` recipe:
 
 `submit/train_1gpu.sbatch` is a prompt-aware launcher when run directly: it collects Labless run name, notes, and GitHub device login before submitting itself to SLURM, then auto-submits eligible completed full runs. Calling `sbatch submit/train_1gpu.sbatch ...` bypasses that prompt and trains without auto-submit. `configs/main.yaml` is sized for an 80 GB H100 at `train.batch_size: 128`. On smaller cards you can set `train.activation_checkpointing: true` and lower `train.batch_size` if you OOM.
 
-The checked-in `#SBATCH --partition=n` / `--qos=normal` lines are MedARC-specific. On another SLURM cluster, edit those header lines once to match your queue, or run `python train.py ...` directly on an allocated GPU.
+The checked-in `#SBATCH --partition=n`, `--account=sophont`, and `--qos=high` lines are MedARC-specific. On another SLURM cluster, edit those header lines once to match your queue, or run `python train.py ...` directly on an allocated GPU.
 
 ## Outputs
 
-`prepare.py … download=True` rewrites missing or empty data/probe defaults in the selected config plus `configs/{main,smoke}.yaml` to live under `nanopath/data/`, and localizes run outputs/W&B logs there too for those rewritten configs.
+`prepare.py … download=True` may localize portable training/output defaults, but leaves the canonical protocol-v2 evaluation roots fixed.
 
 - run outputs: `project.output_dir` (MedARC cluster default `/data/$USER/nanopath/main/...`; auto-localized default `nanopath/data/main/...`). Final probe results log to `metrics.jsonl`.
 - wandb: `project.wandb_dir` (cluster default `/data/$USER/nanopath/wandb`; auto-localized default `nanopath/data/wandb`).
 - parquet tile shards: `data.dataset_dir` (defaults to `/data/nanopath_parquet`).
-- probe datasets: `probe.dataset_roots` (defaults to shared `/block/...` and `/data/...` paths on the MedARC cluster; LEOPARD BCR defaults to `/data/leopard_bcr` with hpcroot group sharing).
+- probe datasets: canonical shared `/data/thunder-data`, `/data/surgen`, `/data/leopard_bcr`, `/data/CPTAC-PDA`, `/data/pathorob`, and `/data/ucla-lung` roots declared in `probe.dataset_roots`.
 - DINOv2 backbone weights: `~/.cache/torch/hub/checkpoints/` for the selected `model.type`.
 - SLURM logs: `slurm/<jobid>.{out,err}` in the repo.
 - labless source snapshot: `project.output_dir/labless_source`.
