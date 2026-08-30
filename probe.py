@@ -133,7 +133,7 @@ def prepare_probe_state(cfg, output_dir):
         path.mkdir(parents=True, exist_ok=True)
     groups = {request_key: [str(x) for x in cfg["probe"].get(cfg_key, [])] for request_key, (cfg_key, _) in TASK_FIELDS.items()}
     data = {
-        "version": 15,
+        "version": 16,
         "probe_protocol_version": PROBE_PROTOCOL_VERSION,
         "family": str(cfg["project"]["family"]),
         "count": int(cfg["probe"]["count"]),
@@ -143,7 +143,7 @@ def prepare_probe_state(cfg, output_dir):
     if paths["state_path"].exists():
         # Explicit resume can continue only if the probe family/datasets/count match the old state.
         previous = json.loads(paths["state_path"].read_text())
-        if previous["version"] != 15:
+        if previous["version"] != 16:
             raise ValueError(f"unsupported probe state version: {previous['version']}")
         if previous["family"] != data["family"]:
             raise ValueError(f"probe family changed from {previous['family']} to {data['family']}")
@@ -440,14 +440,10 @@ def embed_segmentation_dataset(model, mean, std, dataset, split, device, transfo
                         images = torch.stack(batch_images).to(device)
                         with autocast:
                             batch_feats = model.encode_image((images - mean) / std)[:, model.registers:]
-                        # Keep custom test-time dense aggregation possible without letting extra
-                        # layers or an upsampled grid multiply the common decoder's memory/compute.
-                        # DINO-family encoders expose their native width and patch size; ordinary
-                        # outputs are unchanged, while concatenated layers are averaged and expanded
-                        # spatial grids are area-pooled to the native patch grid.
-                        if hasattr(model, "embed_dim") and batch_feats.shape[-1] != model.embed_dim:
-                            assert batch_feats.shape[-1] % model.embed_dim == 0
-                            batch_feats = batch_feats.unflatten(-1, (-1, model.embed_dim)).mean(-2)
+                        # Preserve model-defined test-time feature aggregation while preventing an
+                        # upsampled token grid from multiplying the shared decoder's quadratic cost.
+                        # Ordinary outputs are unchanged; expanded spatial grids are area-pooled to
+                        # the encoder's native patch grid while every aggregated channel is retained.
                         if hasattr(model, "patch_size"):
                             native_h, native_w = images.shape[-2] // model.patch_size, images.shape[-1] // model.patch_size
                             if batch_feats.shape[1] != native_h * native_w:

@@ -93,11 +93,12 @@ epochs at `lr=1e-4`, `weight_decay=1e-3`; lymphocytes trains 21 epochs at
 `lr=1e-3`, `weight_decay=1e-4`. Dense tokens are cached as signed int8 vectors
 with fp16 scales. All feature extraction is microbatched at 512 images so models
 may aggregate multiple intermediate layers or test-time views without excessive
-peak memory. For DINO-family encoders, concatenated dense layers are averaged
-back to the encoder width and expanded spatial grids are area-pooled to the
-native patch grid before the shared decoder. This leaves ordinary dense outputs
-unchanged while keeping custom test-time aggregation on the same decoder budget.
-The decoder width is 192 to meet the runtime budget.
+peak memory. For DINO-family encoders, expanded spatial grids are area-pooled to
+the native patch grid before the shared decoder, while all model-defined
+concatenated layer channels are retained. This leaves ordinary dense outputs
+unchanged and preserves test-time depth aggregation without multiplying the
+decoder's quadratic spatial cost. The decoder width is 192 to meet the runtime
+budget.
 
 UCLA progression and SurGen mutation use raw pooled features and fixed
 `LogisticRegression(C=0.5, class_weight="balanced", random_state=0)` in three
