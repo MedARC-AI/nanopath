@@ -63,7 +63,7 @@ def main():
     cfg["probe"]["model_weights"] = "ema"
     cfg["probe"]["count"] = 1
     cfg["probe"]["model_loader"] = "baselines.hoptimus0_baseline:load_probe_model"
-    cfg["probe"]["transform_policy"] = "resize_crop_224"
+    cfg["probe"]["transform_policy"] = "bicubic256_crop224"
 
     if output_dir.exists():
         shutil.rmtree(output_dir)

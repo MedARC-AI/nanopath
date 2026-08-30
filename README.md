@@ -43,7 +43,7 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
   <img src="https://api.labless.dev/api/nano-projects/nanopath/plot.svg" alt="Nanopath progress plot" width="1290">
 </a>
 
-Protocol v2 defines `mean_probe_score`, aka `final_probe_score`, as 95% of the equally weighted classification, segmentation, progression, mutation, and survival mean plus 5% quality-adjusted robustness. Classification is one family even though linear, KNN, and 16-shot heads remain visible diagnostically. See [benchmarking/README.md](benchmarking/README.md) for the frozen train/validation-only protocol.
+Protocol v2 defines `mean_probe_score`, aka `final_probe_score`, as 95% of the equally weighted classification, segmentation, progression, mutation, and survival mean plus 5% quality-adjusted robustness. Classification is one family even though all 16 THUNDER tasks and their linear, KNN, and 16-shot heads remain visible diagnostically. Segmentation uses THUNDER's PanNuke, OCELOT, and two SegPath tasks with its published metric. See [benchmarking/README.md](benchmarking/README.md) for the frozen train/validation-only protocol.
 On Labless, the run labeled `main` reflects the current GitHub `main` branch, and the run labeled `leader` reflects the branch highest in the nanopath models table below that passed threshold. A validated nanopath run must beat the current leader by at least 0.006 to become the new leader.
 
 ### Protocol-v1 legacy NanoPath models

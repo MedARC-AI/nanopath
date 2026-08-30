@@ -64,12 +64,22 @@ probe:
   model_weights: ema
   count: 1 # 4 means probing at 25%, 50%, 75%, and 100% of the sample cap. 1 means probing just at the end.
   datasets:
+    - bach
+    - bracs
     - break_his
+    - ccrcc
+    - crc
+    - esca
     - mhist
     - pcam
-    - ccrcc
-    - tcga_uniform
+    - spider_breast
+    - spider_colorectal
     - spider_skin
+    - spider_thorax
+    - tcga_crc_msi
+    - tcga_tils
+    - tcga_uniform
+    - wilds
   segmentation_datasets:
     - pannuke
     - ocelot
@@ -85,12 +95,22 @@ probe:
   robustness_datasets:
     - pathorob
   dataset_roots:
+    bach: /data/thunder-data/bach
+    bracs: /data/thunder-data/bracs
     break_his: /data/thunder-data/break_his
+    ccrcc: /data/thunder-data/ccrcc
+    crc: /data/thunder-data/crc
+    esca: /data/thunder-data/esca
     mhist: /data/thunder-data/mhist
     pcam: /data/thunder-data/patch_camelyon
-    ccrcc: /data/thunder-data/ccrcc
-    tcga_uniform: /data/thunder-data/tcga_uniform
+    spider_breast: /data/thunder-data/spider_breast
+    spider_colorectal: /data/thunder-data/spider_colorectal
     spider_skin: /data/thunder-data/spider_skin
+    spider_thorax: /data/thunder-data/spider_thorax
+    tcga_crc_msi: /data/thunder-data/tcga_crc_msi
+    tcga_tils: /data/thunder-data/tcga_tils
+    tcga_uniform: /data/thunder-data/tcga_uniform
+    wilds: /data/thunder-data/wilds
     pannuke: /data/thunder-data/pannuke
     ocelot: /data/thunder-data/ocelot
     segpath_epithelial: /data/thunder-data/segpath_epithelial

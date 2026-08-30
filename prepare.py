@@ -735,25 +735,38 @@ def is_populated(name, p):
         return False
     bench = Path(__file__).resolve().parent / "benchmarking"
     thunder = json.loads((bench / "thunder_v2.json").read_text())
+    assert set(thunder) == {"protocol_version", "seed", "classification", "segmentation"}
     assert thunder["protocol_version"] == 2
+    assert thunder["seed"] == 1337
     assert all(set(spec) == {"root", "train", "val"} for family in ("classification", "segmentation") for spec in thunder[family].values())
     if name in thunder["classification"]:
         spec = thunder["classification"][name]
+        if p.resolve() != (Path("/data/thunder-data") / spec["root"]).resolve():
+            return False
         train_counts = np.bincount(np.asarray(spec["train"]["labels"], dtype=np.int64))
         val_counts = np.bincount(np.asarray(spec["val"]["labels"], dtype=np.int64), minlength=len(train_counts))
         if len(train_counts) == 0 or train_counts.min() < 16 or val_counts.min() == 0:
             return False
         if name == "pcam":
+            if len(spec["train"]["indices"]) != len(spec["train"]["labels"]) or len(spec["val"]["indices"]) != len(spec["val"]["labels"]):
+                return False
             return all((p / f"camelyonpatch_level_2_split_{split}_{kind}.h5").exists() for split in ("train", "valid") for kind in ("x", "y"))
+        if any(len(spec[split]["images"]) != len(spec[split]["labels"]) for split in ("train", "val")):
+            return False
         return not (set(spec["train"]["images"]) & set(spec["val"]["images"])) and all((p / rel).is_file() for split in ("train", "val") for rel in spec[split]["images"])
     if name in thunder["segmentation"]:
         spec = thunder["segmentation"][name]
+        if p.resolve() != (Path("/data/thunder-data") / spec["root"]).resolve():
+            return False
         if name == "pannuke":
             return spec["train"]["images"] != spec["val"]["images"] and all((p / spec[split][kind]).is_file() for split in ("train", "val") for kind in ("images", "labels"))
         train_images, val_images = set(map(tuple, spec["train"]["images"])), set(map(tuple, spec["val"]["images"]))
         train_labels, val_labels = set(map(tuple, spec["train"]["labels"])), set(map(tuple, spec["val"]["labels"]))
         records = [record for split in ("train", "val") for kind in ("images", "labels") for record in spec[split][kind]]
-        return not (train_images & val_images) and not (train_labels & val_labels) and all((p / record[0]).is_file() for record in records)
+        train_sources = {record[0] for record in spec["train"]["images"]}
+        val_sources = {record[0] for record in spec["val"]["images"]}
+        paired = all(len(spec[split]["images"]) == len(spec[split]["labels"]) for split in ("train", "val"))
+        return paired and not (train_images & val_images) and not (train_labels & val_labels) and not (train_sources & val_sources) and all((p / record[0]).is_file() for record in records)
     if name == "ucla_lung":
         splits = json.loads((bench / "ucla_lung.json").read_text())
         expected = set(splits["train"]["slide_ids"] + splits["val"]["slide_ids"])

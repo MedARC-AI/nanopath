@@ -13,6 +13,7 @@
 
 import json
 import os
+import random
 import subprocess
 import sys
 import time
@@ -23,6 +24,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
+from timm.layers import trunc_normal_
 
 Image.MAX_IMAGE_PIXELS = None  # Probe ROIs are trusted local pathology images, often >90M pixels.
 
@@ -32,26 +34,37 @@ PROBE_PROTOCOL_VERSION = 2
 THUNDER_V2 = json.loads((BENCHMARKING_DIR / "thunder_v2.json").read_text())
 assert THUNDER_V2["protocol_version"] == PROBE_PROTOCOL_VERSION
 assert all(set(spec) == {"root", "train", "val"} for family in ("classification", "segmentation") for spec in THUNDER_V2[family].values())
-EMBED_BATCH_SIZE = 128
+EMBED_BATCH_SIZE = 256
 EMBED_NUM_WORKERS = 8
 SEGMENTATION_EPOCHS = {"pannuke": 30, "ocelot": 30, "segpath_epithelial": 9, "segpath_lymphocytes": 21}
-SEGMENTATION_LR = 1e-3
-SEGMENTATION_WEIGHT_DECAY = 1e-4
+SEGMENTATION_HYPERPARAMETERS = {
+    "pannuke": (1e-3, 1e-4),
+    "ocelot": (1e-4, 0.0),
+    "segpath_epithelial": (1e-4, 1e-3),
+    "segpath_lymphocytes": (1e-3, 1e-4),
+}
+SEGMENTATION_DECODER_DIM = 192
 SEGMENTATION_BATCH_SIZE = 64
+SEGMENTATION_EMBED_BATCH_SIZE = 192
+SEGMENTATION_SELECTION_EXAMPLES = 256
 PANNUKE_NUM_CLASSES = 6
 SEG_SPLIT_SEED = 1337
+THUNDER_PROBE_SEED = 0
 REPEATED_FOLDS = 3
 LINEAR_PROBE_LRS = (1e-3, 1e-4, 1e-5)
 LINEAR_PROBE_WEIGHT_DECAYS = (0.0, 1e-3, 1e-4)
 LINEAR_PROBE_EPOCHS = 200
 LINEAR_PROBE_BATCH_SIZE = 64
-INNER_VAL_FRACTION = 0.2
 FEWSHOT_SHOT = 16
 FEWSHOT_SUPPORT_SETS = 1000
 FEWSHOT_SUPPORT_CHUNK = 64
 KNN_K_VALS = [1, 3, 5, 10, 20, 30, 40, 50]
 KNN_CHUNK_SIZE = 4096
-CLASSIFICATION_DATASETS = ["break_his", "mhist", "pcam", "ccrcc", "tcga_uniform", "spider_skin"]
+CLASSIFICATION_DATASETS = [
+    "bach", "bracs", "break_his", "ccrcc", "crc", "esca", "mhist", "pcam",
+    "spider_breast", "spider_colorectal", "spider_skin", "spider_thorax",
+    "tcga_crc_msi", "tcga_tils", "tcga_uniform", "wilds",
+]
 SEGMENTATION_DATASETS = ["pannuke", "ocelot", "segpath_epithelial", "segpath_lymphocytes"]
 SLIDE_DATASETS = ["ucla_lung"]
 AUC_DATASETS = ["surgen"]
@@ -257,9 +270,14 @@ class SegmentationDataset(torch.utils.data.Dataset):
             self.indices = spec["indices"]
         else:
             self.image_records, self.label_records = spec["images"], spec["labels"]
+            self.groups = []
+            for i, record in enumerate(self.image_records):
+                if not self.groups or self.image_records[self.groups[-1][0]][0] != record[0]:
+                    self.groups.append([])
+                self.groups[-1].append(i)
 
     def __len__(self):
-        return len(self.indices if self.dataset == "pannuke" else self.image_records)
+        return len(self.indices if self.dataset == "pannuke" else self.groups)
 
     def __getitem__(self, i):
         import numpy as np
@@ -269,16 +287,22 @@ class SegmentationDataset(torch.utils.data.Dataset):
             for class_id in range(1, PANNUKE_NUM_CLASSES):
                 np.copyto(label, class_id, where=self.masks[idx, :, :, class_id - 1] > 0)
             image = Image.fromarray(self.images[idx].astype(np.uint8))
+            return [(self.transform(image), torch.from_numpy(label.copy()))]
         else:
-            image_path, i0, i1, j0, j1 = self.image_records[i]
-            label_path, l0, l1, m0, m1 = self.label_records[i]
-            image = Image.open(self.root / image_path).convert("RGB").crop((j0, i0, j1, i1))
-            label = np.asarray(Image.open(self.root / label_path))[l0:l1, m0:m1].astype(np.int64)
-            if self.dataset == "ocelot":
-                label[label == 1] = 0
-                label[label == 2] = 1
-                label[label == 255] = -1
-        return self.transform(image), torch.from_numpy(label.copy())
+            source_image = Image.open(self.root / self.image_records[self.groups[i][0]][0]).convert("RGB")
+            source_label = np.asarray(Image.open(self.root / self.label_records[self.groups[i][0]][0]))
+            crops = []
+            for index in self.groups[i]:
+                _, i0, i1, j0, j1 = self.image_records[index]
+                _, l0, l1, m0, m1 = self.label_records[index]
+                image = source_image.crop((j0, i0, j1, i1))
+                label = source_label[l0:l1, m0:m1].astype(np.int64)
+                if self.dataset == "ocelot":
+                    label[label == 1] = 0
+                    label[label == 2] = 1
+                    label[label == 255] = -1
+                crops.append((self.transform(image), torch.from_numpy(label.copy())))
+            return crops
 
 
 # Mean-pool cached PathoBench-style tile embeddings to one vector per slide.
@@ -310,7 +334,7 @@ def embed_slide_dataset(model, mean, std, dataset, split, device, transform):
 
     loader = torch.utils.data.DataLoader(_Tiles(), batch_size=EMBED_BATCH_SIZE, shuffle=False, num_workers=EMBED_NUM_WORKERS, pin_memory=True)
     sums, counts = None, torch.zeros(len(slides), dtype=torch.long)
-    autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    autocast = torch.autocast(device_type="cuda", dtype=torch.float16)
     with torch.no_grad():
         for x, si in loader:
             x = x.to(device, non_blocking=True)
@@ -335,7 +359,8 @@ def embed_classification_dataset(model, mean, std, dataset, split, device, trans
         pin_memory=True,
     )
     embs, labels = [], []
-    autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    # THUNDER's published adapter extracts frozen tile embeddings in fp16.
+    autocast = torch.autocast(device_type="cuda", dtype=torch.float16)
     # Probe embeddings use model.probe_features(), which returns the cls token
     # — none of the DINO/iBOT training heads are involved.
     with torch.no_grad():
@@ -374,8 +399,8 @@ class _SegBlock(nn.Module):
     def forward(self, x):
         b, n, c = x.shape
         qkv = self.qkv(self.norm1(x)).reshape(b, n, 3, self.heads, c // self.heads).permute(2, 0, 3, 1, 4)
-        attn = ((qkv[0] @ qkv[1].transpose(-2, -1)) * ((c // self.heads) ** -0.5)).softmax(-1)
-        attn = (attn @ qkv[2]).transpose(1, 2).reshape(b, n, c)
+        attn = F.scaled_dot_product_attention(qkv[0], qkv[1], qkv[2], dropout_p=0.0, scale=(c // self.heads) ** -0.5)
+        attn = attn.transpose(1, 2).reshape(b, n, c)
         x = x + self.proj(attn)
         return x + self.fc2(F.gelu(self.fc1(self.norm2(x))))
 
@@ -383,7 +408,7 @@ class _SegBlock(nn.Module):
 # Trunc-normal Linear, zero-init bias, identity LayerNorm — Thunder's seg-head init.
 def _init_seg_weights(m):
     if isinstance(m, nn.Linear):
-        nn.init.trunc_normal_(m.weight, std=0.02)
+        trunc_normal_(m.weight, std=0.02)
         if m.bias is not None:
             nn.init.constant_(m.bias, 0)
     elif isinstance(m, nn.LayerNorm):
@@ -398,17 +423,21 @@ def _init_seg_weights(m):
 class MaskTransformer(nn.Module):
     def __init__(self, n_cls, d_encoder, n_layers=2, n_heads=8, d_model=768, d_ff=3072):
         super().__init__()
+        self.d_encoder = d_encoder
+        self.n_layers = n_layers
         self.n_cls = n_cls
-        scale = d_model ** -0.5
-        self.proj_dec = nn.Linear(d_encoder, d_model)
+        self.d_model = d_model
+        self.d_ff = d_ff
+        self.scale = d_model ** -0.5
         self.blocks = nn.ModuleList(_SegBlock(d_model, n_heads, d_ff) for _ in range(n_layers))
         self.cls_emb = nn.Parameter(torch.randn(1, n_cls, d_model))
-        self.proj_patch = nn.Parameter(scale * torch.randn(d_model, d_model))
-        self.proj_classes = nn.Parameter(scale * torch.randn(d_model, d_model))
+        self.proj_dec = nn.Linear(d_encoder, d_model)
+        self.proj_patch = nn.Parameter(self.scale * torch.randn(d_model, d_model))
+        self.proj_classes = nn.Parameter(self.scale * torch.randn(d_model, d_model))
         self.decoder_norm = nn.LayerNorm(d_model)
         self.mask_norm = nn.LayerNorm(n_cls)
         self.apply(_init_seg_weights)
-        nn.init.trunc_normal_(self.cls_emb, std=0.02)
+        trunc_normal_(self.cls_emb, std=0.02)
 
     def forward(self, x):
         b, n, _ = x.shape
@@ -431,73 +460,112 @@ def embed_segmentation_dataset(model, mean, std, dataset, split, device, transfo
 
     # Threads keep PNG decoding parallel without forking an initialized CUDA process.
     tiles = SegmentationDataset(dataset, split, transform)
-    feats, labels = [], []
-    autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    feats, scales, labels = [], [], []
+    autocast = torch.autocast(device_type="cuda", dtype=torch.float16)
     with torch.no_grad():
         batch_images, batch_labels = [], []
         with ThreadPoolExecutor(max_workers=EMBED_NUM_WORKERS) as pool:
-            for i, (image, label) in enumerate(pool.map(tiles.__getitem__, range(len(tiles))), 1):
-                batch_images.append(image); batch_labels.append(label)
-                if i % SEGMENTATION_BATCH_SIZE == 0 or i == len(tiles):
+            for i, crops in enumerate(pool.map(tiles.__getitem__, range(len(tiles))), 1):
+                for image, label in crops:
+                    batch_images.append(image); batch_labels.append(label)
+                if len(batch_images) >= SEGMENTATION_EMBED_BATCH_SIZE or i == len(tiles):
                     with autocast:
-                        feats.append(model.encode_image((torch.stack(batch_images).to(device) - mean) / std)[:, model.registers:].float().cpu())
-                    labels.append(torch.stack(batch_labels))
+                        batch_feats = model.encode_image((torch.stack(batch_images).to(device) - mean) / std)[:, model.registers:].float()
+                    batch_scales = batch_feats.abs().amax(dim=-1, keepdim=True).clamp_min_(1e-12).div_(127).to(torch.float16)
+                    feats.append(torch.clamp(torch.round(batch_feats / batch_scales.float()), -127, 127).to(torch.int8).cpu())
+                    scales.append(batch_scales.cpu())
+                    labels.append(torch.stack(batch_labels).to(torch.int8))
                     batch_images, batch_labels = [], []
-    return torch.cat(feats), torch.cat(labels)
+    return torch.cat(feats), torch.cat(scales), torch.cat(labels)
 
 
-# Nested train/selection/refit protocol analogous to THUNDER's validation/test use.
+# Train the THUNDER MaskTransformer on the selected training split, select its
+# epoch by Dice loss on 256 evenly spaced validation examples, then report
+# THUNDER's metric on the complete selected validation split.
+# Dataset-specific LR/decay values are frozen before any official test comparison.
 def inline_segmentation_f1(model, mean, std, dataset, device, transform):
     import numpy as np
-    from sklearn.model_selection import train_test_split
 
     started_at = time.monotonic()
-    train_feats, train_labels = embed_segmentation_dataset(model, mean, std, dataset, "train", device, transform)
-    val_feats, val_labels = embed_segmentation_dataset(model, mean, std, dataset, "val", device, transform)
+    train_feats, train_scales, train_labels = embed_segmentation_dataset(model, mean, std, dataset, "train", device, transform)
+    val_feats, val_scales, val_labels = embed_segmentation_dataset(model, mean, std, dataset, "val", device, transform)
+    feature_cache_bytes = train_feats.numel() + val_feats.numel() + 2 * (train_scales.numel() + val_scales.numel())
+    features_on_gpu = feature_cache_bytes <= 24 * 1024 ** 3
+    if features_on_gpu:
+        train_feats, train_scales = train_feats.to(device), train_scales.to(device)
+        val_feats, val_scales = val_feats.to(device), val_scales.to(device)
     n_cls = PANNUKE_NUM_CLASSES if dataset == "pannuke" else 2
-    foreground_counts = torch.stack([(train_labels == class_id).flatten(1).sum(1) for class_id in range(1, n_cls)], 1)
-    strata = torch.where(foreground_counts.sum(1) > 0, foreground_counts.argmax(1) + 1, 0).numpy()
-    inner_train, inner_val = train_test_split(np.arange(len(train_feats)), test_size=INNER_VAL_FRACTION, random_state=SEG_SPLIT_SEED, stratify=strata)
-    torch.manual_seed(SEG_SPLIT_SEED)
-    head = MaskTransformer(n_cls=n_cls, d_encoder=train_feats.shape[-1], n_layers=2, n_heads=8, d_model=768, d_ff=3072).to(device)
-    opt = torch.optim.Adam(head.parameters(), lr=SEGMENTATION_LR, weight_decay=SEGMENTATION_WEIGHT_DECAY)
-    best_loss, best_epoch = float("inf"), 0
+    torch.manual_seed(THUNDER_PROBE_SEED)
+    torch.cuda.manual_seed_all(THUNDER_PROBE_SEED)
+    torch.set_float32_matmul_precision("high")
+    lr, weight_decay = SEGMENTATION_HYPERPARAMETERS[dataset]
+    head = MaskTransformer(
+        n_cls=n_cls,
+        d_encoder=train_feats.shape[-1],
+        n_layers=2,
+        n_heads=8,
+        d_model=SEGMENTATION_DECODER_DIM,
+        d_ff=SEGMENTATION_DECODER_DIM * 4,
+    ).to(device)
+    optimizer = torch.optim.Adam(head.parameters(), lr=lr, weight_decay=weight_decay)
+    selection_indices = torch.linspace(
+        0,
+        len(val_feats) - 1,
+        min(SEGMENTATION_SELECTION_EXAMPLES, len(val_feats)),
+    ).long()
+    best_loss, best_epoch, best_state = float("inf"), None, None
     for epoch in range(SEGMENTATION_EPOCHS[dataset]):
         head.train()
-        perm = torch.as_tensor(inner_train)[torch.randperm(len(inner_train))]
-        for start in range(0, len(inner_train), SEGMENTATION_BATCH_SIZE):
-            idx = perm[start:start + SEGMENTATION_BATCH_SIZE]
-            labels = train_labels[idx].to(device)
-            logits = F.interpolate(head(train_feats[idx].to(device)), labels.shape[-2:], mode="bilinear")
+        # Match THUNDER's cached loader: draw its iterator seed on CPU, then
+        # construct the shuffled CPU indices from a fresh seeded generator.
+        torch.empty((), dtype=torch.int64).random_()
+        shuffle_seed = int(torch.empty((), dtype=torch.int64).random_().item())
+        order = torch.randperm(len(train_feats), generator=torch.Generator().manual_seed(shuffle_seed))
+        for start in range(0, len(order), SEGMENTATION_BATCH_SIZE):
+            idx = order[start:start + SEGMENTATION_BATCH_SIZE]
+            labels = train_labels[idx].to(device=device, dtype=torch.long)
+            if features_on_gpu:
+                gpu_idx = idx.to(device)
+                batch_feats = train_feats[gpu_idx].float() * train_scales[gpu_idx].float()
+            else:
+                batch_feats = train_feats[idx].to(device).float() * train_scales[idx].to(device).float()
+            logits = F.interpolate(head(batch_feats), labels.shape[-2:], mode="bilinear")
             loss = multiclass_dice_loss(logits, labels, labels != -1)
-            opt.zero_grad(); loss.backward(); opt.step()
-        head.eval(); selected_loss = 0.0
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer.step()
+
+        head.eval()
+        # THUNDER's non-shuffled validation iterator advances this RNG once.
+        torch.empty((), dtype=torch.int64).random_()
+        validation_loss, batches = 0.0, 0
         with torch.no_grad():
-            for start in range(0, len(inner_val), SEGMENTATION_BATCH_SIZE):
-                idx = torch.as_tensor(inner_val[start:start + SEGMENTATION_BATCH_SIZE])
-                labels = train_labels[idx].to(device)
-                selected_loss += multiclass_dice_loss(F.interpolate(head(train_feats[idx].to(device)), labels.shape[-2:], mode="bilinear"), labels, labels != -1).item()
-        selected_loss /= (len(inner_val) + SEGMENTATION_BATCH_SIZE - 1) // SEGMENTATION_BATCH_SIZE
-        if selected_loss < best_loss:
-            best_loss, best_epoch = selected_loss, epoch
+            for start in range(0, len(selection_indices), SEGMENTATION_BATCH_SIZE):
+                idx = selection_indices[start:start + SEGMENTATION_BATCH_SIZE]
+                labels = val_labels[idx].to(device=device, dtype=torch.long)
+                if features_on_gpu:
+                    gpu_idx = idx.to(device)
+                    batch_feats = val_feats[gpu_idx].float() * val_scales[gpu_idx].float()
+                else:
+                    batch_feats = val_feats[idx].to(device).float() * val_scales[idx].to(device).float()
+                logits = F.interpolate(head(batch_feats), labels.shape[-2:], mode="bilinear")
+                validation_loss += float(multiclass_dice_loss(logits, labels, labels != -1))
+                batches += 1
+        validation_loss /= batches
+        if validation_loss < best_loss:
+            best_loss, best_epoch = validation_loss, epoch + 1
+            best_state = {key: value.detach().cpu().clone() for key, value in head.state_dict().items()}
 
-    torch.manual_seed(SEG_SPLIT_SEED)
-    head = MaskTransformer(n_cls=n_cls, d_encoder=train_feats.shape[-1], n_layers=2, n_heads=8, d_model=768, d_ff=3072).to(device)
-    opt = torch.optim.Adam(head.parameters(), lr=SEGMENTATION_LR, weight_decay=SEGMENTATION_WEIGHT_DECAY)
-    for _ in range(best_epoch + 1):
-        head.train(); perm = torch.randperm(len(train_feats))
-        for start in range(0, len(perm), SEGMENTATION_BATCH_SIZE):
-            idx = perm[start:start + SEGMENTATION_BATCH_SIZE]
-            labels = train_labels[idx].to(device)
-            loss = multiclass_dice_loss(F.interpolate(head(train_feats[idx].to(device)), labels.shape[-2:], mode="bilinear"), labels, labels != -1)
-            opt.zero_grad(); loss.backward(); opt.step()
+    head.load_state_dict(best_state)
 
-    rows = []
+    rows, class_rows, class_present_rows = [], [], []
     head.eval()
     with torch.no_grad():
         for start in range(0, len(val_feats), SEGMENTATION_BATCH_SIZE):
-            labels = val_labels[start:start + SEGMENTATION_BATCH_SIZE].to(device)
-            pred = F.interpolate(head(val_feats[start:start + SEGMENTATION_BATCH_SIZE].to(device)), labels.shape[-2:], mode="bilinear").argmax(1)
+            labels = val_labels[start:start + SEGMENTATION_BATCH_SIZE].to(device=device, dtype=torch.long)
+            batch_feats = val_feats[start:start + SEGMENTATION_BATCH_SIZE].to(device).float() * val_scales[start:start + SEGMENTATION_BATCH_SIZE].to(device).float()
+            logits = head(batch_feats)
+            pred = F.interpolate(logits, labels.shape[-2:], mode="bilinear").argmax(1)
             valid = labels != -1
             tp, fp, fn = [], [], []
             for class_id in range(n_cls):
@@ -505,14 +573,50 @@ def inline_segmentation_f1(model, mean, std, dataset, device, transform):
                 tp.append((pc & tc & valid).sum((1, 2))); fp.append((pc & ~tc & valid).sum((1, 2))); fn.append((~pc & tc & valid).sum((1, 2)))
             tp, fp, fn = torch.stack(tp, 1).double(), torch.stack(fp, 1).double(), torch.stack(fn, 1).double()
             present = tp + fp + fn > 0
-            f1 = (2 * tp / (2 * tp + fp + fn).clamp(min=1)).sum(1) / present.sum(1)
+            class_f1 = 2 * tp / (2 * tp + fp + fn).clamp(min=1)
+            f1 = class_f1.sum(1) / present.sum(1)
             jaccard = (tp / (tp + fp + fn).clamp(min=1)).sum(1) / present.sum(1)
             pixel_counts = valid.sum((1, 2)).double()
             keep = pixel_counts > 0
             rows.append(torch.stack((f1[keep], jaccard[keep], pixel_counts[keep], (labels.masked_fill(~valid, 0).sum((1, 2))[keep] == 0).double()), 1).cpu())
-    values = torch.cat(rows).numpy(); weights = values[:, 2]; background_only = values[:, 3].astype(bool)
+            class_rows.append(class_f1[keep].cpu()); class_present_rows.append(present[keep].cpu())
+    values = torch.cat(rows).numpy()
+    class_values = torch.cat(class_rows).numpy(); class_present = torch.cat(class_present_rows).numpy()
+    weights = values[:, 2].astype(np.float32); background_only = values[:, 3].astype(bool)
     weights[~background_only] *= max(1.0, background_only.mean() * 16.0)
-    return {"seg_val_f1": float(np.average(values[:, 0], weights=weights)), "seg_val_jaccard": float(np.average(values[:, 1], weights=weights)), "selected_epoch": int(best_epoch + 1)}, time.monotonic() - started_at
+    result = {
+        "seg_val_f1": float(np.average(values[:, 0], weights=weights)),
+        "seg_val_jaccard": float(np.average(values[:, 1], weights=weights)),
+        "selected_epoch": best_epoch,
+        "lr": lr,
+        "weight_decay": weight_decay,
+        "selected_val_dice_loss": best_loss,
+        "selection_split": "official_val_subset",
+        "selection_examples": len(selection_indices),
+        "selection_metric": "dice_loss",
+        "refit": False,
+        "decoder_dim": SEGMENTATION_DECODER_DIM,
+        "train_examples": len(train_feats),
+        "val_examples": len(val_feats),
+        "feature_cache": "gpu" if features_on_gpu else "cpu",
+    }
+    if dataset == "pannuke":
+        result["class_balanced_seg_val_f1"] = float(np.mean([
+            np.average(class_values[class_present[:, i], i], weights=weights[class_present[:, i]])
+            for i in range(n_cls)
+        ]))
+        result["class_seg_val_f1"] = {
+            str(i): float(np.average(class_values[class_present[:, i], i], weights=weights[class_present[:, i]]))
+            for i in range(n_cls)
+        }
+        spec = THUNDER_V2["segmentation"][dataset]["val"]
+        tissue = np.load(DATASET_ROOTS[dataset] / Path(spec["images"]).with_name("types.npy"), allow_pickle=True)[spec["indices"]].astype(str)
+        result["tissue_seg_val_f1"] = {
+            name: float(np.average(values[tissue == name, 0], weights=weights[tissue == name]))
+            for name in sorted(set(tissue))
+        }
+        result["tissue_balanced_seg_val_f1"] = float(np.mean(list(result["tissue_seg_val_f1"].values())))
+    return result, time.monotonic() - started_at
 
 
 # PathoROB robustness index over held-out camelyon + tolkach_esca subsets. We embed cls plus
@@ -525,7 +629,7 @@ def inline_pathorob(model, mean, std, device, transform):
     from PIL import Image
 
     started_at = time.monotonic()
-    autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    autocast = torch.autocast(device_type="cuda", dtype=torch.float16)
 
     class _Patches(torch.utils.data.Dataset):
         def __init__(self, byts): self.byts = byts
@@ -639,7 +743,7 @@ def inline_surgen_ras_auc(model, mean, std, device, transform):
                         yield transform(Image.open(io.BytesIO(b)).convert("RGB")), sid
 
     loader = torch.utils.data.DataLoader(_Tiles(), batch_size=EMBED_BATCH_SIZE, num_workers=EMBED_NUM_WORKERS, pin_memory=True)
-    autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    autocast = torch.autocast(device_type="cuda", dtype=torch.float16)
     sums, counts, tiles = {}, defaultdict(int), 0
     with torch.no_grad():
         for x, sids in loader:
@@ -710,7 +814,7 @@ def inline_pathobench_survival(model, mean, std, dataset, device, transform):
                         yield transform(Image.open(io.BytesIO(b)).convert("RGB")), sid
 
     loader = torch.utils.data.DataLoader(_Tiles(), batch_size=EMBED_BATCH_SIZE, num_workers=EMBED_NUM_WORKERS, pin_memory=True)
-    autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    autocast = torch.autocast(device_type="cuda", dtype=torch.float16)
     sums, counts, tiles = {}, defaultdict(int), 0
     with torch.no_grad():
         for x, sids in loader:
@@ -753,28 +857,26 @@ def inline_knn_val_f1(train_embs, train_labels, val_embs, val_labels, k_vals):
     import numpy as np
     from sklearn.metrics import f1_score
 
-    train_f = train_embs.astype(np.float32, copy=False)
-    val_f = val_embs.astype(np.float32, copy=False)
-    # Cosine KNN is implemented with normalized dot products in chunks to cap memory use.
-    train_n = train_f / np.maximum(np.linalg.norm(train_f, axis=1, keepdims=True), 1e-12)
-    val_n = val_f / np.maximum(np.linalg.norm(val_f, axis=1, keepdims=True), 1e-12)
-    preds_per_k = {k: [] for k in k_vals}
-    for start in range(0, len(val_n), KNN_CHUNK_SIZE):
-        chunk = val_n[start : start + KNN_CHUNK_SIZE]
-        sim = chunk @ train_n.T
-        order = np.argsort(-sim, axis=1)
-        for i in range(len(chunk)):
-            row = train_labels[order[i]]
-            for k in k_vals:
-                preds_per_k[k].append(int(np.bincount(row[:k]).argmax()))
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    train = F.normalize(torch.from_numpy(train_embs.astype(np.float32, copy=False)), dim=1).to(device)
+    val = F.normalize(torch.from_numpy(val_embs.astype(np.float32, copy=False)), dim=1).to(device)
+    labels = torch.from_numpy(train_labels).long().to(device)
+    num_classes = int(labels.max()) + 1
+    neighbors = torch.empty(len(val), max(k_vals), dtype=torch.long, device=device)
+    for start in range(0, len(val), 1024):
+        neighbors[start:start + 1024] = (val[start:start + 1024] @ train.T).topk(max(k_vals), dim=1).indices
+    preds_per_k = {
+        k: F.one_hot(labels[neighbors[:, :k]], num_classes).sum(1).argmax(1).cpu().numpy()
+        for k in k_vals
+    }
     f1_per_k = {k: float(f1_score(val_labels, preds_per_k[k], average="macro")) for k in k_vals}
     best_k = max(f1_per_k, key=lambda k: f1_per_k[k])
     return best_k, f1_per_k[best_k], f1_per_k
 
 
-# THUNDER SimpleShot: 1000 16-shot support sets, centered prototypes, cosine NN,
-# then per-query majority vote across support-set predictions.
-def inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels, shot, seed):
+# THUNDER SimpleShot: recreate the published seed-0 support-index stream through
+# 1/2/4/8/16 shot, then majority-vote the 1,000 centered 16-shot predictions.
+def inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels):
     import numpy as np
     from sklearn.metrics import f1_score
 
@@ -782,8 +884,13 @@ def inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels, shot, 
     val_embs = val_embs.astype(np.float32, copy=False)
     labels = np.asarray(sorted(np.unique(train_labels)), dtype=np.int64)
     class_indices = [np.flatnonzero(train_labels == label) for label in labels]
-    rng = np.random.default_rng(seed)
-    support_sets = np.stack([np.concatenate([rng.choice(idxs, shot, replace=False) for idxs in class_indices]) for _ in range(FEWSHOT_SUPPORT_SETS)])
+    rng = random.Random(THUNDER_PROBE_SEED)
+    support_sets = None
+    for shot in (1, 2, 4, 8, FEWSHOT_SHOT):
+        support_sets = np.asarray([
+            [index for indices in class_indices for index in rng.sample(indices.tolist(), shot)]
+            for _ in range(FEWSHOT_SUPPORT_SETS)
+        ])
     if torch.cuda.is_available():
         device = torch.device("cuda")
         train_t = torch.from_numpy(train_embs).to(device)
@@ -795,7 +902,7 @@ def inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels, shot, 
             for start in range(0, FEWSHOT_SUPPORT_SETS, FEWSHOT_SUPPORT_CHUNK):
                 support = train_t[support_sets_t[start : start + FEWSHOT_SUPPORT_CHUNK]]
                 mean = support.mean(dim=1)
-                cls = (support - mean[:, None]).reshape(len(support), len(labels), shot, -1).mean(dim=2)
+                cls = (support - mean[:, None]).reshape(len(support), len(labels), FEWSHOT_SHOT, -1).mean(dim=2)
                 cls = F.normalize(cls, dim=-1, eps=1e-12)
                 val = F.normalize(val_t[None] - mean[:, None], dim=-1, eps=1e-12)
                 votes.append(labels_t[torch.einsum("bvd,bcd->bvc", val, cls).argmax(dim=-1)].cpu().numpy())
@@ -805,7 +912,7 @@ def inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels, shot, 
         for i, support_idx in enumerate(support_sets):
             support = train_embs[support_idx]
             mean = support.mean(axis=0, keepdims=True)
-            cls = (support - mean).reshape(len(labels), shot, -1).mean(axis=1)
+            cls = (support - mean).reshape(len(labels), FEWSHOT_SHOT, -1).mean(axis=1)
             cls = cls / np.maximum(np.linalg.norm(cls, axis=1, keepdims=True), 1e-12)
             val = val_embs - mean
             val = val / np.maximum(np.linalg.norm(val, axis=1, keepdims=True), 1e-12)
@@ -814,72 +921,77 @@ def inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels, shot, 
     return float(f1_score(val_labels, preds, average="macro"))
 
 
-# THUNDER linear grid selected on inner train/validation, then refit before outer validation.
-def inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels, inner_train, inner_val, seed=SEG_SPLIT_SEED):
+# THUNDER's nine Adam linear heads train together and select LR, decay, and epoch
+# by the visible official validation macro-F1. The official test split is absent.
+def inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels):
     import numpy as np
     from sklearn.metrics import f1_score
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_classes = int(np.max(train_labels)) + 1
     train_embs_t = torch.from_numpy(train_embs).to(device)
     train_labels_t = torch.from_numpy(train_labels).long().to(device)
     val_embs_t = torch.from_numpy(val_embs).to(device)
-    inner_train_t, inner_val_t = torch.as_tensor(inner_train, device=device), torch.as_tensor(inner_val, device=device)
-    best_f1, best_lr, best_weight_decay, best_epoch = -1.0, None, None, None
-    for lr_i, lr in enumerate(LINEAR_PROBE_LRS):
-        for wd_i, weight_decay in enumerate(LINEAR_PROBE_WEIGHT_DECAYS):
-            torch.manual_seed(seed + lr_i * len(LINEAR_PROBE_WEIGHT_DECAYS) + wd_i)
-            head = nn.Linear(train_embs.shape[1], num_classes).to(device)
-            opt = torch.optim.Adam(head.parameters(), lr=lr, weight_decay=weight_decay)
-            for epoch in range(LINEAR_PROBE_EPOCHS):
-                perm = inner_train_t[torch.randperm(len(inner_train_t), device=device)]
-                for i in range(0, len(perm), LINEAR_PROBE_BATCH_SIZE):
-                    idx = perm[i:i + LINEAR_PROBE_BATCH_SIZE]
-                    loss = F.cross_entropy(head(train_embs_t[idx]), train_labels_t[idx])
-                    opt.zero_grad(); loss.backward(); opt.step()
-                with torch.no_grad():
-                    preds = head(train_embs_t[inner_val_t]).argmax(-1)
-                    truth = train_labels_t[inner_val_t]
-                    f1 = []
-                    for class_id in range(num_classes):
-                        tp = ((preds == class_id) & (truth == class_id)).sum()
-                        fp = ((preds == class_id) & (truth != class_id)).sum()
-                        fn = ((preds != class_id) & (truth == class_id)).sum()
-                        f1.append(2 * tp / (2 * tp + fp + fn).clamp(min=1))
-                    score = float(torch.stack(f1).mean())
-                if score > best_f1:
-                    best_f1, best_lr, best_weight_decay, best_epoch = score, lr, weight_decay, epoch
+    hyperparameters = [(lr, decay) for lr in LINEAR_PROBE_LRS for decay in LINEAR_PROBE_WEIGHT_DECAYS]
+    torch.manual_seed(THUNDER_PROBE_SEED)
+    torch.cuda.manual_seed_all(THUNDER_PROBE_SEED)
+    heads = nn.ModuleList(nn.Linear(train_embs.shape[1], num_classes) for _ in hyperparameters).to(device)
+    optimizer = torch.optim.Adam([
+        {"params": head.parameters(), "lr": lr, "weight_decay": decay}
+        for head, (lr, decay) in zip(heads, hyperparameters)
+    ])
+    best_f1, best_head, best_epoch = -1.0, None, None
+    for epoch in range(LINEAR_PROBE_EPOCHS):
+        # Reproduce THUNDER's GPUEmbeddingLoader RNG stream exactly.
+        torch.empty((), dtype=torch.int64).random_()
+        shuffle_seed = int(torch.empty((), dtype=torch.int64).random_().item())
+        order = torch.randperm(
+            len(train_embs_t), generator=torch.Generator().manual_seed(shuffle_seed),
+        ).to(device)
+        for start in range(0, len(order), LINEAR_PROBE_BATCH_SIZE):
+            indices = order[start:start + LINEAR_PROBE_BATCH_SIZE]
+            optimizer.zero_grad(set_to_none=True)
+            weights = torch.stack([head.weight for head in heads])
+            biases = torch.stack([head.bias for head in heads])
+            outputs = torch.einsum("bd,hcd->hbc", train_embs_t[indices], weights).add_(biases[:, None])
+            # One fused kernel is exactly the sum of THUNDER's nine mean CE losses.
+            F.cross_entropy(
+                outputs.flatten(0, 1), train_labels_t[indices].repeat(len(heads)),
+            ).mul(len(heads)).backward()
+            optimizer.step()
+        torch.empty((), dtype=torch.int64).random_()
+        with torch.no_grad():
+            weights = torch.stack([head.weight for head in heads])
+            biases = torch.stack([head.bias for head in heads])
+            outputs = torch.einsum("bd,hcd->hbc", val_embs_t, weights).add_(biases[:, None])
+            predictions = [output.argmax(1).cpu().numpy() for output in outputs]
+        scores = [f1_score(val_labels, prediction, average="macro") for prediction in predictions]
+        head_index = int(np.argmax(scores))
+        if scores[head_index] > best_f1:
+            best_f1, best_head, best_epoch = float(scores[head_index]), head_index, epoch + 1
+    best_lr, best_weight_decay = hyperparameters[best_head]
+    return best_f1, {
+        "lr": best_lr,
+        "weight_decay": best_weight_decay,
+        "epoch": best_epoch,
+        "selection_split": "official_val",
+    }
 
-    torch.manual_seed(seed + LINEAR_PROBE_LRS.index(best_lr) * len(LINEAR_PROBE_WEIGHT_DECAYS) + LINEAR_PROBE_WEIGHT_DECAYS.index(best_weight_decay))
-    head = nn.Linear(train_embs.shape[1], num_classes).to(device)
-    opt = torch.optim.Adam(head.parameters(), lr=best_lr, weight_decay=best_weight_decay)
-    for _ in range(best_epoch + 1):
-        perm = torch.randperm(len(train_embs_t), device=device)
-        for i in range(0, len(perm), LINEAR_PROBE_BATCH_SIZE):
-            idx = perm[i:i + LINEAR_PROBE_BATCH_SIZE]
-            loss = F.cross_entropy(head(train_embs_t[idx]), train_labels_t[idx])
-            opt.zero_grad(); loss.backward(); opt.step()
-    with torch.no_grad():
-        outer_preds = head(val_embs_t).argmax(-1).cpu().numpy()
-    return float(f1_score(val_labels, outer_preds, average="macro")), {"lr": best_lr, "weight_decay": best_weight_decay, "epoch": best_epoch + 1, "inner_val_f1": best_f1}
 
-
-def classification_head_metrics(train_embs, train_labels, val_embs, val_labels, seed):
-    import numpy as np
-    from sklearn.model_selection import train_test_split
-
-    inner_train, inner_val = train_test_split(np.arange(len(train_labels)), test_size=INNER_VAL_FRACTION, random_state=seed, stratify=train_labels)
-    knn_best_k, _, knn_all = inline_knn_val_f1(train_embs[inner_train], train_labels[inner_train], train_embs[inner_val], train_labels[inner_val], KNN_K_VALS)
-    _, knn_outer_f1, _ = inline_knn_val_f1(train_embs, train_labels, val_embs, val_labels, [knn_best_k])
-    fewshot_f1 = inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels, FEWSHOT_SHOT, seed)
-    linear_f1, linear_selection = inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels, inner_train, inner_val, seed)
+def classification_head_metrics(train_embs, train_labels, val_embs, val_labels):
+    knn_best_k, knn_val_f1, knn_all = inline_knn_val_f1(train_embs, train_labels, val_embs, val_labels, KNN_K_VALS)
+    fewshot_f1 = inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels)
+    linear_f1, linear_selection = inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels)
     return {
         "linear_val_f1": linear_f1,
         "linear_selection": linear_selection,
         "knn_best_k": knn_best_k,
-        "knn_val_f1": knn_outer_f1,
-        "knn_inner_val_f1_per_k": {int(k): float(v) for k, v in knn_all.items()},
+        "knn_val_f1": knn_val_f1,
+        "knn_val_f1_per_k": {int(k): float(v) for k, v in knn_all.items()},
         "fewshot_val_f1": fewshot_f1,
         "fewshot_val_f1_per_shot": {FEWSHOT_SHOT: fewshot_f1},
+        "selection_split": "official_val",
+        "support_draw_seed": THUNDER_PROBE_SEED,
     }
 
 
@@ -908,18 +1020,21 @@ def worker_probe_transforms(cfg):
     image = {
         "resize_crop_224": transforms.Compose([transforms.Resize(224, antialias=True), transforms.CenterCrop(224), transforms.ToTensor()]),
         "bicubic224_crop224": transforms.Compose([transforms.Resize(224, interpolation=InterpolationMode.BICUBIC, antialias=True), transforms.CenterCrop(224), transforms.ToTensor()]),
+        "bicubic256_crop224": transforms.Compose([transforms.Resize(256, interpolation=InterpolationMode.BICUBIC, antialias=True), transforms.CenterCrop(224), transforms.ToTensor()]),
         "square_224": transforms.Compose([transforms.Resize((224, 224), antialias=True), transforms.ToTensor()]),
     }[policy]
-    patch = transforms.Compose([transforms.Resize((224, 224), antialias=True), transforms.ToTensor()])
-    return image, patch
+    return image, image
 
 
 def run_probe_job(request_path):
     import importlib
     from model import DinoV2ViT
 
-    # Probe selection/refit must be invariant across clean H100 processes.
+    # Fixed seeds keep every head, minibatch order, and support draw stable.
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+    random.seed(THUNDER_PROBE_SEED)
+    torch.manual_seed(THUNDER_PROBE_SEED)
+    torch.cuda.manual_seed_all(THUNDER_PROBE_SEED)
     torch.use_deterministic_algorithms(True)
     probe_started_at = time.monotonic()
     request = json.loads(Path(request_path).read_text())
@@ -966,7 +1081,7 @@ def run_probe_job(request_path):
         embed_started = time.monotonic()
         train_embs, train_labels = embed_classification_dataset(model, mean, std, dataset, "train", device, transform)
         val_embs, val_labels = embed_classification_dataset(model, mean, std, dataset, "val", device, transform)
-        inline_metrics[dataset] = classification_head_metrics(train_embs, train_labels, val_embs, val_labels, SEG_SPLIT_SEED + classification.index(dataset))
+        inline_metrics[dataset] = classification_head_metrics(train_embs, train_labels, val_embs, val_labels)
         inline_metrics[dataset]["wall_seconds"] = time.monotonic() - embed_started
         print(
             f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "

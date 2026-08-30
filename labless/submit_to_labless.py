@@ -40,7 +40,11 @@ NANOPATH_LOCKED_PROBE_CONFIG = {
     "enabled": True,
     "model_weights": "ema",
     "count": 1,
-    "datasets": ["break_his", "mhist", "pcam", "ccrcc", "tcga_uniform", "spider_skin"],
+    "datasets": [
+        "bach", "bracs", "break_his", "ccrcc", "crc", "esca", "mhist", "pcam",
+        "spider_breast", "spider_colorectal", "spider_skin", "spider_thorax",
+        "tcga_crc_msi", "tcga_tils", "tcga_uniform", "wilds",
+    ],
     "segmentation_datasets": ["pannuke", "ocelot", "segpath_epithelial", "segpath_lymphocytes"],
     "slide_datasets": ["ucla_lung"],
     "auc_datasets": ["surgen"],
