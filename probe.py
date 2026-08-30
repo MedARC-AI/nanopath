@@ -87,7 +87,7 @@ SURGEN_LR_MAX_ITER = 5000
 SURGEN_TILES_PER_SLIDE = 768
 SURGEN_ROW_GROUP_SIZE = 64
 SURVIVAL_TILES_PER_SLIDE_CAPS = {"leopard_bcr": 768, "cptac_pda_os": 0}  # 0 means uncapped.
-SURVIVAL_COXNET_ALPHAS = (0.01, 0.02, 0.07)
+SURVIVAL_COXNET_ALPHA_FRACTIONS = (0.1, 0.2, 0.7)
 SURVIVAL_COXNET_L1_RATIO = 0.5
 SURVIVAL_COXNET_MAX_ITER = 100000
 PATHOROB_SUBSETS = {"camelyon": 11, "tolkach_esca": 46}
@@ -508,6 +508,7 @@ def inline_segmentation_f1(model, mean, std, dataset, device, transform):
         d_model=SEGMENTATION_DECODER_DIM,
         d_ff=SEGMENTATION_DECODER_DIM * 4,
     ).to(device)
+    decoder = torch.compile(head) if dataset.startswith("segpath_") else head
     optimizer = torch.optim.Adam(head.parameters(), lr=lr, weight_decay=weight_decay)
     selection_indices = torch.linspace(
         0,
@@ -530,7 +531,7 @@ def inline_segmentation_f1(model, mean, std, dataset, device, transform):
                 batch_feats = train_feats[gpu_idx].float() * train_scales[gpu_idx].float()
             else:
                 batch_feats = train_feats[idx].to(device).float() * train_scales[idx].to(device).float()
-            logits = F.interpolate(head(batch_feats), labels.shape[-2:], mode="bilinear")
+            logits = F.interpolate(decoder(batch_feats), labels.shape[-2:], mode="bilinear")
             loss = multiclass_dice_loss(logits, labels, labels != -1)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -549,7 +550,7 @@ def inline_segmentation_f1(model, mean, std, dataset, device, transform):
                     batch_feats = val_feats[gpu_idx].float() * val_scales[gpu_idx].float()
                 else:
                     batch_feats = val_feats[idx].to(device).float() * val_scales[idx].to(device).float()
-                logits = F.interpolate(head(batch_feats), labels.shape[-2:], mode="bilinear")
+                logits = F.interpolate(decoder(batch_feats), labels.shape[-2:], mode="bilinear")
                 validation_loss += float(multiclass_dice_loss(logits, labels, labels != -1))
                 batches += 1
         validation_loss /= batches
@@ -565,7 +566,7 @@ def inline_segmentation_f1(model, mean, std, dataset, device, transform):
         for start in range(0, len(val_feats), SEGMENTATION_BATCH_SIZE):
             labels = val_labels[start:start + SEGMENTATION_BATCH_SIZE].to(device=device, dtype=torch.long)
             batch_feats = val_feats[start:start + SEGMENTATION_BATCH_SIZE].to(device).float() * val_scales[start:start + SEGMENTATION_BATCH_SIZE].to(device).float()
-            logits = head(batch_feats)
+            logits = decoder(batch_feats)
             pred = F.interpolate(logits, labels.shape[-2:], mode="bilinear").argmax(1)
             valid = labels != -1
             tp, fp, fn = [], [], []
@@ -770,6 +771,7 @@ def inline_pathobench_survival(model, mean, std, dataset, device, transform):
     import pyarrow.parquet as pq
     from PIL import Image
     from sklearn.exceptions import ConvergenceWarning
+    from sklearn.preprocessing import StandardScaler
     from sksurv.linear_model import CoxnetSurvivalAnalysis
 
     started_at = time.monotonic()
@@ -841,19 +843,28 @@ def inline_pathobench_survival(model, mean, std, dataset, device, transform):
     with warnings.catch_warnings():
         warnings.simplefilter("error", ConvergenceWarning)
         for tr, va in fold_indices:
-            for alpha in SURVIVAL_COXNET_ALPHAS:
+            scaler = StandardScaler().fit(X[tr])
+            X_train = scaler.transform(X[tr])
+            X_val = scaler.transform(X[va])
+            alpha_max = CoxnetSurvivalAnalysis(
+                l1_ratio=SURVIVAL_COXNET_L1_RATIO, n_alphas=2,
+                alpha_min_ratio=0.99, max_iter=SURVIVAL_COXNET_MAX_ITER,
+            ).fit(X_train, y[tr]).alphas_[0]
+            for fraction in SURVIVAL_COXNET_ALPHA_FRACTIONS:
+                alpha = alpha_max * fraction
                 head = CoxnetSurvivalAnalysis(
                     alphas=[alpha], l1_ratio=SURVIVAL_COXNET_L1_RATIO,
                     max_iter=SURVIVAL_COXNET_MAX_ITER,
-                ).fit(X[tr], y[tr])
-                folds.append({"alpha": alpha, "val_cindex": float(head.score(X[va], y[va])), "train_cases": len(tr), "val_cases": len(va)})
+                ).fit(X_train, y[tr])
+                folds.append({"alpha_fraction": fraction, "alpha": float(alpha), "alpha_max": float(alpha_max), "val_cindex": float(head.score(X_val, y[va])), "train_cases": len(tr), "val_cases": len(va)})
     val_cindex = float(np.mean([f["val_cindex"] for f in folds]))
     return {
         "val_cindex": val_cindex,
-        "coxnet_alphas": list(SURVIVAL_COXNET_ALPHAS),
+        "coxnet_alpha_fractions": list(SURVIVAL_COXNET_ALPHA_FRACTIONS),
         "coxnet_l1_ratio": SURVIVAL_COXNET_L1_RATIO,
         "coxnet_max_iter": SURVIVAL_COXNET_MAX_ITER,
-        "val_cindex_per_alpha": {str(alpha): float(np.mean([f["val_cindex"] for f in folds if f["alpha"] == alpha])) for alpha in SURVIVAL_COXNET_ALPHAS},
+        "coxnet_standardize": True,
+        "val_cindex_per_alpha_fraction": {str(fraction): float(np.mean([f["val_cindex"] for f in folds if f["alpha_fraction"] == fraction])) for fraction in SURVIVAL_COXNET_ALPHA_FRACTIONS},
         "fold_scores": [float(f["val_cindex"]) for f in folds],
         "folds": folds,
         "tiles": tiles,
@@ -934,13 +945,15 @@ def inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels):
 # by the visible official validation macro-F1. The official test split is absent.
 def inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels):
     import numpy as np
-    from sklearn.metrics import f1_score
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_classes = int(np.max(train_labels)) + 1
     train_embs_t = torch.from_numpy(train_embs).to(device)
     train_labels_t = torch.from_numpy(train_labels).long().to(device)
     val_embs_t = torch.from_numpy(val_embs).to(device)
+    val_labels_t = torch.from_numpy(val_labels).long().to(device)
+    classes = torch.arange(num_classes, device=device)[None, :, None]
+    expected = val_labels_t[None, None] == classes
     hyperparameters = [(lr, decay) for lr in LINEAR_PROBE_LRS for decay in LINEAR_PROBE_WEIGHT_DECAYS]
     torch.manual_seed(THUNDER_PROBE_SEED)
     torch.cuda.manual_seed_all(THUNDER_PROBE_SEED)
@@ -973,8 +986,12 @@ def inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels):
             weights = torch.stack([head.weight for head in heads])
             biases = torch.stack([head.bias for head in heads])
             outputs = torch.einsum("bd,hcd->hbc", val_embs_t, weights).add_(biases[:, None])
-            predictions = [output.argmax(1).cpu().numpy() for output in outputs]
-        scores = [f1_score(val_labels, prediction, average="macro") for prediction in predictions]
+            predictions = outputs.argmax(2)
+            predicted = predictions[:, None] == classes
+            tp = (predicted & expected).sum(2)
+            fp = (predicted & ~expected).sum(2)
+            fn = (~predicted & expected).sum(2)
+            scores = (2 * tp / (2 * tp + fp + fn).clamp(min=1)).mean(1).cpu().numpy()
         head_index = int(np.argmax(scores))
         if scores[head_index] > best_f1:
             best_f1, best_head, best_epoch = float(scores[head_index]), head_index, epoch + 1
@@ -1122,7 +1139,7 @@ def run_probe_job(request_path):
         result, wall = inline_pathobench_survival(model, mean, std, dataset, device, patch_transform)
         result["wall_seconds"] = wall
         survival_metrics[dataset] = result
-        print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_survival_done: {dataset}  cindex={result['val_cindex']:.4f}  coxnet_alphas={result['coxnet_alphas']}  wall={wall:.2f}s", flush=True)
+        print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_survival_done: {dataset}  cindex={result['val_cindex']:.4f}  coxnet_alpha_fractions={result['coxnet_alpha_fractions']}  wall={wall:.2f}s", flush=True)
 
     rob_indices = {}
     for dataset in robustness:
@@ -1193,8 +1210,9 @@ def run_probe_job(request_path):
         metrics[f"probe_{dataset}_val_cindex"] = survival_metrics[dataset]["val_cindex"]
         metrics[f"probe_{dataset}_coxnet_l1_ratio"] = survival_metrics[dataset]["coxnet_l1_ratio"]
         metrics[f"probe_{dataset}_coxnet_max_iter"] = survival_metrics[dataset]["coxnet_max_iter"]
-        for alpha, score in survival_metrics[dataset]["val_cindex_per_alpha"].items():
-            metrics[f"probe_{dataset}_val_cindex_alpha_{alpha.replace('.', 'p')}"] = score
+        metrics[f"probe_{dataset}_coxnet_standardize"] = survival_metrics[dataset]["coxnet_standardize"]
+        for fraction, score in survival_metrics[dataset]["val_cindex_per_alpha_fraction"].items():
+            metrics[f"probe_{dataset}_val_cindex_alpha_fraction_{fraction.replace('.', 'p')}"] = score
         metrics[f"probe_{dataset}_tiles"] = survival_metrics[dataset]["tiles"]
         metrics[f"probe_{dataset}_tiles_per_slide_cap"] = survival_metrics[dataset]["tiles_per_slide_cap"]
         per_dataset_score[dataset] = survival_metrics[dataset]["val_cindex"]
