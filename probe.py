@@ -34,8 +34,8 @@ PROBE_PROTOCOL_VERSION = 2
 THUNDER_V2 = json.loads((BENCHMARKING_DIR / "thunder_v2.json").read_text())
 assert THUNDER_V2["protocol_version"] == PROBE_PROTOCOL_VERSION
 assert all(set(spec) == {"root", "train", "val"} for family in ("classification", "segmentation") for spec in THUNDER_V2[family].values())
-EMBED_BATCH_SIZE = 256
-EMBED_NUM_WORKERS = 8
+EMBED_BATCH_SIZE = 2048
+EMBED_NUM_WORKERS = 16
 SEGMENTATION_EPOCHS = {"pannuke": 30, "ocelot": 30, "segpath_epithelial": 9, "segpath_lymphocytes": 21}
 SEGMENTATION_HYPERPARAMETERS = {
     "pannuke": (1e-3, 1e-4),
@@ -45,7 +45,7 @@ SEGMENTATION_HYPERPARAMETERS = {
 }
 SEGMENTATION_DECODER_DIM = 192
 SEGMENTATION_BATCH_SIZE = 64
-SEGMENTATION_EMBED_BATCH_SIZE = 192
+SEGMENTATION_EMBED_BATCH_SIZE = 2048
 SEGMENTATION_SELECTION_EXAMPLES = 256
 PANNUKE_NUM_CLASSES = 6
 SEG_SPLIT_SEED = 1337
@@ -89,6 +89,7 @@ SURGEN_ROW_GROUP_SIZE = 64
 SURVIVAL_TILES_PER_SLIDE_CAPS = {"leopard_bcr": 768, "cptac_pda_os": 0}  # 0 means uncapped.
 SURVIVAL_COXNET_ALPHAS = (0.01, 0.02, 0.07)
 SURVIVAL_COXNET_L1_RATIO = 0.5
+SURVIVAL_COXNET_MAX_ITER = 100000
 PATHOROB_SUBSETS = {"camelyon": 11, "tolkach_esca": 46}
 # Module-level so dataset adapters can read roots without threading cfg through every call.
 # Populated from cfg.probe.dataset_roots by prepare_probe_state() and run_probe_job().
@@ -764,9 +765,11 @@ def inline_surgen_ras_auc(model, mean, std, device, transform):
 
 def inline_pathobench_survival(model, mean, std, dataset, device, transform):
     import io
+    import warnings
     import numpy as np
     import pyarrow.parquet as pq
     from PIL import Image
+    from sklearn.exceptions import ConvergenceWarning
     from sksurv.linear_model import CoxnetSurvivalAnalysis
 
     started_at = time.monotonic()
@@ -835,15 +838,21 @@ def inline_pathobench_survival(model, mean, std, dataset, device, transform):
     else:
         fold_indices = stratified_folds(pool_events.astype(np.int64))
     folds = []
-    for tr, va in fold_indices:
-        for alpha in SURVIVAL_COXNET_ALPHAS:
-            head = CoxnetSurvivalAnalysis(alphas=[alpha], l1_ratio=SURVIVAL_COXNET_L1_RATIO, max_iter=1000).fit(X[tr], y[tr])
-            folds.append({"alpha": alpha, "val_cindex": float(head.score(X[va], y[va])), "train_cases": len(tr), "val_cases": len(va)})
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", ConvergenceWarning)
+        for tr, va in fold_indices:
+            for alpha in SURVIVAL_COXNET_ALPHAS:
+                head = CoxnetSurvivalAnalysis(
+                    alphas=[alpha], l1_ratio=SURVIVAL_COXNET_L1_RATIO,
+                    max_iter=SURVIVAL_COXNET_MAX_ITER,
+                ).fit(X[tr], y[tr])
+                folds.append({"alpha": alpha, "val_cindex": float(head.score(X[va], y[va])), "train_cases": len(tr), "val_cases": len(va)})
     val_cindex = float(np.mean([f["val_cindex"] for f in folds]))
     return {
         "val_cindex": val_cindex,
         "coxnet_alphas": list(SURVIVAL_COXNET_ALPHAS),
         "coxnet_l1_ratio": SURVIVAL_COXNET_L1_RATIO,
+        "coxnet_max_iter": SURVIVAL_COXNET_MAX_ITER,
         "val_cindex_per_alpha": {str(alpha): float(np.mean([f["val_cindex"] for f in folds if f["alpha"] == alpha])) for alpha in SURVIVAL_COXNET_ALPHAS},
         "fold_scores": [float(f["val_cindex"]) for f in folds],
         "folds": folds,
@@ -1183,6 +1192,7 @@ def run_probe_job(request_path):
     for dataset in survival:
         metrics[f"probe_{dataset}_val_cindex"] = survival_metrics[dataset]["val_cindex"]
         metrics[f"probe_{dataset}_coxnet_l1_ratio"] = survival_metrics[dataset]["coxnet_l1_ratio"]
+        metrics[f"probe_{dataset}_coxnet_max_iter"] = survival_metrics[dataset]["coxnet_max_iter"]
         for alpha, score in survival_metrics[dataset]["val_cindex_per_alpha"].items():
             metrics[f"probe_{dataset}_val_cindex_alpha_{alpha.replace('.', 'p')}"] = score
         metrics[f"probe_{dataset}_tiles"] = survival_metrics[dataset]["tiles"]
