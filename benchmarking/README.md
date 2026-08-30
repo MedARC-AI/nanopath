@@ -26,11 +26,11 @@ Each predictive family therefore contributes 19% and robustness contributes 5%. 
 | Survival | LEOPARD BCR, CPTAC-PDA OS | c-index | fold-standardized CoxNet at 0.1, 0.2, and 0.7 times the training fold's `alpha_max`, `l1_ratio=0.5`, `max_iter=100000`; non-convergence is an error |
 | Robustness | PathoROB camelyon, tolkach_esca | quality-adjusted robustness | published fixed-k robustness index and biological-class balanced KNN accuracy |
 
-SurGen and both survival datasets use 384 source-spaced train/validation tiles per
-slide. These caps keep the complete single-GPU suite safely below 20 minutes while preserving coverage across
-each slide's raster-ordered row groups.
+SurGen uses 768 source-spaced train/validation tiles per slide. LEOPARD and
+CPTAC-PDA retain every prepared tile. The complete suite is gated at 25 minutes
+on one H100.
 
-Classification and segmentation selections are frozen in [thunder_v2.json](thunder_v2.json). The manifest has exactly `train` and `val` records. It contains the same 16 equally weighted tasks as THUNDER's published classification aggregate: BACH, BRACS, BreaKHis, CCRCC, CRC, ESCA, MHIST, PCam, SPIDER breast/colorectal/skin/thorax, TCGA CRC-MSI/TILs/Uniform, and WILDS. BACH, BreaKHis, and MHIST retain their complete official train/validation splits. BRACS is capped at 256/128 because decoding its large PNG regions otherwise breaks the 20-minute complete-suite budget; every other larger task is capped at 1024/256. Both caps use seed-1337 proportional class stratification. Naturally smaller splits remain complete, every training class has at least 16 examples, and every validation class is represented.
+Classification and segmentation selections are frozen in [thunder_v2.json](thunder_v2.json). The manifest has exactly `train` and `val` records. It contains the same 16 equally weighted tasks as THUNDER's published classification aggregate: BACH, BRACS, BreaKHis, CCRCC, CRC, ESCA, MHIST, PCam, SPIDER breast/colorectal/skin/thorax, TCGA CRC-MSI/TILs/Uniform, and WILDS. BACH, BreaKHis, and MHIST retain their complete official train/validation splits. BRACS is capped at 256/128 because decoding its large PNG regions otherwise consumes disproportionate runtime; every other larger task is capped at 1024/256. Both caps use seed-1337 proportional class stratification. Naturally smaller splits remain complete, every training class has at least 16 examples, and every validation class is represented.
 
 The segmentation panel uses the exact four current THUNDER datasets and split semantics. PanNuke keeps all 2656/2523 train/validation patches and OCELOT all 6400/2178 crops. SegPath epithelial keeps four source-balanced training crops and two validation crops per selected source (32768/4518); lymphocytes keeps two per source (20906/2164). Source images never cross splits. One crop per lymphocyte source was insufficient in validation diagnostics, so the frozen panel retains two.
 
