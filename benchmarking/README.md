@@ -26,8 +26,8 @@ Each predictive family therefore contributes 19% and robustness contributes 5%. 
 | Survival | LEOPARD BCR, CPTAC-PDA OS | c-index | fold-standardized CoxNet at 0.1, 0.2, and 0.7 times the training fold's `alpha_max`, `l1_ratio=0.5`, `max_iter=100000`; non-convergence is an error |
 | Robustness | PathoROB camelyon, tolkach_esca | quality-adjusted robustness | published fixed-k robustness index and biological-class balanced KNN accuracy |
 
-SurGen uses 384 source-spaced train/validation tiles per slide. This cap keeps the
-complete single-GPU suite safely below 20 minutes while preserving coverage across
+SurGen and both survival datasets use 384 source-spaced train/validation tiles per
+slide. These caps keep the complete single-GPU suite safely below 20 minutes while preserving coverage across
 each slide's raster-ordered row groups.
 
 Classification and segmentation selections are frozen in [thunder_v2.json](thunder_v2.json). The manifest has exactly `train` and `val` records. It contains the same 16 equally weighted tasks as THUNDER's published classification aggregate: BACH, BRACS, BreaKHis, CCRCC, CRC, ESCA, MHIST, PCam, SPIDER breast/colorectal/skin/thorax, TCGA CRC-MSI/TILs/Uniform, and WILDS. BACH, BreaKHis, and MHIST retain their complete official train/validation splits. BRACS is capped at 256/128 because decoding its large PNG regions otherwise breaks the 20-minute complete-suite budget; every other larger task is capped at 1024/256. Both caps use seed-1337 proportional class stratification. Naturally smaller splits remain complete, every training class has at least 16 examples, and every validation class is represented.
