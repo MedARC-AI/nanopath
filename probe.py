@@ -574,8 +574,9 @@ def inline_segmentation_f1(model, mean, std, dataset, device, transform):
     return result, time.monotonic() - started_at
 
 
-# PathoROB robustness index over held-out camelyon + tolkach_esca subsets. We embed cls plus
-# mean patch tokens, drop same-slide neighbors, and use the published per-subset k_opt values.
+# PathoROB robustness index over held-out camelyon + tolkach_esca subsets. Its published
+# adapter is fixed to final CLS plus mean patch tokens, so it intentionally reads forward()
+# rather than the model-defined probe_features() used by predictive pooled probes.
 def inline_pathorob(model, mean, std, device, transform):
     import io
     import numpy as np

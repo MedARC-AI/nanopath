@@ -173,8 +173,9 @@ class DinoV2ViT(nn.Module):
             "x_norm_patchtokens": x[:, 1 + self.registers :],
         }
 
-    # Probe contract: encode_image returns [registers || patches] for the seg head;
-    # probe_features returns the cls token for classification probes.
+    # Default probe contract: encode_image returns [registers || patches] for segmentation
+    # and probe_features returns CLS for pooled probes. Recipes may override either method
+    # to define their test-time feature aggregation without changing the locked probe suite.
     def encode_image(self, x, checkpoint=False):
         out = self(x, checkpoint=checkpoint)
         return torch.cat([out["x_norm_regtokens"], out["x_norm_patchtokens"]], dim=1)

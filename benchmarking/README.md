@@ -74,6 +74,15 @@ source-disjoint official development splits: 32,768/4,518 epithelial crops and
 
 ## Probe protocols
 
+NanoPath exposes two model-defined test-time readouts. `probe_features()` feeds
+classification, progression, mutation, and survival, so recipes may aggregate
+layers or views there. `encode_image()` feeds segmentation; all model-defined
+channels are retained, while an expanded spatial grid is pooled back to the
+native patch grid to bound decoder memory and runtime. PathoROB deliberately
+does not use `probe_features()`: its published adapter remains fixed to final
+CLS plus mean patch tokens, including any normalization applied by the
+backbone's ordinary forward pass.
+
 Classification embeddings are frozen fp16 features. Nine Adam linear heads use
 THUNDER's `lr={1e-3,1e-4,1e-5}` ×
 `weight_decay={0,1e-3,1e-4}`, batch 64, and 200 epochs. Their nine final
@@ -126,3 +135,11 @@ cross-family pairwise concordance, the explicit NanoPath-vs-GigaPath and
 NanoPath-vs-H-Optimus-0 comparisons, and the NanoPath-family residual. Existing
 v2 rows from the superseded 16-classification/four-segmentation protocol are not
 comparable and must not be reused.
+
+The primary segmentation correlation compares the three THUNDER tasks present
+in NanoPath with their official held-out results. The full four-task THUNDER
+aggregate remains an out-of-distribution ordering diagnostic, but cannot be the
+matched correlation target because its fourth task is the deliberately excluded
+all-TCGA OCELOT dataset. Both the pinned harness aggregate and the published
+THUNDER aggregate are reported because their GigaPath and Midnight-12K values
+materially disagree.

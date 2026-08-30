@@ -48,13 +48,39 @@ On Labless, the run labeled `main` reflects the current GitHub `main` branch, an
 
 ### Protocol-v2 NanoPath models
 
-Revised-v2 rows are pending fresh reruns. Scores from the superseded
-16-classification/four-segmentation implementation were removed because they
+Scores from the superseded 16-classification/four-segmentation implementation
 are not comparable to this protocol.
+
+| # | Description | final score | classification | segmentation | progression | mutation | survival | robustness quality | Contributors |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 1 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm) | **0.6464** | 0.7507 | 0.6024 | 0.6136 | 0.5885 | 0.6010 | 0.9354 | @anishdulal |
+| 2 | [I-JEPA contig patch](https://github.com/MedARC-AI/nanopath/tree/JEPA-contig-patch) | 0.6439 | 0.7219 | 0.5993 | 0.5931 | 0.6148 | 0.6172 | 0.9225 | @NimaAsh |
+| 3 | [block-strided-cls](https://github.com/MedARC-AI/nanopath/tree/block-strided-cls) | 0.6411 | 0.7477 | 0.6039 | 0.5390 | 0.6066 | 0.6335 | 0.9253 | @RyanKim17920 |
+| 4 | [lr-and-curation](https://labless.dev/runs/run_sub_6c6c051f71) | 0.6370 | 0.7048 | 0.5940 | 0.5948 | 0.6025 | 0.6199 | 0.9003 | @nevasini1 |
+| 5 | [dinov2-s-kde](https://labless.dev/runs/run_sub_0d8aeb2511) | 0.6340 | 0.6922 | 0.5939 | 0.5870 | 0.5921 | 0.6361 | 0.8939 | @PaulScotti |
 
 ### Protocol-v2 reference baselines
 
-Reference rows are likewise pending fresh revised-v2 reruns.
+| # | Name | Description | final score | classification | segmentation | progression | mutation | survival | robustness quality |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|
+| 1 | UNI-2-h | MahmoodLab UNI-2-h ViT-H/14 | **0.6950** | 0.8161 | 0.6323 | 0.7156 | 0.6408 | 0.6105 | 0.9221 |
+| 2 | GenBio-PathFM | GenBio-PathFM ViT-G/16 | 0.6923 | 0.8213 | 0.6100 | 0.7046 | 0.6232 | 0.6312 | 0.9628 |
+| 3 | H-optimus-0 | H-optimus-0 ViT-G/14-reg | 0.6830 | 0.8082 | 0.5916 | 0.6961 | 0.6485 | 0.6059 | 0.9290 |
+| 4 | Midnight-12K | Kaiko Midnight-12K ViT-G/14 | 0.6811 | 0.7761 | 0.6326 | 0.7080 | 0.6170 | 0.6100 | 0.9169 |
+| 5 | Virchow | Paige/Microsoft Virchow ViT-H/14 | 0.6750 | 0.7728 | 0.6326 | 0.6541 | 0.6291 | 0.6173 | 0.9388 |
+| 6 | GigaPath | Prov-GigaPath tile encoder ViT-G/16 | 0.6680 | 0.7948 | 0.6197 | 0.6813 | 0.6130 | 0.5802 | 0.8611 |
+| 7 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.6427 | 0.6640 | 0.6306 | 0.6748 | 0.5829 | 0.6058 | 0.8534 |
+
+Across these 12 matched checkpoints, protocol-v2 classification has 0.946
+Pearson and 0.939 all-pair concordance with official THUNDER classification.
+For the three THUNDER segmentation tasks present in this non-TCGA proxy, the
+corresponding values are 0.735 and 0.758, with 0.857 cross-family concordance.
+The complete four-task pinned THUNDER segmentation run, which additionally
+contains prohibited all-TCGA OCELOT, has lower 0.656 Pearson but retains 0.829
+cross-family concordance; the published THUNDER aggregate gives 0.719 Pearson
+and 0.818 all-pair concordance. Protocol v2 has 0.943 cross-family concordance
+with the existing official composite and never ranks a NanoPath checkpoint
+above GigaPath or H-optimus-0 when that composite ranks it below the baseline.
 
 ### Protocol-v1 legacy NanoPath models
 
