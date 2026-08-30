@@ -133,7 +133,7 @@ def prepare_probe_state(cfg, output_dir):
         path.mkdir(parents=True, exist_ok=True)
     groups = {request_key: [str(x) for x in cfg["probe"].get(cfg_key, [])] for request_key, (cfg_key, _) in TASK_FIELDS.items()}
     data = {
-        "version": 14,
+        "version": 15,
         "probe_protocol_version": PROBE_PROTOCOL_VERSION,
         "family": str(cfg["project"]["family"]),
         "count": int(cfg["probe"]["count"]),
@@ -143,7 +143,7 @@ def prepare_probe_state(cfg, output_dir):
     if paths["state_path"].exists():
         # Explicit resume can continue only if the probe family/datasets/count match the old state.
         previous = json.loads(paths["state_path"].read_text())
-        if previous["version"] != 14:
+        if previous["version"] != 15:
             raise ValueError(f"unsupported probe state version: {previous['version']}")
         if previous["family"] != data["family"]:
             raise ValueError(f"probe family changed from {previous['family']} to {data['family']}")
@@ -437,8 +437,27 @@ def embed_segmentation_dataset(model, mean, std, dataset, split, device, transfo
                 for crop_index, (image, label) in enumerate(crops, 1):
                     batch_images.append(image); batch_labels.append(label)
                     if len(batch_images) == EMBED_BATCH_SIZE or (i == len(tiles) and crop_index == len(crops)):
+                        images = torch.stack(batch_images).to(device)
                         with autocast:
-                            batch_feats = model.encode_image((torch.stack(batch_images).to(device) - mean) / std)[:, model.registers:].float()
+                            batch_feats = model.encode_image((images - mean) / std)[:, model.registers:]
+                        # Keep custom test-time dense aggregation possible without letting extra
+                        # layers or an upsampled grid multiply the common decoder's memory/compute.
+                        # DINO-family encoders expose their native width and patch size; ordinary
+                        # outputs are unchanged, while concatenated layers are averaged and expanded
+                        # spatial grids are area-pooled to the native patch grid.
+                        if hasattr(model, "embed_dim") and batch_feats.shape[-1] != model.embed_dim:
+                            assert batch_feats.shape[-1] % model.embed_dim == 0
+                            batch_feats = batch_feats.unflatten(-1, (-1, model.embed_dim)).mean(-2)
+                        if hasattr(model, "patch_size"):
+                            native_h, native_w = images.shape[-2] // model.patch_size, images.shape[-1] // model.patch_size
+                            if batch_feats.shape[1] != native_h * native_w:
+                                side = int(batch_feats.shape[1] ** 0.5)
+                                assert side * side == batch_feats.shape[1]
+                                batch_feats = F.adaptive_avg_pool2d(
+                                    batch_feats.transpose(1, 2).reshape(len(images), batch_feats.shape[-1], side, side),
+                                    (native_h, native_w),
+                                ).flatten(2).transpose(1, 2)
+                        batch_feats = batch_feats.float()
                         batch_scales = batch_feats.abs().amax(dim=-1, keepdim=True).clamp_min_(1e-12).div_(127).to(torch.float16)
                         feats.append(torch.clamp(torch.round(batch_feats / batch_scales.float()), -127, 127).to(torch.int8).cpu())
                         scales.append(batch_scales.cpu())
@@ -532,6 +551,8 @@ def inline_segmentation_f1(model, mean, std, dataset, device, transform):
         "weight_decay": weight_decay,
         "selection_split": None,
         "decoder_dim": SEGMENTATION_DECODER_DIM,
+        "encoder_tokens": train_feats.shape[1],
+        "encoder_dim": train_feats.shape[2],
         "train_examples": len(train_feats),
         "val_examples": len(val_feats),
         "feature_cache": "gpu" if features_on_gpu else "cpu",
