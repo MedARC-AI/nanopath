@@ -11,6 +11,7 @@
 # Every THUNDER manifest entry is drawn from train/validation only; official
 # test paths are intentionally absent from the repository and runtime.
 
+import gc
 import json
 import os
 import random
@@ -1162,6 +1163,8 @@ def run_probe_job(request_path):
 
     seg_results = {}
     for dataset in segmentation:
+        gc.collect()
+        torch.cuda.empty_cache()
         print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_seg_start: {dataset}", flush=True)
         result, wall = inline_segmentation_f1(model, mean, std, dataset, device, patch_transform)
         result["wall_seconds"] = wall
