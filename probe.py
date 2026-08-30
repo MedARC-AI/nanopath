@@ -375,7 +375,7 @@ def embed_classification_dataset(model, mean, std, dataset, split, device, trans
     return np.concatenate(embs, axis=0).astype(np.float32), np.concatenate(labels, axis=0).astype(np.int64)
 
 
-# Multiclass dice loss for the PanNuke segmentation probe; mask gates invalid pixels.
+# Multiclass Dice loss for the THUNDER segmentation probes; mask gates invalid pixels.
 # Vendored from Thunder (thunder/src/thunder/utils/dice_loss.py).
 def multiclass_dice_loss(pred, label, mask, smooth=1.0):
     pred = F.softmax(pred, dim=1)

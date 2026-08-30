@@ -44,4 +44,6 @@ All frozen feature extraction uses fp16 with batch 2048 and 16 decode workers, m
 
 ## Promotion discipline
 
-Code, manifest, and formula are frozen before comparing against official aggregate results. Post-freeze study artifacts belong under `/data/paul/nanopath/probe-v2-study`. Existing leaderboard rows are protocol-v1 legacy and are not comparable to protocol v2; reference tables are repopulated only from complete v2 runs.
+Code, manifest, and formula were frozen at commit `97794c0` before the final exact official comparison. Post-freeze study artifacts live under `/data/paul/nanopath/probe-v2-study`. The complete 12-model study passed every promotion gate: final-score Pearson/Spearman improved for THUNDER classification, HEST, and CPTAC; cross-family concordance rose from 0.60 to 1.00; mean standardized family-offset reduction was 67.75% with every target improved; and segmentation-component Pearson rose from 0.47 to 0.96. No NanoPath checkpoint ranked above GigaPath or H-Optimus-0 while ranking below it on the existing official composite.
+
+Two independent single-H100 runs completed in 1204.60 and 1188.65 seconds, below the 1500-second limit, with zero difference across 139 non-timing numeric metrics. Existing protocol-v1 rows remain explicitly historical and are not comparable to the rebuilt protocol-v2 tables.
