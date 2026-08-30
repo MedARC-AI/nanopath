@@ -98,7 +98,8 @@ the native patch grid before the shared decoder, while all model-defined
 concatenated layer channels are retained. This leaves ordinary dense outputs
 unchanged and preserves test-time depth aggregation without multiplying the
 decoder's quadratic spatial cost. The decoder width is 192 to meet the runtime
-budget.
+budget. Only the small decoder uses PyTorch's deterministic math attention
+kernel; frozen encoders keep their model-defined fast attention path.
 
 UCLA progression and SurGen mutation use raw pooled features and fixed
 `LogisticRegression(C=0.5, class_weight="balanced", random_state=0)` in three

@@ -24,6 +24,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from PIL import Image
 from timm.layers import trunc_normal_
 
@@ -367,7 +368,12 @@ class _SegBlock(nn.Module):
     def forward(self, x):
         b, n, c = x.shape
         qkv = self.qkv(self.norm1(x)).reshape(b, n, 3, self.heads, c // self.heads).permute(2, 0, 3, 1, 4)
-        attn = F.scaled_dot_product_attention(qkv[0], qkv[1], qkv[2], dropout_p=0.0, scale=(c // self.heads) ** -0.5)
+        # Flash SDPA backward is numerically non-reproducible enough for the
+        # fixed 21-epoch head to cross decision boundaries. The decoder is
+        # small, so use the deterministic math kernel here while the frozen
+        # encoder retains its fast fused attention path.
+        with sdpa_kernel(SDPBackend.MATH):
+            attn = F.scaled_dot_product_attention(qkv[0], qkv[1], qkv[2], dropout_p=0.0, scale=(c // self.heads) ** -0.5)
         attn = attn.transpose(1, 2).reshape(b, n, c)
         x = x + self.proj(attn)
         return x + self.fc2(F.gelu(self.fc1(self.norm2(x))))
