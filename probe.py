@@ -1103,6 +1103,7 @@ def run_probe_job(request_path):
 
     # Segmentation runs first because its compiled decoders are sensitive to allocator
     # fragmentation left by the other probes. Every head resets its own seed.
+    matmul_precision = torch.get_float32_matmul_precision()
     seg_results = {}
     for dataset in segmentation:
         gc.collect()
@@ -1119,6 +1120,7 @@ def run_probe_job(request_path):
         )
     gc.collect()
     torch.cuda.empty_cache()
+    torch.set_float32_matmul_precision(matmul_precision)
 
     inline_metrics = {}
     for dataset in classification:
