@@ -23,6 +23,9 @@ MIDNIGHT12K_VITG14 = (1536, 40, 24, 37, "swiglu", True, None, 0)
 
 
 class Midnight12KViT(DinoV2ViT):
+    # Hugging Face DINOv2 interpolates this non-register checkpoint without antialiasing.
+    pos_interpolation_antialias = False
+
     def probe_features(self, x):
         out = self(x)
         return torch.cat([out["x_norm_clstoken"], out["x_norm_patchtokens"].mean(1)], dim=-1)

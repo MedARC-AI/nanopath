@@ -106,6 +106,8 @@ class Block(nn.Module):
 # Pos embed is bicubically interpolated at runtime to the current patch grid.
 # Meta DINOv2 includes a cls pos and uses 37x37 patches; variant_cfg can override this for probes.
 class DinoV2ViT(nn.Module):
+    pos_interpolation_antialias = True
+
     def __init__(self, variant="dinov2_vits14_reg", drop_path_rate=0.0, variant_cfg=None):
         super().__init__()
         cfg = variant_cfg or DINOV2_VARIANTS[variant]
@@ -130,7 +132,13 @@ class DinoV2ViT(nn.Module):
         g = self._pretrain_grid
         patch_pos = self.pos_embed[:, int(self._pos_has_cls):].reshape(1, g, g, -1).permute(0, 3, 1, 2).float()
         # antialias=True matches Meta's default for DINOv2 `_reg` variants.
-        patch_pos = F.interpolate(patch_pos, size=(h, w), mode="bicubic", align_corners=False, antialias=True)
+        patch_pos = F.interpolate(
+            patch_pos,
+            size=(h, w),
+            mode="bicubic",
+            align_corners=False,
+            antialias=self.pos_interpolation_antialias,
+        )
         patch_pos = patch_pos.permute(0, 2, 3, 1).reshape(1, h * w, -1).to(self.pos_embed.dtype)
         return torch.cat([cls_pos, patch_pos], dim=1) if cls_pos is not None else patch_pos
 
