@@ -38,11 +38,13 @@ assert THUNDER_V2["protocol_version"] == PROBE_PROTOCOL_VERSION
 assert all(set(spec) == {"root", "train", "val"} for family in ("classification", "segmentation") for spec in THUNDER_V2[family].values())
 EMBED_BATCH_SIZE = 512
 EMBED_NUM_WORKERS = 16
-SEGMENTATION_EPOCHS = {"segpath_epithelial": 9, "segpath_lymphocytes": 21}
+SEGMENTATION_EPOCHS = {"pannuke": 30, "segpath_epithelial": 9, "segpath_lymphocytes": 21}
 SEGMENTATION_HYPERPARAMETERS = {
+    "pannuke": (1e-3, 1e-4),
     "segpath_epithelial": (1e-4, 1e-3),
     "segpath_lymphocytes": (1e-3, 1e-4),
 }
+SEGMENTATION_NUM_CLASSES = {"pannuke": 6, "segpath_epithelial": 2, "segpath_lymphocytes": 2}
 SEGMENTATION_DECODER_DIM = 192
 SEGMENTATION_BATCH_SIZE = 64
 SEG_SPLIT_SEED = 1337
@@ -62,7 +64,7 @@ CLASSIFICATION_DATASETS = [
     "spider_breast", "spider_colorectal", "spider_skin", "spider_thorax",
     "wilds",
 ]
-SEGMENTATION_DATASETS = ["segpath_epithelial", "segpath_lymphocytes"]
+SEGMENTATION_DATASETS = ["pannuke", "segpath_epithelial", "segpath_lymphocytes"]
 SLIDE_DATASETS = ["ucla_lung"]
 AUC_DATASETS = ["surgen"]
 SURVIVAL_DATASETS = ["leopard_bcr", "cptac_pda_os"]
@@ -250,18 +252,28 @@ class SegmentationDataset(torch.utils.data.Dataset):
         self.dataset, self.transform = dataset, transform
         self.root = DATASET_ROOTS[dataset]
         spec = THUNDER_V2["segmentation"][dataset][split]
-        self.image_records, self.label_records = spec["images"], spec["labels"]
-        self.groups = []
-        for i, record in enumerate(self.image_records):
-            if not self.groups or self.image_records[self.groups[-1][0]][0] != record[0]:
-                self.groups.append([])
-            self.groups[-1].append(i)
+        if dataset == "pannuke":
+            import numpy as np
+            self.images = np.load(self.root / spec["images"], mmap_mode="r")
+            self.masks = np.load(self.root / spec["labels"], mmap_mode="r")
+        else:
+            self.image_records, self.label_records = spec["images"], spec["labels"]
+            self.groups = []
+            for i, record in enumerate(self.image_records):
+                if not self.groups or self.image_records[self.groups[-1][0]][0] != record[0]:
+                    self.groups.append([])
+                self.groups[-1].append(i)
 
     def __len__(self):
-        return len(self.groups)
+        return len(self.images) if self.dataset == "pannuke" else len(self.groups)
 
     def __getitem__(self, i):
         import numpy as np
+        if self.dataset == "pannuke":
+            label = np.zeros((256, 256), dtype=np.int64)
+            for class_id in range(1, SEGMENTATION_NUM_CLASSES["pannuke"]):
+                np.copyto(label, class_id, where=self.masks[i, :, :, class_id - 1] > 0)
+            return [(self.transform(Image.fromarray(self.images[i].astype(np.uint8))), torch.from_numpy(label))]
         source_image = Image.open(self.root / self.image_records[self.groups[i][0]][0]).convert("RGB")
         source_label = np.asarray(Image.open(self.root / self.label_records[self.groups[i][0]][0]))
         crops = []
@@ -481,7 +493,7 @@ def inline_segmentation_f1(model, mean, std, dataset, device, transform):
     if features_on_gpu:
         train_feats, train_scales = train_feats.to(device), train_scales.to(device)
         val_feats, val_scales = val_feats.to(device), val_scales.to(device)
-    n_cls = 2
+    n_cls = SEGMENTATION_NUM_CLASSES[dataset]
     torch.manual_seed(THUNDER_PROBE_SEED)
     torch.cuda.manual_seed_all(THUNDER_PROBE_SEED)
     torch.set_float32_matmul_precision("high")

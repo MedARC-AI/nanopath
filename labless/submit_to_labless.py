@@ -45,7 +45,7 @@ NANOPATH_LOCKED_PROBE_CONFIG = {
         "spider_breast", "spider_colorectal", "spider_skin", "spider_thorax",
         "wilds",
     ],
-    "segmentation_datasets": ["segpath_epithelial", "segpath_lymphocytes"],
+    "segmentation_datasets": ["pannuke", "segpath_epithelial", "segpath_lymphocytes"],
     "slide_datasets": ["ucla_lung"],
     "auc_datasets": ["surgen"],
     "survival_datasets": ["leopard_bcr", "cptac_pda_os"],

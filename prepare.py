@@ -401,7 +401,7 @@ def get_paths(cfg):
 # Truthy if the path is populated with files train.py/probe.py actually read,
 # not merely a half-written archive left by an interrupted download.
 def is_populated(name, p):
-    if not p.exists() or not any(p.iterdir()):
+    if not p.exists():
         return False
     bench = Path(__file__).resolve().parent / "benchmarking"
     thunder = json.loads((bench / "thunder_v2.json").read_text())
@@ -428,6 +428,25 @@ def is_populated(name, p):
         spec = thunder["segmentation"][name]
         if p.resolve() != (Path("/data/thunder-data") / spec["root"]).resolve():
             return False
+        if name == "pannuke":
+            paths = [spec[split][kind] for split in ("train", "val") for kind in ("images", "labels")]
+            if not (
+                all(set(spec[split]) == {"images", "labels"} for split in ("train", "val"))
+                and not any("fold3" in path.lower() or "test" in path.lower() for path in paths)
+                and set(spec["train"].values()).isdisjoint(spec["val"].values())
+                and all((p / path).is_file() for path in paths)
+            ):
+                return False
+            train_images = np.load(p / spec["train"]["images"], mmap_mode="r")
+            train_masks = np.load(p / spec["train"]["labels"], mmap_mode="r")
+            val_images = np.load(p / spec["val"]["images"], mmap_mode="r")
+            val_masks = np.load(p / spec["val"]["labels"], mmap_mode="r")
+            return (
+                train_images.shape == (2656, 256, 256, 3)
+                and train_masks.shape == (2656, 256, 256, 6)
+                and val_images.shape == (2523, 256, 256, 3)
+                and val_masks.shape == (2523, 256, 256, 6)
+            )
         train_images, val_images = set(map(tuple, spec["train"]["images"])), set(map(tuple, spec["val"]["images"]))
         train_labels, val_labels = set(map(tuple, spec["train"]["labels"])), set(map(tuple, spec["val"]["labels"]))
         records = [record for split in ("train", "val") for kind in ("images", "labels") for record in spec[split][kind]]

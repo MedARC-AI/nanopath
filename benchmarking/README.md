@@ -24,7 +24,7 @@ scalar; v1 is not computed.
 | Family | Datasets | Scored metric |
 |---|---|---|
 | Classification | BACH, BRACS, BreaKHis, CRC, ESCA, MHIST, PCam, SPIDER breast/colorectal/skin/thorax, WILDS | macro-F1 from linear, KNN, and 16-shot SimpleShot |
-| Segmentation | SegPath epithelial and lymphocytes | THUNDER per-image weighted macro-F1 |
+| Segmentation | PanNuke, SegPath epithelial, SegPath lymphocytes | THUNDER per-image weighted macro-F1 |
 | Progression | UCLA Lung | macro-OVR AUC |
 | Mutation | SurGen RAS | macro-OVR AUC |
 | Survival | LEOPARD BCR and CPTAC-PDA OS | c-index |
@@ -61,18 +61,16 @@ The selected ESCA validation samples are UKK rather than TCGA.
 
 CCRCC, TCGA CRC-MSI, TCGA-TILs, and TCGA-Uniform are excluded because their
 evaluation images are explicitly TCGA. OCELOT is excluded for the same reason.
-PanNuke is also excluded: the released arrays mix TCGA and local-hospital data
-without provenance that lets NanoPath construct a verifiably non-TCGA
-validation split. MoNuSAC is not a substitute because its released cohort is
-TCGA-derived.
+MoNuSAC is not a substitute because its released cohort is TCGA-derived.
 
-SegPath uses source-disjoint official development splits: 32,768/4,518
-epithelial crops and 20,906/2,164 lymphocyte crops. The two-task proxy was kept
-because the previous 12-model study preserved 57 of 66 pairwise orderings of
-the full official THUNDER segmentation aggregate (86.4% concordance; Spearman
-0.902). Adding PanNuke preserved 58 of 66, too small a gain to justify the
-unverifiable TCGA mixture. These numbers motivate the panel; the revised
-end-to-end protocol must be rerun before its leaderboard values are promoted.
+PanNuke uses the complete official Fold1 training array (2,656 images) and
+Fold2 validation array (2,523 images). Fold3 is absent from the manifest and is
+never opened. PanNuke mixes TCGA and local-hospital material without per-image
+provenance, so it cannot be filtered to a verifiably non-TCGA subset; it is
+retained as the explicitly accepted mixed-source exception after SegPath alone
+failed to preserve NanoPath-family segmentation ordering. SegPath uses
+source-disjoint official development splits: 32,768/4,518 epithelial crops and
+20,906/2,164 lymphocyte crops.
 
 ## Probe protocols
 
@@ -90,11 +88,12 @@ Segmentation retains THUNDER's two-layer MaskTransformer, Dice objective, Adam,
 batch 64, and weighted per-image macro-F1/Jaccard calculation. It uses fixed
 schedules rather than validation checkpoint selection: epithelial trains 9
 epochs at `lr=1e-4`, `weight_decay=1e-3`; lymphocytes trains 21 epochs at
-`lr=1e-3`, `weight_decay=1e-4`. Dense tokens are cached as signed int8 vectors
-with fp16 scales. All feature extraction is microbatched at 512 images so models
-may aggregate multiple intermediate layers or test-time views without excessive
-peak memory. For DINO-family encoders, expanded spatial grids are area-pooled to
-the native patch grid before the shared decoder, while all model-defined
+`lr=1e-3`, `weight_decay=1e-4`; PanNuke trains 30 epochs at `lr=1e-3`,
+`weight_decay=1e-4`. Dense tokens are cached as signed int8 vectors with fp16
+scales. All feature extraction is microbatched at 512 images so models may
+aggregate multiple intermediate layers or test-time views without excessive
+peak memory. For DINO-family encoders, expanded spatial grids are area-pooled
+to the native patch grid before the shared decoder, while all model-defined
 concatenated layer channels are retained. This leaves ordinary dense outputs
 unchanged and preserves test-time depth aggregation without multiplying the
 decoder's quadratic spatial cost. The decoder width is 192 to meet the runtime

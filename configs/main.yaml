@@ -77,6 +77,7 @@ probe:
     - spider_thorax
     - wilds
   segmentation_datasets:
+    - pannuke
     - segpath_epithelial
     - segpath_lymphocytes
   slide_datasets:
@@ -101,6 +102,7 @@ probe:
     spider_skin: /data/thunder-data/spider_skin
     spider_thorax: /data/thunder-data/spider_thorax
     wilds: /data/thunder-data/wilds
+    pannuke: /data/thunder-data/pannuke
     segpath_epithelial: /data/thunder-data/segpath_epithelial
     segpath_lymphocytes: /data/thunder-data/segpath_lymphocytes
     cptac_pda_os: /data/CPTAC-PDA
