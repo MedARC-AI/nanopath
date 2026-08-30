@@ -1101,6 +1101,25 @@ def run_probe_job(request_path):
     std = torch.tensor(cfg["data"]["std"], device=device).view(1, 3, 1, 1)
     transform, patch_transform = worker_probe_transforms(cfg)
 
+    # Segmentation runs first because its compiled decoders are sensitive to allocator
+    # fragmentation left by the other probes. Every head resets its own seed.
+    seg_results = {}
+    for dataset in segmentation:
+        gc.collect()
+        torch.cuda.empty_cache()
+        print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_seg_start: {dataset}", flush=True)
+        result, wall = inline_segmentation_f1(model, mean, std, dataset, device, patch_transform)
+        result["wall_seconds"] = wall
+        seg_results[dataset] = result
+        print(
+            f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
+            f"inline_seg_done: {dataset}  f1={result['seg_val_f1']:.4f}  jaccard={result['seg_val_jaccard']:.4f}  "
+            f"epoch={result['selected_epoch']}  wall={wall:.2f}s",
+            flush=True,
+        )
+    gc.collect()
+    torch.cuda.empty_cache()
+
     inline_metrics = {}
     for dataset in classification:
         # Thunder-style tile probes share embeddings, then evaluate KNN, SimpleShot, and linear heads.
@@ -1158,21 +1177,6 @@ def run_probe_job(request_path):
             f"inline_robustness_done: {dataset}  robustness={rob_indices[dataset]['robustness_index']:.4f}  "
             f"biological_accuracy={rob_indices[dataset]['biological_balanced_accuracy']:.4f}  "
             f"quality={rob_indices[dataset]['robustness_quality']:.4f}  wall={wall:.2f}s",
-            flush=True,
-        )
-
-    seg_results = {}
-    for dataset in segmentation:
-        gc.collect()
-        torch.cuda.empty_cache()
-        print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_seg_start: {dataset}", flush=True)
-        result, wall = inline_segmentation_f1(model, mean, std, dataset, device, patch_transform)
-        result["wall_seconds"] = wall
-        seg_results[dataset] = result
-        print(
-            f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
-            f"inline_seg_done: {dataset}  f1={result['seg_val_f1']:.4f}  jaccard={result['seg_val_jaccard']:.4f}  "
-            f"epoch={result['selected_epoch']}  wall={wall:.2f}s",
             flush=True,
         )
 
