@@ -67,7 +67,6 @@ probe:
     - bach
     - bracs
     - break_his
-    - ccrcc
     - crc
     - esca
     - mhist
@@ -76,13 +75,8 @@ probe:
     - spider_colorectal
     - spider_skin
     - spider_thorax
-    - tcga_crc_msi
-    - tcga_tils
-    - tcga_uniform
     - wilds
   segmentation_datasets:
-    - pannuke
-    - ocelot
     - segpath_epithelial
     - segpath_lymphocytes
   slide_datasets:
@@ -98,7 +92,6 @@ probe:
     bach: /data/thunder-data/bach
     bracs: /data/thunder-data/bracs
     break_his: /data/thunder-data/break_his
-    ccrcc: /data/thunder-data/ccrcc
     crc: /data/thunder-data/crc
     esca: /data/thunder-data/esca
     mhist: /data/thunder-data/mhist
@@ -107,12 +100,7 @@ probe:
     spider_colorectal: /data/thunder-data/spider_colorectal
     spider_skin: /data/thunder-data/spider_skin
     spider_thorax: /data/thunder-data/spider_thorax
-    tcga_crc_msi: /data/thunder-data/tcga_crc_msi
-    tcga_tils: /data/thunder-data/tcga_tils
-    tcga_uniform: /data/thunder-data/tcga_uniform
     wilds: /data/thunder-data/wilds
-    pannuke: /data/thunder-data/pannuke
-    ocelot: /data/thunder-data/ocelot
     segpath_epithelial: /data/thunder-data/segpath_epithelial
     segpath_lymphocytes: /data/thunder-data/segpath_lymphocytes
     cptac_pda_os: /data/CPTAC-PDA

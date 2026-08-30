@@ -43,32 +43,18 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
   <img src="https://api.labless.dev/api/nano-projects/nanopath/plot.svg" alt="Nanopath progress plot" width="1290">
 </a>
 
-Protocol v2 defines `mean_probe_score`, aka `final_probe_score`, as 95% of the equally weighted classification, segmentation, progression, mutation, and survival mean plus 5% quality-adjusted robustness. Classification is one family even though all 16 THUNDER tasks and their linear, KNN, and 16-shot heads remain visible diagnostically. Segmentation uses THUNDER's PanNuke, OCELOT, and two SegPath tasks with its published metric. See [benchmarking/README.md](benchmarking/README.md) for the frozen train/validation-only protocol.
+Protocol v2 defines `mean_probe_score`, aka `final_probe_score`, as 95% of the equally weighted classification, segmentation, progression, mutation, and survival mean plus 5% quality-adjusted robustness. Classification is one family even though its 12 THUNDER development tasks and linear, KNN, and 16-shot heads remain visible diagnostically. Segmentation uses the two non-TCGA SegPath tasks with THUNDER's published metric. See [benchmarking/README.md](benchmarking/README.md) for the train/validation-only protocol.
 On Labless, the run labeled `main` reflects the current GitHub `main` branch, and the run labeled `leader` reflects the branch highest in the nanopath models table below that passed threshold. A validated nanopath run must beat the current leader by at least 0.006 to become the new leader.
 
 ### Protocol-v2 NanoPath models
 
-| # | Description | final score | classification | segmentation | progression | mutation | survival | robustness quality | Contributors |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm) | **0.6579** | 0.7678 | 0.6457 | 0.6136 | 0.5886 | 0.6010 | 0.9354 | @anishdulal |
-| 2 | [I-JEPA contig patch](https://github.com/MedARC-AI/nanopath/tree/JEPA-contig-patch) | 0.6537 | 0.7339 | 0.6390 | 0.5931 | 0.6148 | 0.6172 | 0.9225 | @NimaAsh |
-| 3 | [block-strided-cls](https://github.com/MedARC-AI/nanopath/tree/block-strided-cls) | 0.6502 | 0.7562 | 0.6434 | 0.5390 | 0.6066 | 0.6335 | 0.9253 | @RyanKim17920 |
-| 4 | [lr-and-curation](https://labless.dev/runs/run_sub_6c6c051f71) | 0.6472 | 0.7138 | 0.6381 | 0.5948 | 0.6025 | 0.6199 | 0.9003 | @nevasini1 |
-| 5 | [dinov2-s-kde](https://labless.dev/runs/run_sub_0d8aeb2511) | 0.6447 | 0.7107 | 0.6320 | 0.5870 | 0.5921 | 0.6361 | 0.8939 | @PaulScotti |
+Revised-v2 rows are pending fresh reruns. Scores from the superseded
+16-classification/four-segmentation implementation were removed because they
+are not comparable to this protocol.
 
 ### Protocol-v2 reference baselines
 
-| # | Name | Description | final score | classification | segmentation | progression | mutation | survival | robustness quality |
-|---|---|---|---:|---:|---:|---:|---:|---:|---:|
-| 1 | UNI-2-h | MahmoodLab UNI-2-h ViT-H/14 | **0.7069** | 0.8379 | 0.6732 | 0.7156 | 0.6408 | 0.6105 | 0.9221 |
-| 2 | GenBio-PathFM | GenBio-PathFM ViT-G/16 | 0.7052 | 0.8373 | 0.6620 | 0.7046 | 0.6232 | 0.6312 | 0.9628 |
-| 3 | H-optimus-0 | H-optimus-0 ViT-G/14-reg | 0.6953 | 0.8357 | 0.6288 | 0.6961 | 0.6487 | 0.6059 | 0.9290 |
-| 4 | Virchow | Paige/Microsoft Virchow ViT-H/14 | 0.6878 | 0.7979 | 0.6744 | 0.6541 | 0.6295 | 0.6173 | 0.9388 |
-| 5 | GigaPath | Prov-GigaPath tile encoder ViT-G/16 | 0.6788 | 0.8169 | 0.6563 | 0.6798 | 0.6128 | 0.5802 | 0.8611 |
-| 6 | Midnight-12K | Kaiko Midnight-12K ViT-G/14 | 0.6651 | 0.7624 | 0.6357 | 0.6810 | 0.5994 | 0.5918 | 0.8747 |
-| 7 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.6585 | 0.7127 | 0.6651 | 0.6748 | 0.5830 | 0.6058 | 0.8535 |
-
-These baseline rows use the same frozen protocol-v2 suite as the NanoPath rows. They calibrate the score but remain invalid initialization points for NanoPath submissions.
+Reference rows are likewise pending fresh revised-v2 reruns.
 
 ### Protocol-v1 legacy NanoPath models
 

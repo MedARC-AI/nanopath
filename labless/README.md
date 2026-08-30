@@ -72,8 +72,8 @@ is shown as `unvalidated` until the organizer validates it. A copied config such
 `configs/new_config.yaml` is accepted if the completed `summary.json` reports
 `max_train_samples: 1000000`, `tile_presentations <= 1000000`, and
 `max_train_flops: 1e18`; short local configs are rejected even if they are not named smoke.
-Use the same config you prepared and trained with. The 16-task THUNDER
-classification panel, four-task segmentation panel, and canonical
+Use the same config you prepared and trained with. The 12-task THUNDER
+classification panel, two-task SegPath panel, and canonical
 train/validation roots are locked together as protocol v2.
 Smoke runs are local setup checks only and are not accepted by labless.
 

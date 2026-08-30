@@ -18,19 +18,13 @@
 # selection can decode a fresh JPEG dataset and pack it into parquet shards
 # (see README "Regenerating the tile dataset"); main() does not call them.
 
-import http.client
 import json
 import multiprocessing as mp
 import os
-import re
 import shutil
 import sys
 import time
-import urllib.error
-import urllib.request
-import xml.etree.ElementTree as ET
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -255,52 +249,6 @@ def fetch_tiles_from_hf(dataset_dir):
     print(f"  [done]  total wall {time.monotonic()-started:.0f}s", flush=True)
 
 
-# Fetch the expected byte count so resumable WSI prep can reject truncated files.
-def http_size(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "nanopath"}, method="HEAD")
-    with urllib.request.urlopen(req) as r:
-        return int(r.headers["Content-Length"])
-
-
-# Stream a URL to disk in chunks so large probe archives do not sit in memory.
-def http_download(url, dst):
-    if dst.exists() and dst.stat().st_size > 0: print(f"  [skip] {dst}", flush=True); return
-    print(f"  GET {url}\n   -> {dst}", flush=True)
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dst.with_name(dst.name + ".part")
-    expected = None
-    while expected is None or tmp.stat().st_size < expected:
-        before = tmp.stat().st_size if tmp.exists() else 0
-        for attempt in range(20):
-            offset = tmp.stat().st_size if tmp.exists() else 0
-            headers = {"User-Agent": "nanopath", **({"Range": f"bytes={offset}-"} if offset else {})}
-            req = urllib.request.Request(url, headers=headers)
-            try:
-                with urllib.request.urlopen(req, timeout=120) as r:
-                    resumed = bool(r.headers.get("Content-Range"))
-                    if offset and not resumed:
-                        offset = before = 0
-                    with tmp.open("ab" if offset else "wb") as f:
-                        if resumed:
-                            expected = int(r.headers["Content-Range"].rsplit("/", 1)[1])
-                        elif expected is None and r.headers.get("Content-Length"):
-                            expected = offset + int(r.headers["Content-Length"])
-                        shutil.copyfileobj(r, f, length=1 << 20)
-                break
-            except (http.client.RemoteDisconnected, http.client.IncompleteRead, urllib.error.URLError, ConnectionResetError, TimeoutError):
-                print(f"  retry {attempt + 1}/20: {tmp}", flush=True)
-                time.sleep(min(60, 2 + attempt))
-        if tmp.stat().st_size == before:
-            print(f"  retry stalled: {tmp}", flush=True)
-            time.sleep(60)
-            continue
-        if expected is None:
-            break
-    if expected is not None:
-        assert tmp.stat().st_size == expected, f"truncated download: {tmp} has {tmp.stat().st_size} bytes, expected {expected}"
-    os.replace(tmp, dst)
-
-
 def hf_probe_dir(name, root):
     from huggingface_hub import snapshot_download
     workers = int(os.environ.get("PREPARE_WORKERS", os.cpu_count() or 8))
@@ -323,139 +271,15 @@ def make_hpcroot_writable(root):
         p.chmod(p.stat().st_mode | 0o660 | (0o110 if p.is_dir() else 0))
 
 
-# PathoBench slide tasks are normally run from Trident patch embeddings. The
-# tutorial path extracts a full 20x, 512 px, 0-overlap tissue grid, then pools
-# every patch feature (`bag_size=None`). Nanopath mirrors that contract with
-# lightweight local tilers and only adapts the train/test split into train/val.
 PATHOBENCH_TILING_VERSION = "pathobench_20x_512_v1"
-PATHOBENCH_TARGET_MPP = 0.5
-PATHOBENCH_PATCH_PX = 512
 CPTAC_PDA_OS_TILING_VERSION = PATHOBENCH_TILING_VERSION + "_cptac_pda_os_fold0_train_v1"
-CPTAC_PDA_OS_RAW_BASE = "https://pathdb.cancerimagingarchive.net/system/files/wsi/ross/CPTAC/PDA"
-
-
-def _openslide_mpp(slide, default=PATHOBENCH_TARGET_MPP):
-    props = slide.properties
-    if props.get("openslide.mpp-x") and 0.05 <= float(props["openslide.mpp-x"]) <= 5.0:
-        return float(props["openslide.mpp-x"])
-    if props.get("tiff.XResolution") and 0.05 <= float(props["tiff.XResolution"]) <= 5.0:
-        return float(props["tiff.XResolution"])
-    if props.get("openslide.objective-power"):
-        return 10.0 / float(props["openslide.objective-power"])
-    return default
-
-
-def _openslide_grid_rows(slide, slide_id, image_col="jpeg", default_mpp=PATHOBENCH_TARGET_MPP, cap=0):
-    import io
-    w, h = slide.dimensions
-    src = round(PATHOBENCH_PATCH_PX * PATHOBENCH_TARGET_MPP / _openslide_mpp(slide, default_mpp))
-    thumb = np.asarray(slide.get_thumbnail((512, 512)).convert("RGB")).mean(axis=2) if slide.level_count > 1 else None
-    sx, sy = (w / thumb.shape[1], h / thumb.shape[0]) if thumb is not None else (None, None)
-    coords = []
-    for y in range(0, max(1, h - src + 1), src):
-        for x in range(0, max(1, w - src + 1), src):
-            if thumb is not None:
-                cy, cx = min(thumb.shape[0] - 1, int((y + src / 2) / sy)), min(thumb.shape[1] - 1, int((x + src / 2) / sx))
-                if thumb[cy, cx] >= 230:
-                    continue
-            elif np.asarray(slide.read_region((max(0, x + src // 2 - 16), max(0, y + src // 2 - 16)), 0, (32, 32)).convert("RGB")).mean() >= 230:
-                continue
-            coords.append((x, y))
-    if cap and len(coords) > cap:
-        coords = [coords[int(i)] for i in np.linspace(0, len(coords) - 1, cap, dtype=np.int64)]
-    rows = []
-    for x, y in coords:
-        tile = slide.read_region((x, y), 0, (src, src)).convert("RGB").resize((PATHOBENCH_PATCH_PX, PATHOBENCH_PATCH_PX), Image.BILINEAR)
-        buf = io.BytesIO()
-        tile.save(buf, "JPEG", quality=JPEG_QUALITY)
-        rows.append({"slide_id": slide_id, image_col: buf.getvalue()})
-    return rows
-
-
-# UCLA Lung (idr0082) slide-level progression/regression probe.
 UCLA_LUNG_TILING_VERSION = PATHOBENCH_TILING_VERSION
-
-
-def _ucla_lung_extract_one(args):
-    import openslide
-    ndpi_path, slide_id, cache_dir = args
-    cache_path = Path(cache_dir) / f"{slide_id}.parquet"
-    if cache_path.exists():
-        return slide_id, pq.read_metadata(cache_path).num_rows
-    slide = openslide.OpenSlide(ndpi_path)
-    rows = _openslide_grid_rows(slide, slide_id)
-    for i, row in enumerate(rows):
-        row["tile_idx"] = i
-    slide.close()
-    tmp_cache = cache_path.with_suffix(".parquet.part")
-    pq.write_table(pa.table({k: [r[k] for r in rows] for k in ("slide_id", "tile_idx", "jpeg")}), tmp_cache, compression="none", row_group_size=PARQUET_ROW_GROUP_SIZE)
-    os.replace(tmp_cache, cache_path)
-    cache_path.chmod(0o664)
-    return slide_id, len(rows)
-
-
-def fetch_ucla_lung(root):
-    hf_probe_dir("ucla_lung", root)
-
-
-# PathoBench SR386 RAS mutation probe. Normal setup pulls our pre-extracted
-# HF parquet mirror; this official-source path rebuilds that mirror by streaming
-# CZI files, caching one parquet per slide, then deleting raw CZI.
-SURGEN_EBI_BASE = "https://ftp.ebi.ac.uk/biostudies/fire/S-BIAD/285/S-BIAD1285/Files/SR386_WSIs"
 SURGEN_TILING_VERSION = PATHOBENCH_TILING_VERSION
-SURGEN_THUMB_SCALE = 0.01
-SURGEN_TISSUE_BAND = (0.1, 0.85)
-SURGEN_HF_SHARDS = 16
-
-
-def _surgen_extract_one(args):
-    import io
-    from aicspylibczi import CziFile
-    slide_id, ras, raw_dir, cache_dir = args
-    cache_path = Path(cache_dir) / f"{slide_id}.parquet"
-    if cache_path.exists():
-        return slide_id, pq.read_metadata(cache_path).num_rows
-    czi_path = Path(raw_dir) / f"{slide_id}.czi"
-    url = f"{SURGEN_EBI_BASE}/{slide_id}.czi"
-    expected = http_size(url)
-    if not czi_path.exists() or czi_path.stat().st_size != expected:
-        http_download(url, czi_path)
-    assert czi_path.stat().st_size == expected and expected > 100_000_000, f"bad SurGen CZI: {czi_path}"
-    czi = CziFile(str(czi_path))
-    bbox = czi.get_mosaic_bounding_box()
-    md = ET.tostring(czi.meta, encoding="unicode")
-    mpp = float(re.search(r'<Distance Id="X">\s*<Value>([^<]+)</Value>', md).group(1)) * 1e6
-    scale = mpp / PATHOBENCH_TARGET_MPP
-    src_tile = round(PATHOBENCH_PATCH_PX / scale)
-    thumb = czi.read_mosaic(region=(bbox.x, bbox.y, bbox.w, bbox.h), scale_factor=SURGEN_THUMB_SCALE, C=0)[0]
-    gray = thumb.mean(axis=-1).astype(np.float32) / 255.0
-    h, w = gray.shape
-    lo, hi = SURGEN_TISSUE_BAND
-    rows = []
-    for cy in range(bbox.y + src_tile // 2, bbox.y + bbox.h - src_tile // 2, src_tile):
-        for cx in range(bbox.x + src_tile // 2, bbox.x + bbox.w - src_tile // 2, src_tile):
-            ty, tx = min(h - 1, int((cy - bbox.y) / bbox.h * h)), min(w - 1, int((cx - bbox.x) / bbox.w * w))
-            if lo < gray[ty, tx] < hi:
-                tile = czi.read_mosaic(region=(cx - src_tile // 2, cy - src_tile // 2, src_tile, src_tile), scale_factor=scale, C=0)[0]
-                buf = io.BytesIO()
-                Image.fromarray(tile).resize((PATHOBENCH_PATCH_PX, PATHOBENCH_PATCH_PX), Image.BILINEAR).save(buf, "JPEG", quality=JPEG_QUALITY)
-                rows.append((buf.getvalue(), slide_id, ras))
-    tmp_cache = cache_path.with_suffix(".parquet.part")
-    pq.write_table(
-        pa.table({"jpeg": [r[0] for r in rows], "slide_id": [r[1] for r in rows], "ras": pa.array([r[2] for r in rows], type=pa.int8())}),
-        tmp_cache,
-        compression="none",
-        row_group_size=PARQUET_ROW_GROUP_SIZE,
-    )
-    os.replace(tmp_cache, cache_path)
-    czi_path.unlink()
-    return slide_id, len(rows)
+LEOPARD_BCR_TILING_VERSION = PATHOBENCH_TILING_VERSION + "_leopard_bcr_174x768_v1"
 
 
 def fetch_surgen(root):
-    # Default user path: pull the already extracted 20x/512 train-fold tile cache.
-    # Rebuild this HF mirror with fetch_surgen_from_official_sources() when the
-    # split or tiling recipe changes.
+    # Pull the pre-extracted 20x/512 train-fold tile cache.
     from huggingface_hub import snapshot_download
     print("  using pre-extracted SurGen tile cache from medarc/nanopath; official EBI CZI regeneration is multi-hour", flush=True)
     workers = int(os.environ.get("PREPARE_WORKERS", os.cpu_count() or 8))
@@ -471,189 +295,35 @@ def fetch_surgen(root):
     shutil.rmtree(root / HF_PROBE_PREFIX)
 
 
-def fetch_surgen_from_official_sources(root):
-    raw, out_data, slide_cache = root / "raw", root / "data", root / "slides"
-    raw.mkdir(parents=True, exist_ok=True)
-    out_data.mkdir(parents=True, exist_ok=True)
-    slide_cache.mkdir(parents=True, exist_ok=True)
-    version, building = root / "tiling_version.txt", root / "tiling_in_progress.txt"
-    if not version.exists() or version.read_text().strip() != SURGEN_TILING_VERSION:
-        if not building.exists() or building.read_text().strip() != SURGEN_TILING_VERSION:
-            shutil.rmtree(out_data)
-            shutil.rmtree(slide_cache)
-            out_data.mkdir(parents=True, exist_ok=True)
-            slide_cache.mkdir(parents=True, exist_ok=True)
-            building.write_text(SURGEN_TILING_VERSION + "\n")
-    splits = json.loads((Path(__file__).resolve().parent / "benchmarking" / "surgen.json").read_text())
-    cohort = [(sid, int(lbl), str(raw), str(slide_cache)) for split in ("train", "val") for sid, lbl in zip(splits[split]["slides"], splits[split]["labels"])]
-    workers = int(os.environ.get("PREPARE_WORKERS", min(8, os.cpu_count() or 4)))
-    tiles = 0
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        for done, fut in enumerate(as_completed(pool.submit(_surgen_extract_one, x) for x in cohort), start=1):
-            sid, n = fut.result()
-            tiles += n
-            if done % 20 == 0 or done == len(cohort):
-                print(f"  [{done}/{len(cohort)}] {tiles:,} tiles", flush=True)
-    for f in out_data.glob("surgen-*.parquet"):
-        f.unlink()
-    chunk = (len(cohort) + SURGEN_HF_SHARDS - 1) // SURGEN_HF_SHARDS
-    for i in range(0, len(cohort), chunk):
-        table = pa.concat_tables([pq.read_table(slide_cache / f"{sid}.parquet") for sid, *_ in cohort[i : i + chunk]])
-        out = out_data / f"surgen-{i // chunk:05d}.parquet"
-        tmp = out.with_suffix(".parquet.part")
-        pq.write_table(table, tmp, compression="none", row_group_size=PARQUET_ROW_GROUP_SIZE)
-        os.replace(tmp, out)
-    labels = sorted((sid, ras) for sid, ras, *_ in cohort)
-    (root / "labels.csv").write_text("slide_id,ras\n" + "\n".join(f"{s},{r}" for s, r in labels) + "\n")
-    version.write_text(SURGEN_TILING_VERSION + "\n")
-    version.chmod(0o664)
-    building.unlink(missing_ok=True)
-
-
-# LEOPARD biochemical-recurrence survival probe. The checked-in JSON keeps all
-# recurrence events plus the longest-follow-up censored controls; source prep
-# streams official S3 slides one at a time into a compact capped tile cache.
-LEOPARD_BCR_TILING_VERSION = PATHOBENCH_TILING_VERSION + "_leopard_bcr_174x768_v1"
-LEOPARD_BCR_TILES_PER_SLIDE = 768
-
-
-def _leopard_bcr_extract_one(args):
-    import openslide
-    case_id, slide_id, event, days, raw_dir, cache_dir = args
-    cache_path = Path(cache_dir) / f"{slide_id}.parquet"
-    tif_path = Path(raw_dir) / f"{slide_id}.tif"
-    if cache_path.exists():
-        tif_path.unlink(missing_ok=True)
-        return slide_id, pq.read_metadata(cache_path).num_rows
-    url = f"https://leopard-challenge.s3.us-west-2.amazonaws.com/training/{slide_id}.tif"
-    expected = http_size(url)
-    if tif_path.exists() and tif_path.stat().st_size != expected:
-        tif_path.unlink()
-    http_download(url, tif_path)
-    assert tif_path.stat().st_size == expected, f"bad LEOPARD TIFF: {tif_path}"
-    slide = openslide.OpenSlide(str(tif_path))
-    rows = _openslide_grid_rows(slide, slide_id, image_col="image", cap=LEOPARD_BCR_TILES_PER_SLIDE)
-    slide.close()
-    for i, row in enumerate(rows):
-        row["case_id"], row["tile_idx"] = case_id, i
-    tmp = cache_path.with_suffix(".parquet.part")
-    pq.write_table(pa.table({k: [r[k] for r in rows] for k in ("case_id", "slide_id", "tile_idx", "image")}), tmp, compression="snappy", row_group_size=PARQUET_ROW_GROUP_SIZE)
-    os.replace(tmp, cache_path)
-    tif_path.unlink()
-    return slide_id, len(rows)
-
-
 def fetch_leopard_bcr(root):
     hf_probe_dir("leopard_bcr", root)
     if root == Path("/data/leopard_bcr"):
         make_hpcroot_writable(root)
 
 
-def fetch_leopard_bcr_from_official_sources(root):
-    splits = json.loads((REPO_ROOT / "benchmarking" / "leopard_bcr.json").read_text())
-    raw_dir, slide_cache = root / "raw", root / "slides"
-    raw_dir.mkdir(parents=True, exist_ok=True)
-    slide_cache.mkdir(parents=True, exist_ok=True)
-    version = root / "tiling_version.txt"
-    if version.exists() and version.read_text().strip() != LEOPARD_BCR_TILING_VERSION:
-        for stale in ("patches.parquet", "labels.tsv"):
-            (root / stale).unlink(missing_ok=True)
-        shutil.rmtree(slide_cache)
-        slide_cache.mkdir(parents=True)
-    cohort = [(case, slides[0], event, days, str(raw_dir), str(slide_cache)) for case, slides, event, days in zip(splits["case_ids"], splits["case_slides"], splits["events"], splits["days"])]
-    workers = min(4, int(os.environ.get("PREPARE_WORKERS", os.cpu_count() or 4)))
-    print(f"  rebuilding LEOPARD BCR tile cache from official S3 TIFFs ({len(cohort)} slides, {workers} workers)", flush=True)
-    with mp.Pool(workers) as pool:
-        for done, (sid, n) in enumerate(pool.imap_unordered(_leopard_bcr_extract_one, cohort), start=1):
-            if done % 10 == 0 or done == len(cohort):
-                print(f"  [{done}/{len(cohort)}] latest={sid} tiles={n:,}", flush=True)
-    out_path = root / "patches.parquet"
-    tmp_path = out_path.with_suffix(".parquet.part")
-    writer = None
-    for _, sid, *_ in cohort:
-        table = pq.read_table(slide_cache / f"{sid}.parquet")
-        if writer is None:
-            writer = pq.ParquetWriter(tmp_path, table.schema, compression="snappy")
-        writer.write_table(table, row_group_size=PARQUET_ROW_GROUP_SIZE)
-    writer.close()
-    os.replace(tmp_path, out_path)
-    (root / "labels.tsv").write_text("case_id\tslide_id\tBCR_event\tBCR_days\n" + "\n".join(f"{case}\t{sid}\t{event}\t{day}" for case, sid, event, day, *_ in cohort) + "\n")
-    version.write_text(LEOPARD_BCR_TILING_VERSION + "\n")
-    version.chmod(0o664)
-    if root == Path("/data/leopard_bcr"):
-        make_hpcroot_writable(root)
-
-
-def _cptac_pda_os_extract_one(args):
-    import openslide
-    case_id, slide_id, event, days, raw_dir, cache_dir = args
-    cache_path = Path(cache_dir) / f"{slide_id}.parquet"
-    if cache_path.exists():
-        return slide_id, pq.read_metadata(cache_path).num_rows
-    svs_path = Path(raw_dir) / f"{slide_id}.svs"
-    http_download(f"{CPTAC_PDA_OS_RAW_BASE}/{slide_id}.svs", svs_path)
-    slide = openslide.OpenSlide(str(svs_path))
-    rows = _openslide_grid_rows(slide, slide_id, image_col="image")
-    slide.close()
-    for i, row in enumerate(rows):
-        row["case_id"], row["tile_idx"] = case_id, i
-    tmp = cache_path.with_suffix(".parquet.part")
-    pq.write_table(pa.table({k: [r[k] for r in rows] for k in ("case_id", "slide_id", "tile_idx", "image")}), tmp, compression="snappy", row_group_size=PARQUET_ROW_GROUP_SIZE)
-    os.replace(tmp, cache_path)
-    svs_path.unlink()
-    return slide_id, len(rows)
-
-
-def fetch_cptac_pda_os(root):
-    hf_probe_dir("cptac_pda_os", root)
-
-
-def fetch_cptac_pda_os_from_official_sources(root):
-    bench = Path(__file__).resolve().parent / "benchmarking"
-    splits = json.loads((bench / "cptac_pda_os.json").read_text())
-    raw_dir, slide_cache = root / "raw", root / "slides_full"
-    raw_dir.mkdir(parents=True, exist_ok=True)
-    slide_cache.mkdir(parents=True, exist_ok=True)
-    version = root / "tiling_version.txt"
-    if version.exists() and version.read_text().strip() != CPTAC_PDA_OS_TILING_VERSION:
-        for stale in ("patches.parquet", "labels.tsv"):
-            (root / stale).unlink(missing_ok=True)
-        shutil.rmtree(slide_cache)
-        slide_cache.mkdir(parents=True)
-    events = dict(zip(splits["case_ids"], splits["events"]))
-    days = dict(zip(splits["case_ids"], splits["days"]))
-    cohort = [(case, sid, events[case], days[case], str(raw_dir), str(slide_cache)) for case, slides in zip(splits["case_ids"], splits["case_slides"]) for sid in slides]
-    workers = int(os.environ.get("PREPARE_WORKERS", min(8, os.cpu_count() or 4)))
-    print(f"  rebuilding uncapped CPTAC-PDA OS tile cache from TCIA PathDB SVS files ({len(cohort)} slides, {workers} workers)", flush=True)
-    with mp.Pool(workers) as pool:
-        for done, (sid, n) in enumerate(pool.imap_unordered(_cptac_pda_os_extract_one, cohort), start=1):
-            if done % 20 == 0 or done == len(cohort):
-                print(f"  [{done}/{len(cohort)}] latest={sid} tiles={n:,}", flush=True)
-    out_path = root / "patches.parquet"
-    tmp_path = out_path.with_suffix(".parquet.part")
-    writer = None
-    for _, sid, *_ in cohort:
-        table = pq.read_table(slide_cache / f"{sid}.parquet")
-        if writer is None:
-            writer = pq.ParquetWriter(tmp_path, table.schema, compression="snappy")
-        writer.write_table(table, row_group_size=PARQUET_ROW_GROUP_SIZE)
-    writer.close()
-    os.replace(tmp_path, out_path)
-    (root / "labels.tsv").write_text("case_id\tslide_id\tOS_event\tOS_days\n" + "\n".join(f"{case}\t{sid}\t{event}\t{day}" for case, sid, event, day, *_ in cohort) + "\n")
-    version.write_text(CPTAC_PDA_OS_TILING_VERSION + "\n")
-
-
-# PathoROB ships as two HF datasets; TCGA subset is intentionally excluded.
 def fetch_pathorob(root):
-    hf_probe_dir("pathorob", root)
+    from huggingface_hub import snapshot_download
+    workers = int(os.environ.get("PREPARE_WORKERS", os.cpu_count() or 8))
+    snapshot_download(
+        repo_id=HF_REPO_ID,
+        repo_type="dataset",
+        local_dir=str(root),
+        allow_patterns=["probes/pathorob/camelyon/**", "probes/pathorob/tolkach_esca/**"],
+        max_workers=workers,
+    )
+    src = root / HF_PROBE_PREFIX / "pathorob"
+    for name in ("camelyon", "tolkach_esca"):
+        dst = root / name
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.move(str(src / name), dst)
+    shutil.rmtree(root / HF_PROBE_PREFIX)
 
 
 FETCHERS = {
-    "cptac_pda_os": fetch_cptac_pda_os,
     "leopard_bcr": fetch_leopard_bcr,
     "pathorob": fetch_pathorob,
     "surgen": fetch_surgen,
-    "ucla_lung": fetch_ucla_lung,
 }
 
 
@@ -758,8 +428,6 @@ def is_populated(name, p):
         spec = thunder["segmentation"][name]
         if p.resolve() != (Path("/data/thunder-data") / spec["root"]).resolve():
             return False
-        if name == "pannuke":
-            return spec["train"]["images"] != spec["val"]["images"] and all((p / spec[split][kind]).is_file() for split in ("train", "val") for kind in ("images", "labels"))
         train_images, val_images = set(map(tuple, spec["train"]["images"])), set(map(tuple, spec["val"]["images"]))
         train_labels, val_labels = set(map(tuple, spec["train"]["labels"])), set(map(tuple, spec["val"]["labels"]))
         records = [record for split in ("train", "val") for kind in ("images", "labels") for record in spec[split][kind]]
@@ -823,6 +491,8 @@ def main():
         localize_config_files(config_path)
     cfg = yaml.safe_load(os.path.expandvars(config_path.read_text()))
     paths = get_paths(cfg)
+    thunder = json.loads((REPO_ROOT / "benchmarking" / "thunder_v2.json").read_text())
+    thunder_datasets = thunder["classification"].keys() | thunder["segmentation"].keys()
     dataset_dir = paths["data.dataset_dir"]
     shards = list(dataset_dir.glob("shard-*.parquet")) if dataset_dir.exists() else []
 
@@ -852,10 +522,13 @@ def main():
             missing.append((name, root))
             continue
         root.mkdir(parents=True, exist_ok=True)
-        if name in json.loads((REPO_ROOT / "benchmarking" / "thunder_v2.json").read_text())["classification"] | json.loads((REPO_ROOT / "benchmarking" / "thunder_v2.json").read_text())["segmentation"]:
+        if name in thunder_datasets:
             raise FileNotFoundError(f"probe/{name} must be installed at its canonical THUNDER root: {root}")
         print(f"[fetch] probe/{name} -> {root}", flush=True)
-        FETCHERS[name](root)
+        if name in ("cptac_pda_os", "ucla_lung"):
+            hf_probe_dir(name, root)
+        else:
+            FETCHERS[name](root)
         assert is_populated(name, root), f"probe/{name} is still missing, empty, or stale after fetch: {root}"
         print(f"[done] probe/{name}", flush=True)
 

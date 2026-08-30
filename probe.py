@@ -35,20 +35,15 @@ PROBE_PROTOCOL_VERSION = 2
 THUNDER_V2 = json.loads((BENCHMARKING_DIR / "thunder_v2.json").read_text())
 assert THUNDER_V2["protocol_version"] == PROBE_PROTOCOL_VERSION
 assert all(set(spec) == {"root", "train", "val"} for family in ("classification", "segmentation") for spec in THUNDER_V2[family].values())
-EMBED_BATCH_SIZE = 2048
+EMBED_BATCH_SIZE = 512
 EMBED_NUM_WORKERS = 16
-SEGMENTATION_EPOCHS = {"pannuke": 30, "ocelot": 30, "segpath_epithelial": 9, "segpath_lymphocytes": 21}
+SEGMENTATION_EPOCHS = {"segpath_epithelial": 9, "segpath_lymphocytes": 21}
 SEGMENTATION_HYPERPARAMETERS = {
-    "pannuke": (1e-3, 1e-4),
-    "ocelot": (1e-4, 0.0),
     "segpath_epithelial": (1e-4, 1e-3),
     "segpath_lymphocytes": (1e-3, 1e-4),
 }
 SEGMENTATION_DECODER_DIM = 192
 SEGMENTATION_BATCH_SIZE = 64
-SEGMENTATION_EMBED_BATCH_SIZE = 2048
-SEGMENTATION_SELECTION_EXAMPLES = 256
-PANNUKE_NUM_CLASSES = 6
 SEG_SPLIT_SEED = 1337
 THUNDER_PROBE_SEED = 0
 REPEATED_FOLDS = 3
@@ -62,11 +57,11 @@ FEWSHOT_SUPPORT_CHUNK = 64
 KNN_K_VALS = [1, 3, 5, 10, 20, 30, 40, 50]
 KNN_CHUNK_SIZE = 4096
 CLASSIFICATION_DATASETS = [
-    "bach", "bracs", "break_his", "ccrcc", "crc", "esca", "mhist", "pcam",
+    "bach", "bracs", "break_his", "crc", "esca", "mhist", "pcam",
     "spider_breast", "spider_colorectal", "spider_skin", "spider_thorax",
-    "tcga_crc_msi", "tcga_tils", "tcga_uniform", "wilds",
+    "wilds",
 ]
-SEGMENTATION_DATASETS = ["pannuke", "ocelot", "segpath_epithelial", "segpath_lymphocytes"]
+SEGMENTATION_DATASETS = ["segpath_epithelial", "segpath_lymphocytes"]
 SLIDE_DATASETS = ["ucla_lung"]
 AUC_DATASETS = ["surgen"]
 SURVIVAL_DATASETS = ["leopard_bcr", "cptac_pda_os"]
@@ -129,17 +124,6 @@ def stratified_folds(labels):
     return list(StratifiedKFold(n_splits=REPEATED_FOLDS, shuffle=True, random_state=SEG_SPLIT_SEED).split(np.zeros(len(labels)), labels))
 
 
-def shuffled_folds(n):
-    import numpy as np
-    idx = np.arange(n)
-    np.random.default_rng(SEG_SPLIT_SEED).shuffle(idx)
-    out = []
-    for val_idx in np.array_split(idx, REPEATED_FOLDS):
-        train_idx = np.setdiff1d(idx, val_idx, assume_unique=True)
-        out.append((train_idx, val_idx))
-    return out
-
-
 # Validate probe recipe compatibility and initialize the on-disk result tracker.
 def prepare_probe_state(cfg, output_dir):
     DATASET_ROOTS.clear()
@@ -149,7 +133,7 @@ def prepare_probe_state(cfg, output_dir):
         path.mkdir(parents=True, exist_ok=True)
     groups = {request_key: [str(x) for x in cfg["probe"].get(cfg_key, [])] for request_key, (cfg_key, _) in TASK_FIELDS.items()}
     data = {
-        "version": 13,
+        "version": 14,
         "probe_protocol_version": PROBE_PROTOCOL_VERSION,
         "family": str(cfg["project"]["family"]),
         "count": int(cfg["probe"]["count"]),
@@ -159,7 +143,7 @@ def prepare_probe_state(cfg, output_dir):
     if paths["state_path"].exists():
         # Explicit resume can continue only if the probe family/datasets/count match the old state.
         previous = json.loads(paths["state_path"].read_text())
-        if previous["version"] != 13:
+        if previous["version"] != 14:
             raise ValueError(f"unsupported probe state version: {previous['version']}")
         if previous["family"] != data["family"]:
             raise ValueError(f"probe family changed from {previous['family']} to {data['family']}")
@@ -265,46 +249,28 @@ class SegmentationDataset(torch.utils.data.Dataset):
         self.dataset, self.transform = dataset, transform
         self.root = DATASET_ROOTS[dataset]
         spec = THUNDER_V2["segmentation"][dataset][split]
-        if dataset == "pannuke":
-            import numpy as np
-            self.images = np.load(self.root / spec["images"], mmap_mode="r")
-            self.masks = np.load(self.root / spec["labels"], mmap_mode="r")
-            self.indices = spec["indices"]
-        else:
-            self.image_records, self.label_records = spec["images"], spec["labels"]
-            self.groups = []
-            for i, record in enumerate(self.image_records):
-                if not self.groups or self.image_records[self.groups[-1][0]][0] != record[0]:
-                    self.groups.append([])
-                self.groups[-1].append(i)
+        self.image_records, self.label_records = spec["images"], spec["labels"]
+        self.groups = []
+        for i, record in enumerate(self.image_records):
+            if not self.groups or self.image_records[self.groups[-1][0]][0] != record[0]:
+                self.groups.append([])
+            self.groups[-1].append(i)
 
     def __len__(self):
-        return len(self.indices if self.dataset == "pannuke" else self.groups)
+        return len(self.groups)
 
     def __getitem__(self, i):
         import numpy as np
-        if self.dataset == "pannuke":
-            idx = self.indices[i]
-            label = np.zeros((256, 256), dtype=np.int64)
-            for class_id in range(1, PANNUKE_NUM_CLASSES):
-                np.copyto(label, class_id, where=self.masks[idx, :, :, class_id - 1] > 0)
-            image = Image.fromarray(self.images[idx].astype(np.uint8))
-            return [(self.transform(image), torch.from_numpy(label.copy()))]
-        else:
-            source_image = Image.open(self.root / self.image_records[self.groups[i][0]][0]).convert("RGB")
-            source_label = np.asarray(Image.open(self.root / self.label_records[self.groups[i][0]][0]))
-            crops = []
-            for index in self.groups[i]:
-                _, i0, i1, j0, j1 = self.image_records[index]
-                _, l0, l1, m0, m1 = self.label_records[index]
-                image = source_image.crop((j0, i0, j1, i1))
-                label = source_label[l0:l1, m0:m1].astype(np.int64)
-                if self.dataset == "ocelot":
-                    label[label == 1] = 0
-                    label[label == 2] = 1
-                    label[label == 255] = -1
-                crops.append((self.transform(image), torch.from_numpy(label.copy())))
-            return crops
+        source_image = Image.open(self.root / self.image_records[self.groups[i][0]][0]).convert("RGB")
+        source_label = np.asarray(Image.open(self.root / self.label_records[self.groups[i][0]][0]))
+        crops = []
+        for index in self.groups[i]:
+            _, i0, i1, j0, j1 = self.image_records[index]
+            _, l0, l1, m0, m1 = self.label_records[index]
+            image = source_image.crop((j0, i0, j1, i1))
+            label = source_label[l0:l1, m0:m1].astype(np.int64)
+            crops.append((self.transform(image), torch.from_numpy(label.copy())))
+        return crops
 
 
 # Mean-pool cached PathoBench-style tile embeddings to one vector per slide.
@@ -468,23 +434,21 @@ def embed_segmentation_dataset(model, mean, std, dataset, split, device, transfo
         batch_images, batch_labels = [], []
         with ThreadPoolExecutor(max_workers=EMBED_NUM_WORKERS) as pool:
             for i, crops in enumerate(pool.map(tiles.__getitem__, range(len(tiles))), 1):
-                for image, label in crops:
+                for crop_index, (image, label) in enumerate(crops, 1):
                     batch_images.append(image); batch_labels.append(label)
-                if len(batch_images) >= SEGMENTATION_EMBED_BATCH_SIZE or i == len(tiles):
-                    with autocast:
-                        batch_feats = model.encode_image((torch.stack(batch_images).to(device) - mean) / std)[:, model.registers:].float()
-                    batch_scales = batch_feats.abs().amax(dim=-1, keepdim=True).clamp_min_(1e-12).div_(127).to(torch.float16)
-                    feats.append(torch.clamp(torch.round(batch_feats / batch_scales.float()), -127, 127).to(torch.int8).cpu())
-                    scales.append(batch_scales.cpu())
-                    labels.append(torch.stack(batch_labels).to(torch.int8))
-                    batch_images, batch_labels = [], []
+                    if len(batch_images) == EMBED_BATCH_SIZE or (i == len(tiles) and crop_index == len(crops)):
+                        with autocast:
+                            batch_feats = model.encode_image((torch.stack(batch_images).to(device) - mean) / std)[:, model.registers:].float()
+                        batch_scales = batch_feats.abs().amax(dim=-1, keepdim=True).clamp_min_(1e-12).div_(127).to(torch.float16)
+                        feats.append(torch.clamp(torch.round(batch_feats / batch_scales.float()), -127, 127).to(torch.int8).cpu())
+                        scales.append(batch_scales.cpu())
+                        labels.append(torch.stack(batch_labels).to(torch.int8))
+                        batch_images, batch_labels = [], []
     return torch.cat(feats), torch.cat(scales), torch.cat(labels)
 
 
-# Train the THUNDER MaskTransformer on the selected training split, select its
-# epoch by Dice loss on 256 evenly spaced validation examples, then report
-# THUNDER's metric on the complete selected validation split.
-# Dataset-specific LR/decay values are frozen before any official test comparison.
+# Train the THUNDER MaskTransformer for a fixed task schedule, then score the
+# complete validation split once. Validation never selects a checkpoint.
 def inline_segmentation_f1(model, mean, std, dataset, device, transform):
     import numpy as np
 
@@ -496,11 +460,10 @@ def inline_segmentation_f1(model, mean, std, dataset, device, transform):
     if features_on_gpu:
         train_feats, train_scales = train_feats.to(device), train_scales.to(device)
         val_feats, val_scales = val_feats.to(device), val_scales.to(device)
-    n_cls = PANNUKE_NUM_CLASSES if dataset == "pannuke" else 2
+    n_cls = 2
     torch.manual_seed(THUNDER_PROBE_SEED)
     torch.cuda.manual_seed_all(THUNDER_PROBE_SEED)
     torch.set_float32_matmul_precision("high")
-    lr, weight_decay = SEGMENTATION_HYPERPARAMETERS[dataset]
     head = MaskTransformer(
         n_cls=n_cls,
         d_encoder=train_feats.shape[-1],
@@ -509,15 +472,10 @@ def inline_segmentation_f1(model, mean, std, dataset, device, transform):
         d_model=SEGMENTATION_DECODER_DIM,
         d_ff=SEGMENTATION_DECODER_DIM * 4,
     ).to(device)
-    decoder = torch.compile(head) if dataset.startswith("segpath_") else head
+    decoder = torch.compile(head)
+    lr, weight_decay = SEGMENTATION_HYPERPARAMETERS[dataset]
     optimizer = torch.optim.Adam(head.parameters(), lr=lr, weight_decay=weight_decay)
-    selection_indices = torch.linspace(
-        0,
-        len(val_feats) - 1,
-        min(SEGMENTATION_SELECTION_EXAMPLES, len(val_feats)),
-    ).long()
-    best_loss, best_epoch, best_state = float("inf"), None, None
-    for epoch in range(SEGMENTATION_EPOCHS[dataset]):
+    for _ in range(SEGMENTATION_EPOCHS[dataset]):
         head.train()
         # Match THUNDER's cached loader: draw its iterator seed on CPU, then
         # construct the shuffled CPU indices from a fresh seeded generator.
@@ -537,31 +495,12 @@ def inline_segmentation_f1(model, mean, std, dataset, device, transform):
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
-
-        head.eval()
-        # THUNDER's non-shuffled validation iterator advances this RNG once.
+        # THUNDER constructs a non-shuffled validation iterator after each
+        # epoch. Consume its base-seed draw without reading validation data so
+        # the next training epoch follows the same RNG stream.
         torch.empty((), dtype=torch.int64).random_()
-        validation_loss, batches = 0.0, 0
-        with torch.no_grad():
-            for start in range(0, len(selection_indices), SEGMENTATION_BATCH_SIZE):
-                idx = selection_indices[start:start + SEGMENTATION_BATCH_SIZE]
-                labels = val_labels[idx].to(device=device, dtype=torch.long)
-                if features_on_gpu:
-                    gpu_idx = idx.to(device)
-                    batch_feats = val_feats[gpu_idx].float() * val_scales[gpu_idx].float()
-                else:
-                    batch_feats = val_feats[idx].to(device).float() * val_scales[idx].to(device).float()
-                logits = F.interpolate(decoder(batch_feats), labels.shape[-2:], mode="bilinear")
-                validation_loss += float(multiclass_dice_loss(logits, labels, labels != -1))
-                batches += 1
-        validation_loss /= batches
-        if validation_loss < best_loss:
-            best_loss, best_epoch = validation_loss, epoch + 1
-            best_state = {key: value.detach().cpu().clone() for key, value in head.state_dict().items()}
 
-    head.load_state_dict(best_state)
-
-    rows, class_rows, class_present_rows = [], [], []
+    rows = []
     head.eval()
     with torch.no_grad():
         for start in range(0, len(val_feats), SEGMENTATION_BATCH_SIZE):
@@ -582,43 +521,21 @@ def inline_segmentation_f1(model, mean, std, dataset, device, transform):
             pixel_counts = valid.sum((1, 2)).double()
             keep = pixel_counts > 0
             rows.append(torch.stack((f1[keep], jaccard[keep], pixel_counts[keep], (labels.masked_fill(~valid, 0).sum((1, 2))[keep] == 0).double()), 1).cpu())
-            class_rows.append(class_f1[keep].cpu()); class_present_rows.append(present[keep].cpu())
     values = torch.cat(rows).numpy()
-    class_values = torch.cat(class_rows).numpy(); class_present = torch.cat(class_present_rows).numpy()
     weights = values[:, 2].astype(np.float32); background_only = values[:, 3].astype(bool)
     weights[~background_only] *= max(1.0, background_only.mean() * 16.0)
     result = {
         "seg_val_f1": float(np.average(values[:, 0], weights=weights)),
         "seg_val_jaccard": float(np.average(values[:, 1], weights=weights)),
-        "selected_epoch": best_epoch,
+        "epochs": SEGMENTATION_EPOCHS[dataset],
         "lr": lr,
         "weight_decay": weight_decay,
-        "selected_val_dice_loss": best_loss,
-        "selection_split": "official_val_subset",
-        "selection_examples": len(selection_indices),
-        "selection_metric": "dice_loss",
-        "refit": False,
+        "selection_split": None,
         "decoder_dim": SEGMENTATION_DECODER_DIM,
         "train_examples": len(train_feats),
         "val_examples": len(val_feats),
         "feature_cache": "gpu" if features_on_gpu else "cpu",
     }
-    if dataset == "pannuke":
-        result["class_balanced_seg_val_f1"] = float(np.mean([
-            np.average(class_values[class_present[:, i], i], weights=weights[class_present[:, i]])
-            for i in range(n_cls)
-        ]))
-        result["class_seg_val_f1"] = {
-            str(i): float(np.average(class_values[class_present[:, i], i], weights=weights[class_present[:, i]]))
-            for i in range(n_cls)
-        }
-        spec = THUNDER_V2["segmentation"][dataset]["val"]
-        tissue = np.load(DATASET_ROOTS[dataset] / Path(spec["images"]).with_name("types.npy"), allow_pickle=True)[spec["indices"]].astype(str)
-        result["tissue_seg_val_f1"] = {
-            name: float(np.average(values[tissue == name, 0], weights=weights[tissue == name]))
-            for name in sorted(set(tissue))
-        }
-        result["tissue_balanced_seg_val_f1"] = float(np.mean(list(result["tissue_seg_val_f1"].values())))
     return result, time.monotonic() - started_at
 
 
@@ -873,8 +790,8 @@ def inline_pathobench_survival(model, mean, std, dataset, device, transform):
     }, time.monotonic() - started_at
 
 
-# KNN probe over frozen embeddings; best k is selected on the validation split.
-def inline_knn_val_f1(train_embs, train_labels, val_embs, val_labels, k_vals):
+# KNN probe marginalized over THUNDER's fixed k grid. No validation cell is selected.
+def inline_knn_val_f1(train_embs, train_labels, val_embs, val_labels):
     import numpy as np
     from sklearn.metrics import f1_score
 
@@ -883,16 +800,15 @@ def inline_knn_val_f1(train_embs, train_labels, val_embs, val_labels, k_vals):
     val = F.normalize(torch.from_numpy(val_embs.astype(np.float32, copy=False)), dim=1).to(device)
     labels = torch.from_numpy(train_labels).long().to(device)
     num_classes = int(labels.max()) + 1
-    neighbors = torch.empty(len(val), max(k_vals), dtype=torch.long, device=device)
+    neighbors = torch.empty(len(val), max(KNN_K_VALS), dtype=torch.long, device=device)
     for start in range(0, len(val), 1024):
-        neighbors[start:start + 1024] = (val[start:start + 1024] @ train.T).topk(max(k_vals), dim=1).indices
+        neighbors[start:start + 1024] = (val[start:start + 1024] @ train.T).topk(max(KNN_K_VALS), dim=1).indices
     preds_per_k = {
         k: F.one_hot(labels[neighbors[:, :k]], num_classes).sum(1).argmax(1).cpu().numpy()
-        for k in k_vals
+        for k in KNN_K_VALS
     }
-    f1_per_k = {k: float(f1_score(val_labels, preds_per_k[k], average="macro")) for k in k_vals}
-    best_k = max(f1_per_k, key=lambda k: f1_per_k[k])
-    return best_k, f1_per_k[best_k], f1_per_k
+    f1_per_k = {k: float(f1_score(val_labels, preds_per_k[k], average="macro")) for k in KNN_K_VALS}
+    return sum(f1_per_k.values()) / len(f1_per_k), f1_per_k
 
 
 # THUNDER SimpleShot: recreate the published seed-0 support-index stream through
@@ -942,8 +858,8 @@ def inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels):
     return float(f1_score(val_labels, preds, average="macro"))
 
 
-# THUNDER's nine Adam linear heads train together and select LR, decay, and epoch
-# by the visible official validation macro-F1. The official test split is absent.
+# THUNDER's nine Adam linear heads train together for a fixed 200 epochs. Their
+# final macro-F1 values are averaged, so validation never selects a head or epoch.
 def inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels):
     import numpy as np
 
@@ -963,8 +879,7 @@ def inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels):
         {"params": head.parameters(), "lr": lr, "weight_decay": decay}
         for head, (lr, decay) in zip(heads, hyperparameters)
     ])
-    best_f1, best_head, best_epoch = -1.0, None, None
-    for epoch in range(LINEAR_PROBE_EPOCHS):
+    for _ in range(LINEAR_PROBE_EPOCHS):
         # Reproduce THUNDER's GPUEmbeddingLoader RNG stream exactly.
         torch.empty((), dtype=torch.int64).random_()
         shuffle_seed = int(torch.empty((), dtype=torch.int64).random_().item())
@@ -982,42 +897,37 @@ def inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels):
                 outputs.flatten(0, 1), train_labels_t[indices].repeat(len(heads)),
             ).mul(len(heads)).backward()
             optimizer.step()
+        # Preserve THUNDER's next-epoch RNG stream without evaluating or
+        # selecting on validation at intermediate epochs.
         torch.empty((), dtype=torch.int64).random_()
-        with torch.no_grad():
-            weights = torch.stack([head.weight for head in heads])
-            biases = torch.stack([head.bias for head in heads])
-            outputs = torch.einsum("bd,hcd->hbc", val_embs_t, weights).add_(biases[:, None])
-            predictions = outputs.argmax(2)
-            predicted = predictions[:, None] == classes
-            tp = (predicted & expected).sum(2)
-            fp = (predicted & ~expected).sum(2)
-            fn = (~predicted & expected).sum(2)
-            scores = (2 * tp / (2 * tp + fp + fn).clamp(min=1)).mean(1).cpu().numpy()
-        head_index = int(np.argmax(scores))
-        if scores[head_index] > best_f1:
-            best_f1, best_head, best_epoch = float(scores[head_index]), head_index, epoch + 1
-    best_lr, best_weight_decay = hyperparameters[best_head]
-    return best_f1, {
-        "lr": best_lr,
-        "weight_decay": best_weight_decay,
-        "epoch": best_epoch,
-        "selection_split": "official_val",
+    with torch.no_grad():
+        weights = torch.stack([head.weight for head in heads])
+        biases = torch.stack([head.bias for head in heads])
+        predictions = torch.einsum("bd,hcd->hbc", val_embs_t, weights).add_(biases[:, None]).argmax(2)
+        predicted = predictions[:, None] == classes
+        tp = (predicted & expected).sum(2)
+        fp = (predicted & ~expected).sum(2)
+        fn = (~predicted & expected).sum(2)
+        scores = (2 * tp / (2 * tp + fp + fn).clamp(min=1)).mean(1).cpu().numpy()
+    per_hyperparameter = {
+        f"lr={lr:g},weight_decay={decay:g}": float(score)
+        for (lr, decay), score in zip(hyperparameters, scores)
     }
+    return float(np.mean(scores)), per_hyperparameter
 
 
 def classification_head_metrics(train_embs, train_labels, val_embs, val_labels):
-    knn_best_k, knn_val_f1, knn_all = inline_knn_val_f1(train_embs, train_labels, val_embs, val_labels, KNN_K_VALS)
+    knn_val_f1, knn_all = inline_knn_val_f1(train_embs, train_labels, val_embs, val_labels)
     fewshot_f1 = inline_fewshot_val_f1(train_embs, train_labels, val_embs, val_labels)
-    linear_f1, linear_selection = inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels)
+    linear_f1, linear_all = inline_linear_val_f1(train_embs, train_labels, val_embs, val_labels)
     return {
         "linear_val_f1": linear_f1,
-        "linear_selection": linear_selection,
-        "knn_best_k": knn_best_k,
+        "linear_val_f1_per_hyperparameter": linear_all,
         "knn_val_f1": knn_val_f1,
         "knn_val_f1_per_k": {int(k): float(v) for k, v in knn_all.items()},
         "fewshot_val_f1": fewshot_f1,
         "fewshot_val_f1_per_shot": {FEWSHOT_SHOT: fewshot_f1},
-        "selection_split": "official_val",
+        "selection_split": None,
         "support_draw_seed": THUNDER_PROBE_SEED,
     }
 
@@ -1115,7 +1025,7 @@ def run_probe_job(request_path):
         print(
             f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
             f"inline_seg_done: {dataset}  f1={result['seg_val_f1']:.4f}  jaccard={result['seg_val_jaccard']:.4f}  "
-            f"epoch={result['selected_epoch']}  wall={wall:.2f}s",
+            f"epochs={result['epochs']}  wall={wall:.2f}s",
             flush=True,
         )
     gc.collect()
@@ -1206,7 +1116,7 @@ def run_probe_job(request_path):
     for dataset in segmentation:
         metrics[f"probe_{dataset}_seg_val_f1"] = seg_results[dataset]["seg_val_f1"]
         metrics[f"probe_{dataset}_seg_val_jaccard"] = seg_results[dataset]["seg_val_jaccard"]
-        metrics[f"probe_{dataset}_selected_epoch"] = seg_results[dataset]["selected_epoch"]
+        metrics[f"probe_{dataset}_epochs"] = seg_results[dataset]["epochs"]
         per_dataset_score[dataset] = seg_results[dataset]["seg_val_f1"]
         results[dataset] = seg_results[dataset]
     for dataset in auc:

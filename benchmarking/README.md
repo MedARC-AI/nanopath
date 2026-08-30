@@ -1,6 +1,8 @@
 # NanoPath probe protocol v2
 
-NanoPath v2 is a fast, fully train/validation-derived proxy for held-out THUNDER, HEST, and CPTAC evaluation. HEST and new CPTAC tasks are not part of NanoPath. Official test samples are never listed, instantiated, or opened.
+NanoPath v2 is a fast development-set proxy for held-out THUNDER, HEST, and
+CPTAC evaluation. It never runs HEST, adds no CPTAC task beyond the existing
+CPTAC-PDA survival probe, and contains no official test records.
 
 ## Final score
 
@@ -13,37 +15,109 @@ robustness_quality = mean((PathoROB robustness index + biological balanced accur
 mean_probe_score = 0.95 * predictive_mean + 0.05 * robustness_quality
 ```
 
-Each predictive family therefore contributes 19% and robustness contributes 5%. `mean_probe_score` and the summary alias `final_probe_score` are the only protocol-v2 scalar; protocol v1 is not computed.
+Each predictive family contributes 19% and robustness contributes 5%.
+`mean_probe_score` and the summary alias `final_probe_score` are the only v2
+scalar; v1 is not computed.
 
 ## Fixed suite
 
-| Family | Datasets | Scored metric | Protocol |
-|---|---|---|---|
-| THUNDER classification | all 16 official aggregate tasks | macro-F1 | Adam linear probe, cosine KNN, and 1,000 deterministic 16-shot SimpleShot draws |
-| THUNDER segmentation | PanNuke, OCELOT, SegPath epithelial, SegPath lymphocytes | per-image macro-F1 | frozen dense tokens plus THUNDER MaskTransformer and Dice loss |
-| Progression | UCLA Lung | macro-OVR AUC | raw-feature `LogisticRegression(C=0.5, class_weight="balanced")` |
-| Mutation | SurGen RAS | macro-OVR AUC | raw-feature `LogisticRegression(C=0.5, class_weight="balanced")` |
-| Survival | LEOPARD BCR, CPTAC-PDA OS | c-index | fold-standardized CoxNet at 0.1, 0.2, and 0.7 times the training fold's `alpha_max`, `l1_ratio=0.5`, `max_iter=100000`; non-convergence is an error |
-| Robustness | PathoROB camelyon, tolkach_esca | quality-adjusted robustness | published fixed-k robustness index and biological-class balanced KNN accuracy |
+| Family | Datasets | Scored metric |
+|---|---|---|
+| Classification | BACH, BRACS, BreaKHis, CRC, ESCA, MHIST, PCam, SPIDER breast/colorectal/skin/thorax, WILDS | macro-F1 from linear, KNN, and 16-shot SimpleShot |
+| Segmentation | SegPath epithelial and lymphocytes | THUNDER per-image weighted macro-F1 |
+| Progression | UCLA Lung | macro-OVR AUC |
+| Mutation | SurGen RAS | macro-OVR AUC |
+| Survival | LEOPARD BCR and CPTAC-PDA OS | c-index |
+| Robustness | PathoROB Camelyon and Tolkach ESCA | quality-adjusted robustness |
 
-SurGen uses 768 source-spaced train/validation tiles per slide. LEOPARD and
-CPTAC-PDA retain every prepared tile. The complete suite is gated at 25 minutes
-on one H100.
+The complete suite must finish within 25 minutes on one H100.
 
-Classification and segmentation selections are frozen in [thunder_v2.json](thunder_v2.json). The manifest has exactly `train` and `val` records. It contains the same 16 equally weighted tasks as THUNDER's published classification aggregate: BACH, BRACS, BreaKHis, CCRCC, CRC, ESCA, MHIST, PCam, SPIDER breast/colorectal/skin/thorax, TCGA CRC-MSI/TILs/Uniform, and WILDS. BACH, BreaKHis, and MHIST retain their complete official train/validation splits. BRACS is capped at 256/128 because decoding its large PNG regions otherwise consumes disproportionate runtime; every other larger task is capped at 1024/256. Both caps use seed-1337 proportional class stratification. Naturally smaller splits remain complete, every training class has at least 16 examples, and every validation class is represented.
+## THUNDER development subsets
 
-The segmentation panel uses the exact four current THUNDER datasets and split semantics. PanNuke keeps all 2656/2523 train/validation patches and OCELOT all 6400/2178 crops. SegPath epithelial keeps four source-balanced training crops and two validation crops per selected source (32768/4518); lymphocytes keeps two per source (20906/2164). Source images never cross splits. One crop per lymphocyte source was insufficient in validation diagnostics, so the frozen panel retains two.
+[thunder_v2.json](thunder_v2.json) is the only classification/segmentation
+manifest read at runtime. Every task has exactly `root`, `train`, and `val`; no
+test key or path is present.
 
-Classification mirrors THUNDER's visible-validation protocol: fp16 frozen embeddings and the cached loader's seed-0 minibatch stream feed nine Adam heads using `lr={1e-3,1e-4,1e-5}` × `weight_decay={0,1e-3,1e-4}` for at most 200 epochs. KNN selects from the published `k` grid, and SimpleShot reconstructs THUNDER's seed-0 support-index stream before taking the 16-shot draws. The unweighted mean of all 16 × 3 macro-F1 cells is one classification family. The official test split is absent from the manifest and runtime.
+| Classification task | Train | Validation |
+|---|---:|---:|
+| BACH | 218 | 50 |
+| BRACS | 512 | 312 |
+| BreaKHis | 936 | 196 |
+| CRC | 4,096 | 2,048 |
+| ESCA | 4,096 | 2,048 |
+| MHIST | 1,743 | 432 |
+| PCam | 3,072 | 1,024 |
+| SPIDER breast | 3,072 | 1,024 |
+| SPIDER colorectal | 3,072 | 1,024 |
+| SPIDER skin | 4,096 | 2,048 |
+| SPIDER thorax | 3,072 | 1,024 |
+| WILDS | 4,096 | 2,048 |
 
-Segmentation retains THUNDER's two-layer MaskTransformer, Dice objective, Adam, batch 64, and official per-image macro-F1/Jaccard implementation. NanoPath caps PanNuke and OCELOT at 30 epochs instead of THUNDER's 200 and retains the official 9/21 SegPath limits. Dense tokens are cached with one signed-int8 vector and one fp16 scale per token. For the runtime gate the decoder width is 192 instead of 768, and the two long SegPath decoder loops use native `torch.compile`; examples, batches, objective, optimizer, and scoring are unchanged. The pre-frozen task schedules are PanNuke `1e-3/1e-4`, OCELOT `1e-4/0`, epithelial `1e-4/1e-3`, and lymphocytes `1e-3/1e-4` for LR/weight decay. As an efficient analogue of THUNDER's validation checkpoint selection, each epoch is compared by Dice loss on 256 evenly spaced validation examples before the selected checkpoint is scored on the complete validation subset.
+Selections use seed 1337. Uncapped splits remain complete. Capped splits are
+class-stratified with at least 16 examples per available class; SPIDER samples
+are spread across source slides, WILDS across patient/node groups, and ESCA
+across sources within each class. Validation keeps the official split identity.
+The selected ESCA validation samples are UKK rather than TCGA.
 
-Patho-Bench uses the absolute CoxNet alphas 0.01/0.02/0.07. Those values failed numerically for several otherwise valid encoder families because an absolute penalty changes meaning with arbitrary feature scale and separability. NanoPath therefore standardizes within each training fold, derives that fold's `alpha_max`, and retains the official grid's 1:2:7 shape as fractions 0.1/0.2/0.7 of `alpha_max`. The validation fold is transformed with training statistics only; numerical failures and convergence warnings remain hard errors.
+CCRCC, TCGA CRC-MSI, TCGA-TILs, and TCGA-Uniform are excluded because their
+evaluation images are explicitly TCGA. OCELOT is excluded for the same reason.
+PanNuke is also excluded: the released arrays mix TCGA and local-hospital data
+without provenance that lets NanoPath construct a verifiably non-TCGA
+validation split. MoNuSAC is not a substitute because its released cohort is
+TCGA-derived.
 
-All frozen feature extraction uses fp16 with batch 2048 and 16 decode workers, matching the settings already validated by the official driver for NanoPath ViT-S checkpoints on one 80 GB H100. Probe-head training remains batch 64. Segmentation runs first and releases cached CUDA allocations between datasets so compiled SegPath decoders do not inherit allocator fragmentation from earlier probes. Runtime roots are the canonical shared locations declared in `configs/main.yaml`: `/data/thunder-data`, `/data/ucla-lung`, `/data/surgen`, `/data/leopard_bcr`, `/data/CPTAC-PDA`, and `/data/pathorob`. `prepare.py download=False` verifies every selected path, source-disjoint splits, and classification class counts.
+SegPath uses source-disjoint official development splits: 32,768/4,518
+epithelial crops and 20,906/2,164 lymphocyte crops. The two-task proxy was kept
+because the previous 12-model study preserved 57 of 66 pairwise orderings of
+the full official THUNDER segmentation aggregate (86.4% concordance; Spearman
+0.902). Adding PanNuke preserved 58 of 66, too small a gain to justify the
+unverifiable TCGA mixture. These numbers motivate the panel; the revised
+end-to-end protocol must be rerun before its leaderboard values are promoted.
 
-## Promotion discipline
+## Probe protocols
 
-Code, manifest, and formula were frozen at commit `97794c0` before the final exact official comparison. Post-freeze study artifacts live under `/data/paul/nanopath/probe-v2-study`. The complete 12-model study passed every promotion gate: final-score Pearson/Spearman improved for THUNDER classification, HEST, and CPTAC; cross-family concordance rose from 0.60 to 1.00; mean standardized family-offset reduction was 67.75% with every target improved; and segmentation-component Pearson rose from 0.47 to 0.96. No NanoPath checkpoint ranked above GigaPath or H-Optimus-0 while ranking below it on the existing official composite.
+Classification embeddings are frozen fp16 features. Nine Adam linear heads use
+THUNDER's `lr={1e-3,1e-4,1e-5}` ×
+`weight_decay={0,1e-3,1e-4}`, batch 64, and 200 epochs. Their nine final
+validation macro-F1 values are averaged. KNN likewise averages the fixed
+`k={1,3,5,10,20,30,40,50}` cells. This marginalization avoids selecting a
+hyperparameter on the same validation samples used for the score. SimpleShot
+matches THUNDER's seed-0 stream of 1,000 balanced 16-shot support draws and
+majority vote. Every dataset × head cell has equal weight within the single
+classification family.
 
-Two independent single-H100 runs completed in 1204.60 and 1188.65 seconds, below the 1500-second limit, with zero difference across 139 non-timing numeric metrics. Existing protocol-v1 rows remain explicitly historical and are not comparable to the rebuilt protocol-v2 tables.
+Segmentation retains THUNDER's two-layer MaskTransformer, Dice objective, Adam,
+batch 64, and weighted per-image macro-F1/Jaccard calculation. It uses fixed
+schedules rather than validation checkpoint selection: epithelial trains 9
+epochs at `lr=1e-4`, `weight_decay=1e-3`; lymphocytes trains 21 epochs at
+`lr=1e-3`, `weight_decay=1e-4`. Dense tokens are cached as signed int8 vectors
+with fp16 scales. All feature extraction is microbatched at 512 images so models
+may aggregate multiple intermediate layers or test-time views without excessive
+peak memory. The decoder width is 192 to meet the runtime budget.
+
+UCLA progression and SurGen mutation use raw pooled features and fixed
+`LogisticRegression(C=0.5, class_weight="balanced", random_state=0)` in three
+development folds. SurGen reads at most 768 source-spaced tiles per slide.
+Survival standardizes within each training fold and fits CoxNet with
+`l1_ratio=0.5` at 0.1, 0.2, and 0.7 times that fold's `alpha_max`; every
+dataset × alpha × fold c-index is averaged and numerical failures are errors.
+LEOPARD reads at most 768 tiles per slide and CPTAC-PDA retains every prepared
+tile.
+
+PathoROB uses only Camelyon and non-TCGA Tolkach ESCA records. It reports the
+published fixed-k robustness index, biological-class balanced KNN accuracy, and
+their mean as `robustness_quality`.
+
+Runtime roots are the canonical shared locations declared in
+`configs/main.yaml`: `/data/thunder-data`, `/data/ucla-lung`, `/data/surgen`,
+`/data/leopard_bcr`, `/data/CPTAC-PDA`, and `/data/pathorob`.
+
+## Promotion gates
+
+Promotion requires two deterministic single-H100 runs under 1,500 seconds and
+fresh matched-model comparisons against the official evaluations. Report
+Pearson and Spearman, but decide rank fidelity from Kendall tau, all-model and
+cross-family pairwise concordance, the explicit NanoPath-vs-GigaPath and
+NanoPath-vs-H-Optimus-0 comparisons, and the NanoPath-family residual. Existing
+v2 rows from the superseded 16-classification/four-segmentation protocol are not
+comparable and must not be reused.
