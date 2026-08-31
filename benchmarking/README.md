@@ -1,147 +1,140 @@
-# NanoPath probe protocol v2
+# NanoPath benchmark protocol v2
 
-NanoPath v2 is a fast development-set proxy for held-out THUNDER, HEST, and
-CPTAC evaluation. It never runs HEST, adds no CPTAC task beyond the existing
-CPTAC-PDA survival probe, and contains no official test records.
+This directory is the audit trail for NanoPath's fixed downstream benchmark.
+Protocol v2 is a fast development-data proxy for model ordering on held-out
+THUNDER, HEST, and CPTAC evaluations. It is not a replacement for those
+evaluations and does not expose or score their test samples.
 
-## Final score
+The executable definition is [`probe.py`](../probe.py) plus the five checked-in
+JSON manifests in this directory. The prose here explains that definition; if
+the code, manifests, and documentation ever disagree, the release is not valid.
+Labless locks `probe.py`, this entire directory, and the probe configuration for
+comparable public runs.
 
-All values remain on their original 0–1 scales:
+## Score definition
+
+All components remain on their natural 0–1 scales:
 
 ```text
-classification = mean(dataset × {linear, KNN, 16-shot SimpleShot} macro-F1)
-predictive_mean = mean(classification, segmentation, progression, mutation, survival)
-robustness_quality = mean((PathoROB robustness index + biological balanced accuracy) / 2)
+classification = mean over 12 datasets of
+                 mean(linear-grid mean F1, KNN-grid mean F1, SimpleShot F1)
+
+segmentation    = mean(PanNuke F1, SegPath epithelial F1,
+                       SegPath lymphocyte F1)
+progression     = UCLA Lung macro-OVR AUC
+mutation        = SurGen RAS macro-OVR AUC
+survival        = mean(LEOPARD BCR c-index, CPTAC-PDA OS c-index)
+
+predictive_mean = mean(classification, segmentation, progression,
+                       mutation, survival)
+robustness_quality = mean over PathoROB subsets of
+                     (robustness index + biological balanced accuracy) / 2
+
 mean_probe_score = 0.95 * predictive_mean + 0.05 * robustness_quality
 ```
 
-Each predictive family contributes 19% and robustness contributes 5%.
-`mean_probe_score` and the summary alias `final_probe_score` are the only
-reported scalar.
+`mean_probe_score` and `final_probe_score` are identical public aliases. Each
+predictive family contributes 19% of the final score and robustness contributes
+5%. Classification's datasets, heads, and hyperparameter cells remain visible
+for diagnosis but do not become extra top-level families.
 
 ## Fixed suite
 
-| Family | Datasets | Scored metric |
-|---|---|---|
-| Classification | BACH, BRACS, BreaKHis, CRC, ESCA, MHIST, PCam, SPIDER breast/colorectal/skin/thorax, WILDS | macro-F1 from linear, KNN, and 16-shot SimpleShot |
-| Segmentation | PanNuke, SegPath epithelial, SegPath lymphocytes | THUNDER per-image weighted macro-F1 |
-| Progression | UCLA Lung | macro-OVR AUC |
-| Mutation | SurGen RAS | macro-OVR AUC |
-| Survival | LEOPARD BCR and CPTAC-PDA OS | c-index |
-| Robustness | PathoROB Camelyon and Tolkach ESCA | quality-adjusted robustness |
+| Family | Datasets | Scored metric | Protocol details |
+|---|---|---|---|
+| Classification | BACH, BRACS, BreaKHis, CRC, ESCA, MHIST, PCam, SPIDER breast/colorectal/skin/thorax, WILDS | macro-F1 | [classification.md](classification.md) |
+| Segmentation | PanNuke, SegPath epithelial, SegPath lymphocytes | THUNDER weighted per-image macro-F1 | [segmentation.md](segmentation.md) |
+| Progression | UCLA Lung | macro-OVR AUC | [slide_probes.md](slide_probes.md) |
+| Mutation | SurGen RAS | macro-OVR AUC | [slide_probes.md](slide_probes.md) |
+| Survival | LEOPARD BCR, CPTAC-PDA OS | Harrell c-index | [slide_probes.md](slide_probes.md) |
+| Robustness | PathoROB Camelyon, Tolkach ESCA | quality-adjusted robustness | [pathorob.md](pathorob.md) |
 
-The complete suite must finish within 25 minutes on one H100.
+The complete fixed suite is mandatory. `prepare_probe_state()` rejects partial,
+reordered, added, or substituted task lists, and every result records
+`probe_protocol_version: 2`.
 
-## THUNDER development subsets
+## Data boundary
 
-[thunder_v2.json](thunder_v2.json) is the only classification/segmentation
-manifest read at runtime. Every task has exactly `root`, `train`, and `val`; no
-test key or path is present.
+[`thunder_v2.json`](thunder_v2.json) is the only classification and
+segmentation manifest used at runtime. Every dataset entry has exactly `root`,
+`train`, and `val`; there is no `test` key. The four slide manifests contain
+only development records. UCLA, SurGen, and CPTAC-PDA use the original
+PathoBench fold-0 training pool, and LEOPARD uses public challenge training
+labels. Their original test records are absent.
 
-| Classification task | Train | Validation |
-|---|---:|---:|
-| BACH | 218 | 50 |
-| BRACS | 512 | 312 |
-| BreaKHis | 936 | 196 |
-| CRC | 4,096 | 2,048 |
-| ESCA | 4,096 | 2,048 |
-| MHIST | 1,743 | 432 |
-| PCam | 3,072 | 1,024 |
-| SPIDER breast | 3,072 | 1,024 |
-| SPIDER colorectal | 3,072 | 1,024 |
-| SPIDER skin | 4,096 | 2,048 |
-| SPIDER thorax | 3,072 | 1,024 |
-| WILDS | 4,096 | 2,048 |
+The downloadable evaluation snapshot is
+[`medarc/nanopath-evals`](https://huggingface.co/datasets/medarc/nanopath-evals)
+pinned in `prepare.py` to revision
+`635a83330b0dc2917d7524644f11b04188a63e53`. It is about 192 GiB and contains
+only the selected development assets. HEST is absent. No CPTAC classification
+task is present. CPTAC appears only as the pre-existing CPTAC-PDA survival
+development probe. PanNuke Fold3 and the unused TCGA center in Tolkach ESCA are
+absent.
 
-Selections use seed 1337. Uncapped splits remain complete. Capped splits are
-class-stratified with at least 16 examples per available class; SPIDER samples
-are spread across source slides, WILDS across patient/node groups, and ESCA
-across sources within each class. Validation keeps the official split identity.
-The selected ESCA validation samples are UKK rather than TCGA.
+On the MedARC cluster, evaluation reads canonical shared roots under `/data`.
+A shared upstream root may contain unrelated official assets, but `probe.py`
+opens only the paths named by these manifests. A fresh download of the pinned
+NanoPath snapshot contains no such unrelated assets. `prepare.py` verifies the
+snapshot protocol flag, the explicit `contains_official_test_records: false`
+contract, manifest hashes, and every referenced file before a run starts.
 
-CCRCC, TCGA CRC-MSI, TCGA-TILs, and TCGA-Uniform are excluded because their
-evaluation images are explicitly TCGA. OCELOT is excluded for the same reason.
-MoNuSAC is not a substitute because its released cohort is TCGA-derived.
+TCGA-pretraining overlap is handled explicitly:
 
-PanNuke uses the complete official Fold1 training array (2,656 images) and
-Fold2 validation array (2,523 images). Fold3 is absent from the manifest and is
-never opened. PanNuke mixes TCGA and local-hospital material without per-image
-provenance, so it cannot be filtered to a verifiably non-TCGA subset; it is
-retained as the explicitly accepted mixed-source exception after SegPath alone
-failed to preserve NanoPath-family segmentation ordering. SegPath uses
-source-disjoint official development splits: 32,768/4,518 epithelial crops and
-20,906/2,164 lymphocyte crops.
+- CCRCC, TCGA CRC-MSI, TCGA-TILs, TCGA-Uniform, and OCELOT are excluded because
+  their evaluation images are explicitly TCGA.
+- ESCA training may contain TCGA images, but its scored validation selection is
+  UKK-only.
+- MoNuSAC is excluded because the released cohort is TCGA-derived.
+- PanNuke mixes TCGA and local-hospital material and does not expose reliable
+  per-image source provenance. It is the one accepted mixed-source exception;
+  this limitation is documented in [segmentation.md](segmentation.md).
 
-## Probe protocols
+## Frozen-backbone contract
 
-NanoPath exposes two model-defined test-time readouts. `probe_features()` feeds
-classification, progression, mutation, and survival, so recipes may aggregate
-layers or views there. `encode_image()` feeds segmentation; all model-defined
-channels are retained, while an expanded spatial grid is pooled back to the
-native patch grid to bound decoder memory and runtime. PathoROB deliberately
-does not use `probe_features()`: its published adapter remains fixed to final
-CLS plus mean patch tokens, including any normalization applied by the
-backbone's ordinary forward pass.
+The benchmark measures frozen representations. Classification and slide probes
+consume `model.probe_features()`, allowing a recipe to define bounded test-time
+feature aggregation. Segmentation consumes all non-register patch channels from
+`model.encode_image()`. If a model emits an expanded spatial grid, it is
+area-pooled back to its native patch grid before the shared decoder; feature
+channels are not discarded. PathoROB intentionally bypasses
+`probe_features()` and uses its fixed published-style CLS-plus-mean-patch
+adapter so model-specific aggregation cannot alter the robustness protocol.
 
-Classification embeddings are frozen fp16 features. Nine Adam linear heads use
-THUNDER's `lr={1e-3,1e-4,1e-5}` ×
-`weight_decay={0,1e-3,1e-4}`, batch 64, and 200 epochs. Their nine final
-validation macro-F1 values are averaged. KNN likewise averages the fixed
-`k={1,3,5,10,20,30,40,50}` cells. This marginalization avoids selecting a
-hyperparameter on the same validation samples used for the score. SimpleShot
-matches THUNDER's seed-0 stream of 1,000 balanced 16-shot support draws and
-majority vote. Every dataset × head cell has equal weight within the single
-classification family.
+Encoder inference uses fp16 autocast and caches classification/slide embeddings
+as float32. Segmentation patch vectors are cached as per-vector signed int8 plus
+fp16 scales to fit the one-GPU runtime and memory envelope. The complete suite
+must finish in less than 1,500 seconds on one 80 GB H100. See
+[validation.md](validation.md) for parity, determinism, runtime, rank-fidelity,
+and null-model evidence.
 
-Segmentation retains THUNDER's two-layer MaskTransformer, Dice objective, Adam,
-batch 64, and weighted per-image macro-F1/Jaccard calculation. It uses fixed
-schedules rather than validation checkpoint selection: epithelial trains 9
-epochs at `lr=1e-4`, `weight_decay=1e-3`; lymphocytes trains 21 epochs at
-`lr=1e-3`, `weight_decay=1e-4`; PanNuke trains 30 epochs at `lr=1e-3`,
-`weight_decay=1e-4`. Dense tokens are cached as signed int8 vectors with fp16
-scales. All feature extraction is microbatched at 512 images so models may
-aggregate multiple intermediate layers or test-time views without excessive
-peak memory. For DINO-family encoders, expanded spatial grids are area-pooled
-to the native patch grid before the shared decoder, while all model-defined
-concatenated layer channels are retained. This leaves ordinary dense outputs
-unchanged and preserves test-time depth aggregation without multiplying the
-decoder's quadratic spatial cost. The decoder width is 192 to meet the runtime
-budget. Only the small decoder uses PyTorch's deterministic math attention
-kernel; frozen encoders keep their model-defined fast attention path.
+## Files
 
-UCLA progression and SurGen mutation use raw pooled features and fixed
-`LogisticRegression(C=0.5, class_weight="balanced", random_state=0)` in three
-development folds. SurGen reads at most 768 source-spaced tiles per slide.
-Survival standardizes within each training fold and fits CoxNet with
-`l1_ratio=0.5` at 0.1, 0.2, and 0.7 times that fold's `alpha_max`; every
-dataset × alpha × fold c-index is averaged and numerical failures are errors.
-LEOPARD reads at most 768 tiles per slide and CPTAC-PDA retains every prepared
-tile.
+| File | Role |
+|---|---|
+| [`thunder_v2.json`](thunder_v2.json) | Exact classification and segmentation train/validation records |
+| [`ucla_lung.json`](ucla_lung.json) | UCLA fold-0 development-pool slide labels |
+| [`surgen.json`](surgen.json) | SurGen fold-0 development-pool slide labels |
+| [`leopard_bcr.json`](leopard_bcr.json) | LEOPARD public-training cohort and fixed folds |
+| [`cptac_pda_os.json`](cptac_pda_os.json) | CPTAC-PDA fold-0 development-pool survival labels and fixed folds |
+| [`proxy_fidelity_v2.csv`](proxy_fidelity_v2.csv) | Frozen 12- and 19-model proxy/official comparison values |
+| [`random_dinov2_s_v2.csv`](random_dinov2_s_v2.csv) | Ten-seed exact-suite randomized-backbone audit |
+| [classification.md](classification.md) | Dataset provenance, sampling, head math, and THUNDER deviations |
+| [segmentation.md](segmentation.md) | Source boundary, decoder, loss, metric, and PanNuke caveat |
+| [slide_probes.md](slide_probes.md) | Tile caching, pooling, folds, AUROC, and survival protocols |
+| [pathorob.md](pathorob.md) | Fixed adapter, neighbor construction, and quality correction |
+| [validation.md](validation.md) | Implementation parity, runtime, null checks, and official-suite fidelity |
 
-PathoROB uses only Camelyon and non-TCGA Tolkach ESCA records. It reports the
-published fixed-k robustness index, biological-class balanced KNN accuracy, and
-their mean as `robustness_quality`.
+## Interpretation
 
-Runtime roots are the canonical shared locations declared in
-`configs/main.yaml`: `/data/thunder-data`, `/data/ucla-lung`, `/data/surgen`,
-`/data/leopard_bcr`, `/data/CPTAC-PDA`, and `/data/pathorob`. Missing roots are
-downloaded from the immutable `medarc/nanopath-evals` snapshot; on machines
-without shared `/data`, preparation localizes them under the clone's ignored
-`data/` directory. That snapshot contains only the selected development data,
-not official test records.
+The final scalar is a hill-climbing signal: it rewards improvements shared
+across five predictive families while preventing robustness from dominating.
+It is strongest as a predictor of model ordering, not as a calibrated estimate
+of an official score. A difference should be interpreted alongside per-family,
+per-dataset, per-head, fold-variance, raw robustness, Jaccard, and timing fields.
+Small differences remain susceptible to finite validation samples and probe
+optimization noise; public leader promotion therefore requires an independent
+rerun and a 0.006 improvement.
 
-## Promotion gates
-
-Promotion required two deterministic single-H100 runs under 1,500 seconds and
-fresh matched-model comparisons against the official evaluations. Report
-Pearson and Spearman, but decide rank fidelity from Kendall tau, all-model and
-cross-family pairwise concordance, the explicit NanoPath-vs-GigaPath and
-NanoPath-vs-H-Optimus-0 comparisons, and the NanoPath-family residual.
-
-The primary segmentation correlation compares the three THUNDER tasks present
-in NanoPath with their official held-out results. The full four-task THUNDER
-aggregate remains an out-of-distribution ordering diagnostic, but cannot be the
-matched correlation target because its fourth task is the deliberately excluded
-all-TCGA OCELOT dataset. Both the pinned harness aggregate and the published
-THUNDER aggregate are reported because their GigaPath and Midnight-12K values
-materially disagree.
+Official THUNDER, HEST, and CPTAC results were consulted only after the v2
+protocol, manifests, and scalar were frozen. They are release-validation
+evidence, never inputs to a run and never weights or dataset-selection targets.

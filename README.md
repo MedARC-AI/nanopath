@@ -92,13 +92,16 @@ The expanded 19-model comparison adds four DINOv2 sizes, Kaiko-S/16,
 GigaPath-Flash, and EXAONE-Path-2.5-B. Classification remains faithful to
 official THUNDER (0.988 Pearson, 0.991 Spearman, 0.977 all-pair, and 1.000
 cross-family concordance). Among the 17 models with a matched completed or
-published THUNDER segmentation result, segmentation has 0.633 Pearson, 0.852
-Spearman, 0.859 all-pair, and 0.850 cross-family concordance. The lower Pearson
-is chiefly a score-magnitude miss for EXAONE; the ordering remains substantially
-preserved. Final score has 0.884 Pearson / 0.846 Spearman with HEST and 0.765 /
-0.784 with CPTAC classification across all 19 models. These official-suite
-results are post-freeze validation only; their test samples do not enter the
-NanoPath data or score.
+same-checkpoint published THUNDER segmentation result, segmentation has 0.586
+Pearson, 0.798 Spearman, 0.844 all-pair, and 0.900 cross-family concordance. The
+lower Pearson is chiefly a score-magnitude miss for EXAONE; excluding EXAONE
+raises it to 0.831. Final score has 0.878 Pearson / 0.837 Spearman with HEST and
+0.752 / 0.782 with CPTAC classification across all 19 models. These values use
+the assembled fixed three-task v2 score for every row; intermediate two-SegPath
+result files are not treated as final scores. Official-suite results are
+post-freeze validation only, and their test samples do not enter the NanoPath
+data or score. Exact inputs are in
+[`benchmarking/proxy_fidelity_v2.csv`](benchmarking/proxy_fidelity_v2.csv).
 
 The reference scripts live in `baselines/`.
 
@@ -185,7 +188,7 @@ The script reads `summary.json` and `metrics.jsonl`, reviews `output_dir/labless
 
 ### Helper files
 - `AGENTS.md` — guidelines for design philosophy, coding rules, experiment discipline, cluster conventions, etc. Note this is Paul's personal `AGENTS.md` file and has instructions specific to our MedARC cluster—you should modify this file to suit your own setup!
-- `benchmarking/` — supports probing/downstream evaluation.
+- `benchmarking/` — locked v2 manifests, dataset/protocol documentation, null audit, and proxy-fidelity evidence.
 - `prepare.py` — data prep: verify or download pretraining data + probe datasets + any pretrained weights.
 - `probe.py` — downstream probes (KNN, few-shot, linear, segmentation, slide AUROC, survival, robustness).
 - `submit/train_1gpu.sbatch` — SLURM launcher for single-GPU training.
