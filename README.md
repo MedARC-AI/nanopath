@@ -48,9 +48,6 @@ On Labless, the run labeled `main` reflects the current GitHub `main` branch, an
 
 ### Protocol-v2 NanoPath models
 
-Scores from the superseded 16-classification/four-segmentation implementation
-are not comparable to this protocol.
-
 | # | Description | final score | classification | segmentation | progression | mutation | survival | robustness quality | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
 | 1 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm) | **0.6464** | 0.7507 | 0.6024 | 0.6136 | 0.5885 | 0.6010 | 0.9354 | @anishdulal |
@@ -71,8 +68,9 @@ are not comparable to this protocol.
 | 6 | GigaPath | Prov-GigaPath tile encoder ViT-G/16 | 0.6680 | 0.7948 | 0.6197 | 0.6813 | 0.6130 | 0.5802 | 0.8611 |
 | 7 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.6427 | 0.6640 | 0.6306 | 0.6748 | 0.5829 | 0.6058 | 0.8534 |
 
-Across these 12 matched checkpoints, protocol-v2 classification has 0.946
-Pearson and 0.939 all-pair concordance with official THUNDER classification.
+Across these 12 matched checkpoints, protocol-v2 classification has 0.987
+Pearson, 0.993 Spearman, and 0.985 all-pair concordance with official THUNDER
+classification. The NanoPath-only ordering is identical.
 For the three THUNDER segmentation tasks present in this non-TCGA proxy, the
 corresponding values are 0.735 and 0.758, with 0.857 cross-family concordance.
 The complete four-task pinned THUNDER segmentation run, which additionally
@@ -81,38 +79,6 @@ cross-family concordance; the published THUNDER aggregate gives 0.719 Pearson
 and 0.818 all-pair concordance. Protocol v2 has 0.943 cross-family concordance
 with the existing official composite and never ranks a NanoPath checkpoint
 above GigaPath or H-optimus-0 when that composite ranks it below the baseline.
-
-### Protocol-v1 legacy NanoPath models
-
-These rows use the retired v1 score and are retained only as historical records. They are not comparable to protocol v2.
-
-| # | Description | final score | linear | knn | 16-shot | segmentation | progression | mutation | survival | robustness | Contributors |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm) | 0.6676 | 0.7917 | 0.7399 | 0.6944 | 0.3354 | 0.6949 | 0.6013 | 0.5730 | 0.9100 | @anishdulal |
-| 2 | [block-strided-cls](https://github.com/MedARC-AI/nanopath/tree/block-strided-cls) | 0.6592 | 0.8126 | 0.7474 | 0.6807 | 0.3310 | 0.6298 | 0.6137 | 0.5666 | 0.8920 | @RyanKim17920 |
-| 3 | [jepa-fino](https://github.com/MedARC-AI/nanopath/tree/jepa-fino) | 0.6485 | 0.7863 | 0.7251 | 0.6435 | 0.2924 | 0.6590 | 0.6268 | 0.5661 | 0.8886 | @ml-and-ml |
-| 4 | [I-JEPA contig patch](https://github.com/MedARC-AI/nanopath/tree/JEPA-contig-patch) | 0.6444 | 0.7842 | 0.7061 | 0.6383 | 0.2891 | 0.6575 | 0.6162 | 0.5783 | 0.8855 | @NimaAsh |
-| 5 | [lr-and-curation](https://labless.dev/runs/run_sub_6c6c051f71) | 0.6357 | 0.7701 | 0.7005 | 0.6120 | 0.3077 | 0.6494 | 0.6084 | 0.5758 | 0.8612 | @nevasini1 |
-| 6 | [dinov2-s-kde](https://labless.dev/runs/run_sub_0d8aeb2511) | 0.6277 | 0.7555 | 0.6839 | 0.5890 | 0.3089 | 0.6418 | 0.5994 | 0.5898 | 0.8531 | @PaulScotti |
-
-### Protocol-v1 legacy baselines
-
-These reference rows also use the retired v1 score and are retained only for historical comparison.
-
-| # | Name | Description | final score | linear | knn | 16-shot | segmentation | progression | mutation | survival | robustness |
-|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | GenBio-PathFM | GenBio-PathFM ViT-G/16 | **0.6917** | 0.8076 | 0.7626 | 0.6970 | 0.3234 | 0.7680 | 0.6375 | 0.5964 | 0.9412 |
-| 2 | UNI-2-h | MahmoodLab UNI-2-h ViT-H/14 | 0.6782 | 0.7910 | 0.7547 | 0.6961 | 0.3270 | 0.7330 | 0.6463 | 0.6137 | 0.8637 |
-| 3 | H-optimus-0 | H-optimus-0 ViT-G/14-reg | 0.6763 | 0.7995 | 0.7676 | 0.6931 | 0.3241 | 0.7004 | 0.6584 | 0.5748 | 0.8926 |
-| 4 | EXAONE-Path-2.5 | LG AI Research EXAONE-Path-2.5 ViT-B/14 | 0.6606 | 0.8028 | 0.7582 | 0.6872 | 0.2820 | 0.6859 | 0.6494 | 0.5781 | 0.8409 |
-| 5 | Virchow | Paige/Microsoft Virchow ViT-H/14 | 0.6591 | 0.7915 | 0.7220 | 0.6114 | 0.3206 | 0.6689 | 0.6350 | 0.6239 | 0.8994 |
-| 6 | GigaPath | Prov-GigaPath tile encoder ViT-G/16 | 0.6456 | 0.7977 | 0.7149 | 0.6537 | 0.3304 | 0.7041 | 0.6262 | 0.5932 | 0.7448 |
-| 7 | Midnight-12K | Kaiko Midnight-12K ViT-G/14 | 0.6204 | 0.7684 | 0.6807 | 0.5758 | 0.2722 | 0.6840 | 0.6087 | 0.5907 | 0.7823 |
-| 8 | DINOv2-giant | Untouched Meta `dinov2_vitg14_reg` | 0.6196 | 0.7689 | 0.7208 | 0.5834 | 0.2826 | 0.6000 | 0.6174 | 0.5849 | 0.7985 |
-| 9 | DINOv2-large | Untouched Meta `dinov2_vitl14_reg` | 0.6122 | 0.7458 | 0.7104 | 0.5868 | 0.2755 | 0.6301 | 0.6063 | 0.5608 | 0.7816 |
-| 10 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.6114 | 0.7926 | 0.7135 | 0.4335 | 0.3087 | 0.6993 | 0.6091 | 0.5907 | 0.7438 |
-| 11 | DINOv2-small | Untouched Meta `dinov2_vits14_reg` | 0.5841 | 0.6968 | 0.6249 | 0.5834 | 0.2704 | 0.5827 | 0.6225 | 0.5374 | 0.7543 |
-| 12 | DINOv2-small random | Randomized weights `dinov2_vits14_reg` | 0.4703 | 0.5255 | 0.5066 | 0.4139 | 0.2701 | 0.6922 | 0.5648 | 0.5984 | 0.1905 |
 
 The reference scripts live in `baselines/`.
 
@@ -211,16 +177,18 @@ The script reads `summary.json` and `metrics.jsonl`, reviews `output_dir/labless
 
 `prepare.py` prepares the necessary data for pretraining and downstream probing. By default it reads `configs/main.yaml`; pass a YAML path before the flag to prepare a different config, e.g. `python prepare.py configs/smoke.yaml download=True`. Flag `download=True` to fetch/prepare the configured datasets into the folders specified by the YAML; flag `download=False` to verify that all required paths are already populated.
 
-On the MedARC cluster, the checked-in `/data` paths are the intended shared defaults. Protocol-v2 THUNDER data is deliberately not mirrored or relocated: it must already follow the official train/validation layout under `/data/thunder-data`, and preparation fails loudly if it does not. Other missing portable data roots may still be localized for a fresh clone.
+On the MedARC cluster, the checked-in `/data` paths are the intended shared defaults and existing populated roots are reused. On a machine without writable `/data` or `/block` mounts, `download=True` rewrites the checked-in main and smoke configs to ignored repo-local `data/` roots before downloading.
 
 **What `download=True` does**
 1. **TCGA tiles**: `huggingface_hub.snapshot_download` (filtered to `shard-*.parquet`) pulls the 200 parquet shards (~120 GB total, `{path: string, jpeg: binary}` rows with 64-row row groups) from [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) into `data.dataset_dir`.
-2. **Probe datasets**: verifies every manifest-selected THUNDER train/validation path at `/data/thunder-data`; existing slide/PathoROB probe fetchers populate their canonical configured roots when absent. THUNDER roots are never downloaded from a NanoPath mirror.
+2. **Probe datasets**: downloads the exact protocol-v2 data snapshot from [`medarc/nanopath-evals`](https://huggingface.co/datasets/medarc/nanopath-evals) into each missing configured root, then verifies every required record. The snapshot is pinned to an immutable Hub revision in `prepare.py`; interrupted Hub downloads are resumable.
 3. **DINOv2 backbone weights**: `torch.hub.load_state_dict_from_url` fetches the Meta checkpoint for `model.type` from `dl.fbaipublicfiles.com` into `~/.cache/torch/hub/checkpoints/`.
 
 **Prerequisites**
-- ~120 GB free wherever `data.dataset_dir` lives for the parquet shards (cluster default: `/data/nanopath_parquet`).
-- Access to the canonical prepared THUNDER train/validation datasets at `/data/thunder-data` and the slide/PathoROB roots listed in `configs/main.yaml`.
+- About 355 GB free for a fresh complete setup: ~120 GB of pretraining shards, ~215 GB of extracted probe data, and temporary room while the largest image archive is extracted. Existing populated roots reduce the download and space requirement.
+- Acceptance of each upstream benchmark dataset's original research-use terms. The MedARC mirror preserves the data needed by the protocol but does not relicense its components.
+
+The evaluation mirror contains only manifest-selected development data. It contains no official THUNDER, HEST, or CPTAC classification test records; HEST is absent entirely, CPTAC appears only in the existing CPTAC-PDA survival development probe, PanNuke Fold3 is absent, and the unused TCGA center is removed from downloadable Tolkach ESCA. ESCA's probe-training subset retains selected TCGA images, but its entire scored validation subset is UKK. See [benchmarking/README.md](benchmarking/README.md) for the precise split contract.
 
 ### Regenerating the tile dataset from raw SVS
 
@@ -246,7 +214,7 @@ pack_from_jpeg_dir(jpeg_dir, jpeg_dir / 'manifest.txt', Path('/data/$USER/nanopa
 "
 ```
 
-Point `data.dataset_dir` at the packed parquet directory before training. To publish a new variant of the dataset, you can push the resulting shards to a fresh HF dataset repo and update `HF_REPO_ID` in `prepare.py`.
+Point `data.dataset_dir` at the packed parquet directory before training. To publish a new variant of the training dataset, push the resulting shards to a fresh HF dataset repo and update `HF_TRAIN_REPO_ID` in `prepare.py`.
 
 ## Running
 
@@ -270,7 +238,7 @@ The checked-in `#SBATCH --partition=n`, `--account=sophont`, and `--qos=high` li
 
 ## Outputs
 
-`prepare.py … download=True` may localize portable training/output defaults, but leaves the canonical protocol-v2 evaluation roots fixed.
+`prepare.py … download=True` keeps populated or writable shared roots and localizes missing roots only when the configured shared mount is unavailable.
 
 - run outputs: `project.output_dir` (MedARC cluster default `/data/$USER/nanopath/main/...`; auto-localized default `nanopath/data/main/...`). Final probe results log to `metrics.jsonl`.
 - wandb: `project.wandb_dir` (cluster default `/data/$USER/nanopath/wandb`; auto-localized default `nanopath/data/wandb`).

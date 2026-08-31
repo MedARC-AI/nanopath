@@ -7,7 +7,7 @@ project:
 
 data:
   # dataset_dir holds the parquet shards (shard-NNNNN.parquet) that train.py reads.
-  # `prepare.py … download=True` populates it from the medarc/nanopath HF mirror.
+  # `prepare.py … download=True` populates it from the medarc/nanopath training mirror.
   dataset_dir: /data/nanopath_parquet
   split_seed: 42
   val_fraction: 0.05

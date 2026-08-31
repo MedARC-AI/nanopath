@@ -155,7 +155,7 @@ The payload intentionally makes the run inspectable. It includes:
 - W&B run URL
 
 The public API redacts local machine paths, hostnames, users, repo roots, and
-local artifact paths from legacy and new rows.
+local artifact paths from submitted rows.
 
 Agents can crawl the public experiment ledger directly with the JSON API:
 

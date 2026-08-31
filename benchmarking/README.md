@@ -16,8 +16,8 @@ mean_probe_score = 0.95 * predictive_mean + 0.05 * robustness_quality
 ```
 
 Each predictive family contributes 19% and robustness contributes 5%.
-`mean_probe_score` and the summary alias `final_probe_score` are the only v2
-scalar; v1 is not computed.
+`mean_probe_score` and the summary alias `final_probe_score` are the only
+reported scalar.
 
 ## Fixed suite
 
@@ -124,17 +124,19 @@ their mean as `robustness_quality`.
 
 Runtime roots are the canonical shared locations declared in
 `configs/main.yaml`: `/data/thunder-data`, `/data/ucla-lung`, `/data/surgen`,
-`/data/leopard_bcr`, `/data/CPTAC-PDA`, and `/data/pathorob`.
+`/data/leopard_bcr`, `/data/CPTAC-PDA`, and `/data/pathorob`. Missing roots are
+downloaded from the immutable `medarc/nanopath-evals` snapshot; on machines
+without shared `/data`, preparation localizes them under the clone's ignored
+`data/` directory. That snapshot contains only the selected development data,
+not official test records.
 
 ## Promotion gates
 
-Promotion requires two deterministic single-H100 runs under 1,500 seconds and
+Promotion required two deterministic single-H100 runs under 1,500 seconds and
 fresh matched-model comparisons against the official evaluations. Report
 Pearson and Spearman, but decide rank fidelity from Kendall tau, all-model and
 cross-family pairwise concordance, the explicit NanoPath-vs-GigaPath and
-NanoPath-vs-H-Optimus-0 comparisons, and the NanoPath-family residual. Existing
-v2 rows from the superseded 16-classification/four-segmentation protocol are not
-comparable and must not be reused.
+NanoPath-vs-H-Optimus-0 comparisons, and the NanoPath-family residual.
 
 The primary segmentation correlation compares the three THUNDER tasks present
 in NanoPath with their official held-out results. The full four-task THUNDER

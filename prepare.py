@@ -3,8 +3,8 @@
 #   - data.dataset_dir/shard-NNNNN.parquet   (the 4M-tile dataset, sharded)
 #   - probe.dataset_roots[name] for each configured probe dataset
 #   - Meta's DINOv2 pretrained weights for cfg["model"]["type"] (torch.hub cache)
-# The tile dataset and slide probes use their existing prepared assets. THUNDER
-# v2 always reads the official shared train/validation roots under /data/thunder-data.
+# The tile dataset and protocol-v2 evaluation snapshot are downloaded from their
+# separate MedARC Hugging Face repositories when configured roots are missing.
 # download_TCGA.sh and prepare_tiles / pack_from_jpeg_dir are only relevant if
 # you want to regenerate the tile dataset from raw SVS files; see README.
 #
@@ -18,6 +18,7 @@
 # selection can decode a fresh JPEG dataset and pack it into parquet shards
 # (see README "Regenerating the tile dataset"); main() does not call them.
 
+import hashlib
 import json
 import multiprocessing as mp
 import os
@@ -36,8 +37,9 @@ from PIL import Image
 
 
 REPO_ROOT = Path(__file__).resolve().parent
-HF_REPO_ID = "medarc/nanopath"
-HF_PROBE_PREFIX = "probes"
+HF_TRAIN_REPO_ID = "medarc/nanopath"
+HF_EVAL_REPO_ID = "medarc/nanopath-evals"
+HF_EVAL_REVISION = "635a83330b0dc2917d7524644f11b04188a63e53"
 TILE_SIZE = 224
 JPEG_QUALITY = 95
 TARGET_TILE_COUNT = 4_000_000
@@ -149,7 +151,7 @@ def select_rows(path, keep_indices):
 
 
 # Materialize 4M JPEG tiles from sample_list under dataset_dir. Used to
-# regenerate the medarc/nanopath HF mirror when tile selection changes; not
+# regenerate the medarc/nanopath training mirror when tile selection changes; not
 # called by main().
 def prepare_tiles(sample_list, dataset_dir, split_seed):
     dataset_dir.mkdir(parents=True, exist_ok=True)
@@ -238,37 +240,15 @@ def fetch_tiles_from_hf(dataset_dir):
     from huggingface_hub import snapshot_download
     started = time.monotonic()
     workers = int(os.environ.get("PREPARE_WORKERS", os.cpu_count() or 8))
-    print(f"downloading parquet shards from huggingface.co/datasets/{HF_REPO_ID} -> {dataset_dir} ({workers} workers)", flush=True)
+    print(f"downloading parquet shards from huggingface.co/datasets/{HF_TRAIN_REPO_ID} -> {dataset_dir} ({workers} workers)", flush=True)
     snapshot_download(
-        repo_id=HF_REPO_ID,
+        repo_id=HF_TRAIN_REPO_ID,
         repo_type="dataset",
         local_dir=str(dataset_dir),
         allow_patterns=["shard-*.parquet"],
         max_workers=workers,
     )
     print(f"  [done]  total wall {time.monotonic()-started:.0f}s", flush=True)
-
-
-def hf_probe_dir(name, root):
-    from huggingface_hub import snapshot_download
-    workers = int(os.environ.get("PREPARE_WORKERS", os.cpu_count() or 8))
-    print(f"  using medarc/nanopath probe mirror: {name}", flush=True)
-    snapshot_download(repo_id=HF_REPO_ID, repo_type="dataset", local_dir=str(root), allow_patterns=[f"{HF_PROBE_PREFIX}/{name}/**"], max_workers=workers)
-    src = root / HF_PROBE_PREFIX / name
-    for p in src.iterdir():
-        dst = root / p.name
-        if dst.exists():
-            shutil.rmtree(dst) if dst.is_dir() else dst.unlink()
-        shutil.move(str(p), dst)
-    shutil.rmtree(root / HF_PROBE_PREFIX)
-
-
-def make_hpcroot_writable(root):
-    import grp
-    gid = grp.getgrnam("hpcroot").gr_gid
-    for p in [root, *root.rglob("*")]:
-        os.chown(p, -1, gid)
-        p.chmod(p.stat().st_mode | 0o660 | (0o110 if p.is_dir() else 0))
 
 
 PATHOBENCH_TILING_VERSION = "pathobench_20x_512_v1"
@@ -278,53 +258,55 @@ SURGEN_TILING_VERSION = PATHOBENCH_TILING_VERSION
 LEOPARD_BCR_TILING_VERSION = PATHOBENCH_TILING_VERSION + "_leopard_bcr_174x768_v1"
 
 
-def fetch_surgen(root):
-    # Pull the pre-extracted 20x/512 train-fold tile cache.
+def fetch_eval_dataset(name, root):
     from huggingface_hub import snapshot_download
-    print("  using pre-extracted SurGen tile cache from medarc/nanopath; official EBI CZI regeneration is multi-hour", flush=True)
+    import tarfile
+    import zipfile
+
     workers = int(os.environ.get("PREPARE_WORKERS", os.cpu_count() or 8))
-    (root / "data").mkdir(parents=True, exist_ok=True)
-    snapshot_download(repo_id=HF_REPO_ID, repo_type="dataset", local_dir=str(root), allow_patterns=["probes/surgen/*"], max_workers=workers)
-    src = root / HF_PROBE_PREFIX / "surgen"
-    for f in (root / "data").glob("surgen-*.parquet"):
-        f.unlink()
-    for f in sorted(src.glob("surgen-*.parquet")):
-        os.replace(f, root / "data" / f.name)
-    os.replace(src / "labels.csv", root / "labels.csv")
-    os.replace(src / "tiling_version.txt", root / "tiling_version.txt")
-    shutil.rmtree(root / HF_PROBE_PREFIX)
-
-
-def fetch_leopard_bcr(root):
-    hf_probe_dir("leopard_bcr", root)
-    if root == Path("/data/leopard_bcr"):
-        make_hpcroot_writable(root)
-
-
-def fetch_pathorob(root):
-    from huggingface_hub import snapshot_download
-    workers = int(os.environ.get("PREPARE_WORKERS", os.cpu_count() or 8))
+    download_dir = root.parent / f".nanopath-evals-{name}"
+    patterns = ["manifest.json", f"archives/{name}.tar"]
+    if name == "pannuke":
+        patterns = ["manifest.json", "archives/pannuke/*.zip"]
+    elif name in {"ucla_lung", "surgen", "leopard_bcr", "cptac_pda_os", "pathorob"}:
+        patterns = ["manifest.json", f"datasets/{name}/**"]
+    print(f"  downloading {name} from huggingface.co/datasets/{HF_EVAL_REPO_ID}@{HF_EVAL_REVISION}", flush=True)
     snapshot_download(
-        repo_id=HF_REPO_ID,
+        repo_id=HF_EVAL_REPO_ID,
         repo_type="dataset",
-        local_dir=str(root),
-        allow_patterns=["probes/pathorob/camelyon/**", "probes/pathorob/tolkach_esca/**"],
+        revision=HF_EVAL_REVISION,
+        local_dir=str(download_dir),
+        allow_patterns=patterns,
         max_workers=workers,
     )
-    src = root / HF_PROBE_PREFIX / "pathorob"
-    for name in ("camelyon", "tolkach_esca"):
-        dst = root / name
-        if dst.exists():
-            shutil.rmtree(dst)
-        shutil.move(str(src / name), dst)
-    shutil.rmtree(root / HF_PROBE_PREFIX)
-
-
-FETCHERS = {
-    "leopard_bcr": fetch_leopard_bcr,
-    "pathorob": fetch_pathorob,
-    "surgen": fetch_surgen,
-}
+    release = json.loads((download_dir / "manifest.json").read_text())
+    assert release["probe_protocol_version"] == 2
+    assert release["contains_official_test_records"] is False
+    for manifest_name, expected_sha in release["source_manifests_sha256"].items():
+        assert hashlib.sha256((REPO_ROOT / "benchmarking" / manifest_name).read_bytes()).hexdigest() == expected_sha
+    release_paths = {item["path"] for item in release["files"]}
+    if name == "pannuke":
+        assert {"archives/pannuke/fold_1.zip", "archives/pannuke/fold_2.zip"} <= release_paths
+    elif name in {"ucla_lung", "surgen", "leopard_bcr", "cptac_pda_os", "pathorob"}:
+        assert any(path.startswith(f"datasets/{name}/") for path in release_paths)
+    else:
+        assert f"archives/{name}.tar" in release_paths
+    root.mkdir(parents=True, exist_ok=True)
+    if name == "pannuke":
+        for archive in sorted((download_dir / "archives" / "pannuke").glob("*.zip")):
+            with zipfile.ZipFile(archive) as zf:
+                zf.extractall(root)
+    elif (archive := download_dir / "archives" / f"{name}.tar").is_file():
+        with tarfile.open(archive) as tf:
+            tf.extractall(root, filter="data")
+    else:
+        source = download_dir / "datasets" / name
+        for path in sorted(source.rglob("*")):
+            if path.is_file():
+                destination = root / path.relative_to(source)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(path, destination)
+    shutil.rmtree(download_dir)
 
 
 # Resolve $VAR and ~ in a YAML-supplied path string; anything else stays literal.
@@ -332,19 +314,15 @@ def _resolve(s):
     return Path(os.path.expanduser(os.path.expandvars(str(s))))
 
 
-# Keep protocol-v2 probe roots canonical; only unrelated missing shared defaults
-# can be retargeted into repo-local data/ for portable setup.
+# Keep populated shared roots and writable /data defaults unchanged. On machines
+# without those mounts, retarget missing data into the clone's ignored data/ dir.
 def _local_data_root(s):
     p = _resolve(s)
-    canonical = {
-        Path("/data/surgen"), Path("/data/leopard_bcr"), Path("/data/CPTAC-PDA"),
-        Path("/data/pathorob"), Path("/data/ucla-lung"),
-    }
-    if p in canonical or p.is_relative_to("/data/thunder-data"):
+    if p.is_dir() and any(p.iterdir()):
         return str(s)
-    if p.is_absolute() and len(p.parts) > 3 and p.parts[1] == "data" and p.parts[3] == "nanopath" and Path("/data").exists() and os.access("/data", os.W_OK):
+    if p.is_absolute() and len(p.parts) > 1 and p.parts[1] in {"data", "block"} and Path(*p.parts[:2]).exists() and os.access(Path(*p.parts[:2]), os.W_OK):
         return str(s)
-    if p.is_absolute() and len(p.parts) > 1 and p.parts[1] in {"data", "block"} and (not p.is_dir() or not any(p.iterdir())):
+    if p.is_absolute() and len(p.parts) > 1 and p.parts[1] in {"data", "block"}:
         return str(REPO_ROOT / "data" / p.name)
     return str(s)
 
@@ -411,23 +389,32 @@ def is_populated(name, p):
     assert all(set(spec) == {"root", "train", "val"} for family in ("classification", "segmentation") for spec in thunder[family].values())
     if name in thunder["classification"]:
         spec = thunder["classification"][name]
-        if p.resolve() != (Path("/data/thunder-data") / spec["root"]).resolve():
-            return False
         train_counts = np.bincount(np.asarray(spec["train"]["labels"], dtype=np.int64))
         val_counts = np.bincount(np.asarray(spec["val"]["labels"], dtype=np.int64), minlength=len(train_counts))
         if len(train_counts) == 0 or train_counts.min() < 16 or val_counts.min() == 0:
             return False
         if name == "pcam":
+            import h5py
             if len(spec["train"]["indices"]) != len(spec["train"]["labels"]) or len(spec["val"]["indices"]) != len(spec["val"]["labels"]):
                 return False
-            return all((p / f"camelyonpatch_level_2_split_{split}_{kind}.h5").exists() for split in ("train", "valid") for kind in ("x", "y"))
+            for split, source_split in (("train", "train"), ("val", "valid")):
+                x_path = p / f"camelyonpatch_level_2_split_{source_split}_x.h5"
+                y_path = p / f"camelyonpatch_level_2_split_{source_split}_y.h5"
+                if not x_path.is_file() or not y_path.is_file():
+                    return False
+                indices = np.asarray(spec[split]["indices"], dtype=np.int64)
+                with h5py.File(x_path, "r") as x, h5py.File(y_path, "r") as y:
+                    x_values, y_values = x[next(iter(x))], y[next(iter(y))]
+                    if indices[-1] >= len(x_values) or indices[-1] >= len(y_values):
+                        return False
+                    if not np.array_equal(np.asarray(y_values[indices]).reshape(-1), np.asarray(spec[split]["labels"])):
+                        return False
+            return True
         if any(len(spec[split]["images"]) != len(spec[split]["labels"]) for split in ("train", "val")):
             return False
         return not (set(spec["train"]["images"]) & set(spec["val"]["images"])) and all((p / rel).is_file() for split in ("train", "val") for rel in spec[split]["images"])
     if name in thunder["segmentation"]:
         spec = thunder["segmentation"][name]
-        if p.resolve() != (Path("/data/thunder-data") / spec["root"]).resolve():
-            return False
         if name == "pannuke":
             paths = [spec[split][kind] for split in ("train", "val") for kind in ("images", "labels")]
             if not (
@@ -510,8 +497,6 @@ def main():
         localize_config_files(config_path)
     cfg = yaml.safe_load(os.path.expandvars(config_path.read_text()))
     paths = get_paths(cfg)
-    thunder = json.loads((REPO_ROOT / "benchmarking" / "thunder_v2.json").read_text())
-    thunder_datasets = thunder["classification"].keys() | thunder["segmentation"].keys()
     dataset_dir = paths["data.dataset_dir"]
     shards = list(dataset_dir.glob("shard-*.parquet")) if dataset_dir.exists() else []
 
@@ -541,13 +526,8 @@ def main():
             missing.append((name, root))
             continue
         root.mkdir(parents=True, exist_ok=True)
-        if name in thunder_datasets:
-            raise FileNotFoundError(f"probe/{name} must be installed at its canonical THUNDER root: {root}")
         print(f"[fetch] probe/{name} -> {root}", flush=True)
-        if name in ("cptac_pda_os", "ucla_lung"):
-            hf_probe_dir(name, root)
-        else:
-            FETCHERS[name](root)
+        fetch_eval_dataset(name, root)
         assert is_populated(name, root), f"probe/{name} is still missing, empty, or stale after fetch: {root}"
         print(f"[done] probe/{name}", flush=True)
 
