@@ -21,12 +21,7 @@ CONFIG_FILE="${1:-${REPO_DIR}/configs/main.yaml}"
 [[ $# -gt 0 ]] && shift
 
 cd "${REPO_DIR}"
-# Worktrees share the venv from the main checkout at /admin/home/$USER/nanopath.
-VENV_DIR="${REPO_DIR}/.venv"
-if [[ ! -f "${VENV_DIR}/bin/activate" ]]; then
-  VENV_DIR="${HOME}/nanopath/.venv"
-fi
-source "${VENV_DIR}/bin/activate"
+source "${REPO_DIR}/.venv/bin/activate"
 mkdir -p slurm
 
 LAUNCH_INFO="$(python - "${CONFIG_FILE}" "$@" <<'PY'

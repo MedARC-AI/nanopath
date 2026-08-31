@@ -66,12 +66,20 @@ On Labless, the run labeled `main` reflects the current GitHub `main` branch, an
 | 4 | Midnight-12K | Kaiko Midnight-12K ViT-G/14 | 0.6811 | 0.7761 | 0.6326 | 0.7080 | 0.6170 | 0.6100 | 0.9169 |
 | 5 | Virchow | Paige/Microsoft Virchow ViT-H/14 | 0.6750 | 0.7728 | 0.6326 | 0.6541 | 0.6291 | 0.6173 | 0.9388 |
 | 6 | GigaPath | Prov-GigaPath tile encoder ViT-G/16 | 0.6680 | 0.7948 | 0.6197 | 0.6813 | 0.6130 | 0.5802 | 0.8611 |
-| 7 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.6427 | 0.6640 | 0.6306 | 0.6748 | 0.5829 | 0.6058 | 0.8534 |
+| 7 | GigaPath-Flash | Prov-GigaPath-Flash tile encoder ViT-S/16 | 0.6471 | 0.7742 | 0.5569 | 0.6620 | 0.5796 | 0.6122 | 0.8407 |
+| 8 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.6427 | 0.6640 | 0.6306 | 0.6748 | 0.5829 | 0.6058 | 0.8534 |
+| 9 | Kaiko-S/16 | Kaiko pathology ViT-S/16 | 0.6337 | 0.7737 | 0.6060 | 0.5963 | 0.5539 | 0.5907 | 0.8151 |
+| 10 | DINOv2-G/14 | Meta DINOv2-G/14-reg | 0.6285 | 0.6804 | 0.5753 | 0.5928 | 0.6038 | 0.6288 | 0.8617 |
+| 11 | EXAONE-Path-2.5-B | LG AI Research EXAONE-Path-2.5-B/14 | 0.6280 | 0.8049 | 0.3677 | 0.6367 | 0.6458 | 0.6107 | 0.9091 |
+| 12 | DINOv2-L/14 | Meta DINOv2-L/14-reg | 0.6243 | 0.6632 | 0.5667 | 0.6298 | 0.6005 | 0.6009 | 0.8530 |
+| 13 | DINOv2-B/14 | Meta DINOv2-B/14-reg | 0.6122 | 0.6500 | 0.5691 | 0.5753 | 0.6062 | 0.6015 | 0.8371 |
+| 14 | DINOv2-S/14 | Meta DINOv2-S/14-reg | 0.6104 | 0.6480 | 0.5665 | 0.5364 | 0.6202 | 0.6220 | 0.8353 |
 
-Across these 12 matched checkpoints, protocol-v2 classification has 0.987
+Across the original promotion set of five NanoPath models and seven principal
+baselines, protocol-v2 classification has 0.987
 Pearson, 0.993 Spearman, and 0.985 all-pair concordance with official THUNDER
 classification. The NanoPath-only ordering is identical.
-For the three THUNDER segmentation tasks present in this non-TCGA proxy, the
+For the three THUNDER segmentation tasks present in this development proxy, the
 corresponding values are 0.735 and 0.758, with 0.857 cross-family concordance.
 The complete four-task pinned THUNDER segmentation run, which additionally
 contains prohibited all-TCGA OCELOT, has lower 0.656 Pearson but retains 0.829
@@ -80,13 +88,25 @@ and 0.818 all-pair concordance. Protocol v2 has 0.943 cross-family concordance
 with the existing official composite and never ranks a NanoPath checkpoint
 above GigaPath or H-optimus-0 when that composite ranks it below the baseline.
 
+The expanded 19-model comparison adds four DINOv2 sizes, Kaiko-S/16,
+GigaPath-Flash, and EXAONE-Path-2.5-B. Classification remains faithful to
+official THUNDER (0.988 Pearson, 0.991 Spearman, 0.977 all-pair, and 1.000
+cross-family concordance). Among the 17 models with a matched completed or
+published THUNDER segmentation result, segmentation has 0.633 Pearson, 0.852
+Spearman, 0.859 all-pair, and 0.850 cross-family concordance. The lower Pearson
+is chiefly a score-magnitude miss for EXAONE; the ordering remains substantially
+preserved. Final score has 0.884 Pearson / 0.846 Spearman with HEST and 0.765 /
+0.784 with CPTAC classification across all 19 models. These official-suite
+results are post-freeze validation only; their test samples do not enter the
+NanoPath data or score.
+
 The reference scripts live in `baselines/`.
 
 ### How to submit to the leaderboard
 
 Labless is our public run ledger and live plot for `nanopath`. You do not need a Labless password or a pull request to make a leaderboard claim; the submitter connects your submission to your GitHub identity through GitHub's device sign-in. We encourage you to submit *all* completed full runs, including null results and incremental tweaks; a dense public ledger lets you (and AI agents, see our [Agent API](https://labless.dev/docs/agent-api)) mine through everyones runs to uncover new insights.
 
-See [labless/README.md](https://github.com/MedARC-AI/nanopath/blob/main/labless/README.md) for Labless submission details and public API usage.
+See [labless/README.md](labless/README.md) for Labless submission details and public API usage.
 
 `configs/main.yaml` is the current `nanopath` main-branch training recipe. A normal SLURM submission is:
 

@@ -100,9 +100,9 @@ def console_prefix():
     return f"{time.strftime('%H:%M:%S')} {os.environ.get('SLURM_JOB_ID', str(os.getpid()))}"
 
 
-# Keep all probe sidecar files under output_dir/thunder for compatibility with old run layouts.
+# Keep all protocol-v2 sidecar files under one probe directory.
 def probe_paths(output_dir):
-    probe_dir = Path(output_dir) / "thunder"
+    probe_dir = Path(output_dir) / "probe"
     return {
         "probe_dir": probe_dir,
         "state_path": probe_dir / "state.json",
@@ -1096,7 +1096,7 @@ def run_probe_job(request_path):
     auc_metrics = {}
     for dataset in auc:
         print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_auc_start: {dataset}", flush=True)
-        result, wall = {"surgen": inline_surgen_ras_auc}[dataset](model, mean, std, device, patch_transform)
+        result, wall = inline_surgen_ras_auc(model, mean, std, device, patch_transform)
         result["wall_seconds"] = wall
         auc_metrics[dataset] = result
         print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_auc_done: {dataset}  auc={result['val_auc']:.4f}  c={result['c']}  wall={wall:.2f}s", flush=True)
@@ -1112,7 +1112,7 @@ def run_probe_job(request_path):
     rob_indices = {}
     for dataset in robustness:
         print(f"{console_prefix()} ProbeWorker  [{request['train_step']}]  inline_robustness_start: {dataset}", flush=True)
-        subset_indices, wall = {"pathorob": inline_pathorob}[dataset](model, mean, std, device, patch_transform)
+        subset_indices, wall = inline_pathorob(model, mean, std, device, patch_transform)
         rob_indices[dataset] = {
             "subsets": subset_indices,
             "robustness_index": float(sum(v["robustness_index"] for v in subset_indices.values()) / len(subset_indices)),
@@ -1191,30 +1191,23 @@ def run_probe_job(request_path):
         metrics[f"probe_{dataset}_fold_var"] = var
         metrics[f"probe_{dataset}_fold_std"] = var ** 0.5
 
-    if classification:
-        metrics["linear_mean_f1"] = sum(metrics[f"probe_{d}_linear_val_f1"] for d in classification) / len(classification)
-        metrics["knn_mean_f1"] = sum(metrics[f"probe_{d}_knn_val_f1"] for d in classification) / len(classification)
-        metrics["fewshot_mean_f1"] = sum(metrics[f"probe_{d}_fewshot_val_f1"] for d in classification) / len(classification)
-        metrics["classification_mean_f1"] = sum(metrics[f"probe_{d}_{head}_val_f1"] for d in classification for head in ("linear", "knn", "fewshot")) / (3 * len(classification))
-    if slide:
-        metrics["slide_mean_auc"] = sum(metrics[f"probe_{d}_val_auc"] for d in slide) / len(slide)
-    if segmentation:
-        metrics["seg_mean_f1"] = sum(metrics[f"probe_{d}_seg_val_f1"] for d in segmentation) / len(segmentation)
-        metrics["seg_mean_jaccard"] = sum(metrics[f"probe_{d}_seg_val_jaccard"] for d in segmentation) / len(segmentation)
-    if auc:
-        metrics["auc_mean"] = sum(metrics[f"probe_{d}_val_auc"] for d in auc) / len(auc)
-    if survival:
-        metrics["survival_mean_cindex"] = sum(metrics[f"probe_{d}_val_cindex"] for d in survival) / len(survival)
-    if robustness:
-        metrics["robustness_mean"] = sum(metrics[f"probe_{d}_robustness_index"] for d in robustness) / len(robustness)
-        metrics["robustness_biological_balanced_accuracy_mean"] = sum(metrics[f"probe_{d}_biological_balanced_accuracy"] for d in robustness) / len(robustness)
-        metrics["robustness_quality_mean"] = sum(metrics[f"probe_{d}_robustness_quality"] for d in robustness) / len(robustness)
+    metrics["linear_mean_f1"] = sum(metrics[f"probe_{d}_linear_val_f1"] for d in classification) / len(classification)
+    metrics["knn_mean_f1"] = sum(metrics[f"probe_{d}_knn_val_f1"] for d in classification) / len(classification)
+    metrics["fewshot_mean_f1"] = sum(metrics[f"probe_{d}_fewshot_val_f1"] for d in classification) / len(classification)
+    metrics["classification_mean_f1"] = sum(metrics[f"probe_{d}_{head}_val_f1"] for d in classification for head in ("linear", "knn", "fewshot")) / (3 * len(classification))
+    metrics["slide_mean_auc"] = sum(metrics[f"probe_{d}_val_auc"] for d in slide) / len(slide)
+    metrics["seg_mean_f1"] = sum(metrics[f"probe_{d}_seg_val_f1"] for d in segmentation) / len(segmentation)
+    metrics["seg_mean_jaccard"] = sum(metrics[f"probe_{d}_seg_val_jaccard"] for d in segmentation) / len(segmentation)
+    metrics["auc_mean"] = sum(metrics[f"probe_{d}_val_auc"] for d in auc) / len(auc)
+    metrics["survival_mean_cindex"] = sum(metrics[f"probe_{d}_val_cindex"] for d in survival) / len(survival)
+    metrics["robustness_mean"] = sum(metrics[f"probe_{d}_robustness_index"] for d in robustness) / len(robustness)
+    metrics["robustness_biological_balanced_accuracy_mean"] = sum(metrics[f"probe_{d}_biological_balanced_accuracy"] for d in robustness) / len(robustness)
+    metrics["robustness_quality_mean"] = sum(metrics[f"probe_{d}_robustness_quality"] for d in robustness) / len(robustness)
 
     predictive_metrics = ("classification_mean_f1", "seg_mean_f1", "slide_mean_auc", "auc_mean", "survival_mean_cindex")
-    if all(k in metrics for k in (*predictive_metrics, "robustness_quality_mean")):
-        metrics["probe_protocol_version"] = PROBE_PROTOCOL_VERSION
-        metrics["predictive_mean"] = sum(metrics[k] for k in predictive_metrics) / len(predictive_metrics)
-        metrics["mean_probe_score"] = 0.95 * metrics["predictive_mean"] + 0.05 * metrics["robustness_quality_mean"]
+    metrics["probe_protocol_version"] = PROBE_PROTOCOL_VERSION
+    metrics["predictive_mean"] = sum(metrics[k] for k in predictive_metrics) / len(predictive_metrics)
+    metrics["mean_probe_score"] = 0.95 * metrics["predictive_mean"] + 0.05 * metrics["robustness_quality_mean"]
 
     print(
         f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "

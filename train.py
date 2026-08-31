@@ -99,6 +99,7 @@ def maybe_arm_labless_autosubmit(cfg, repo_dir):
     status = subprocess.run(
         [sys.executable, str(repo_dir / "labless" / "submit_to_labless.py"), "login_only=true", f"token_output={token_path}", f"run_name={run_name}", f"notes={notes}"],
         cwd=repo_dir,
+        check=False,
     ).returncode
     if status != 0:
         print("Labless login did not complete; training will run without auto-submit.", flush=True)
@@ -124,6 +125,7 @@ def finish_labless_autosubmit(token_path, output_dir, repo_dir):
             f"github_token_file={token_file}",
         ],
         cwd=repo_dir,
+        check=False,
     ).returncode
     token_file.unlink(missing_ok=True)
     if status == 2:
@@ -353,9 +355,14 @@ def main():
 
     # Train shuffles + drops partials; the loop never starts a batch that would exceed
     # max_train_samples, so every optimizer step keeps the configured batch size.
-    loader_kwargs = dict(batch_size=batch_size, drop_last=True, num_workers=train_cfg["num_workers"], pin_memory=True,
-                         prefetch_factor=train_cfg["prefetch_factor"] if train_cfg["num_workers"] > 0 else None,
-                         persistent_workers=train_cfg["persistent_workers"] and train_cfg["num_workers"] > 0)
+    loader_kwargs = {
+        "batch_size": batch_size,
+        "drop_last": True,
+        "num_workers": train_cfg["num_workers"],
+        "pin_memory": True,
+        "prefetch_factor": train_cfg["prefetch_factor"] if train_cfg["num_workers"] > 0 else None,
+        "persistent_workers": train_cfg["persistent_workers"] and train_cfg["num_workers"] > 0,
+    }
     train_loader = DataLoader(train_ds, shuffle=True, **loader_kwargs)
     val_loader = DataLoader(val_ds, shuffle=False, **loader_kwargs)
 
@@ -396,8 +403,8 @@ def main():
 
     # Count unique tiles/slides/patients for data-coverage diagnostics.
     def flush_unique_counts():
-        for key in seen_ids:
-            seen_ids[key].update(pending_ids[key])
+        for key, seen in seen_ids.items():
+            seen.update(pending_ids[key])
             pending_ids[key].clear()
         unique_tiles_seen = len(seen_ids["sample"])
         return {
@@ -670,10 +677,9 @@ def main():
     final_unique_counts = flush_unique_counts()
     if step > 0:
         # Final probes have their own readers; close pretraining workers before they compete for CPU/IO.
-        if train_cfg["num_workers"] > 0:
-            if train_loader._iterator is not None:
-                train_loader._iterator._shutdown_workers()
-                train_loader._iterator = None
+        if train_cfg["num_workers"] > 0 and train_loader._iterator is not None:
+            train_loader._iterator._shutdown_workers()
+            train_loader._iterator = None
         # Probes get their own short-lived checkpoint via run_probe_at; only persist latest.pt
         # at end-of-run when periodic saving is on (save_every set) so smoke runs leave nothing.
         if save_checkpoints and step != last_saved_step:
@@ -725,8 +731,8 @@ def main():
         f"final_probe_score: {summary.get('final_probe_score')}",
         flush=True,
     )
-    for key in summary.keys():
-        wandb_run.summary[key] = summary[key]
+    for key, value in summary.items():
+        wandb_run.summary[key] = value
     wandb_run.finish()
     finish_labless_autosubmit(labless_autosubmit_file, output_dir, repo_dir)
 

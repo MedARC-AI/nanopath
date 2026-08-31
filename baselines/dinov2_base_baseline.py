@@ -9,5 +9,5 @@ if __name__ == "__main__":
         "baseline-dinov2-base",
         "dinov2-vitb14-reg-no-continued-pretraining",
         "dinov2_vitb14_reg",
-        "/data/$USER/nanopath/baselines/dinov2-base-v2",
+        "/data/$USER/nanopath/baselines/dinov2-base",
     )

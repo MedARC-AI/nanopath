@@ -570,7 +570,7 @@ def collect_main_diff(main_ref: dict[str, str], commit: str, source_dir: Path, r
 
 
 def main_file(commit: str, path: str) -> bytes | None:
-    exists = subprocess.run(["git", "cat-file", "-e", f"{commit}:{path}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    exists = subprocess.run(["git", "cat-file", "-e", f"{commit}:{path}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
     return subprocess.check_output(["git", "show", f"{commit}:{path}"]) if exists.returncode == 0 else None
 
 
@@ -652,7 +652,7 @@ def collect_artifacts(summary: dict[str, Any], opts: dict[str, str]) -> list[dic
 
 
 def now_iso() -> str:
-    return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    return dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z")
 
 
 def truthy(value: str | None) -> bool:

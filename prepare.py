@@ -47,6 +47,7 @@ TARGET_TILE_COUNT = 4_000_000
 # HF transfer is dominated by bytes (not per-file overhead) and small enough
 # that a 4 TB shared dataset_dir holds the dataset comfortably.
 NUM_SHARDS = 200
+PREPARE_WORKERS = 16
 # Small row groups inside each parquet shard. The dataloader does random
 # per-row reads, and parquet's read_row_group materializes the whole group;
 # 64 rows × ~30 KB JPEG ≈ ~2 MB per random access (~2-3 ms incl. decode).
@@ -57,8 +58,6 @@ PARQUET_ROW_GROUP_SIZE = 64
 HANDLE_CACHE_MAX = 2
 
 _HANDLE_CACHE = OrderedDict()
-# Suppress repeated logs for a slide we've already marked dead in this worker.
-_DEAD_SLIDES = set()
 
 
 # Open-or-reuse an OpenSlide handle, evicting the LRU and closing it cleanly.
@@ -75,43 +74,24 @@ def _get_slide(slide_path):
     return slide
 
 
-# Decode one tile and write it as JPEG; returns the manifest-relative path on
-# success, None if the slide is unreadable. A poison slide should not kill the
-# whole job: log the first failure per slide to stderr and continue. Existing
-# files are validated (>0 bytes + JPEG EOF marker) so a partial write left by
-# a previous SIGTERM is detected and rewritten. New writes go to a sibling
-# ".tmp" file and rename atomically so future runs cannot see partial bytes.
+# Decode one tile and write it as JPEG. Existing files are validated (>0 bytes
+# plus the JPEG EOF marker), and corrupt inputs fail loudly. New writes go to a
+# sibling ".tmp" file and rename atomically so future runs cannot see partial
+# bytes.
 def process_row(args):
     dataset_dir, slide_path, x, y, level = args
     rel = f"{Path(slide_path).stem}/{x}_{y}_{level}.jpg"
     out = Path(dataset_dir) / rel
+    if out.exists() and out.stat().st_size >= 2:
+        with out.open("rb") as f:
+            f.seek(-2, os.SEEK_END)
+            if f.read(2) == b"\xff\xd9":
+                return rel
     if out.exists():
-        try:
-            with out.open("rb") as f:
-                f.seek(-2, os.SEEK_END)
-                if f.read(2) == b"\xff\xd9":
-                    return rel
-        except OSError:
-            pass
         out.unlink()
-    if slide_path in _DEAD_SLIDES:
-        return None
-    try:
-        slide = _get_slide(slide_path)
-        # OpenSlide returns RGBA; drop alpha and emit pure RGB before encoding to JPEG.
-        tile = np.asarray(slide.read_region((x, y), level, (TILE_SIZE, TILE_SIZE)))[..., :3]
-    except Exception as exc:
-        # Drop the broken handle so the next read does not reuse it.
-        bad = _HANDLE_CACHE.pop(slide_path, None)
-        if bad is not None:
-            try:
-                bad.close()
-            except Exception:
-                pass
-        if slide_path not in _DEAD_SLIDES:
-            print(f"[poison] {slide_path}: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
-            _DEAD_SLIDES.add(slide_path)
-        return None
+    slide = _get_slide(slide_path)
+    # OpenSlide returns RGBA; drop alpha and emit pure RGB before encoding to JPEG.
+    tile = np.asarray(slide.read_region((x, y), level, (TILE_SIZE, TILE_SIZE)))[..., :3]
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(f".{os.getpid()}.tmp")
     Image.fromarray(tile).save(tmp, "JPEG", quality=JPEG_QUALITY)
@@ -168,25 +148,21 @@ def prepare_tiles(sample_list, dataset_dir, split_seed):
     # Sort by slide so each worker stays on one slide for many consecutive tiles.
     rows.sort(key=lambda r: r[0])
     args_iter = [(str(dataset_dir), *r) for r in rows]
-    workers = int(os.environ.get("PREPARE_WORKERS", os.cpu_count() or 8))
+    workers = PREPARE_WORKERS
     print(f"writing {len(args_iter):,} JPEG tiles to {dataset_dir} with {workers} workers", flush=True)
     rels = []
-    failed = 0
     decode_started = time.monotonic()
     last_log = decode_started
     with mp.Pool(workers) as pool:
         for i, rel in enumerate(pool.imap_unordered(process_row, args_iter, chunksize=128), start=1):
-            if rel is None:
-                failed += 1
-            else:
-                rels.append(rel)
+            rels.append(rel)
             now = time.monotonic()
             if now - last_log >= 30.0 or i == len(args_iter):
                 elapsed = now - decode_started
                 rate = i / max(1e-6, elapsed)
                 eta = max(0.0, (len(args_iter) - i) / max(1.0, rate))
                 print(
-                    f"[{i:,}/{len(args_iter):,}]  ok={len(rels):,}  failed={failed:,}  "
+                    f"[{i:,}/{len(args_iter):,}]  "
                     f"{rate:.0f} tiles/s  elapsed={elapsed:.0f}s  eta={eta:.0f}s",
                     flush=True,
                 )
@@ -196,7 +172,7 @@ def prepare_tiles(sample_list, dataset_dir, split_seed):
     manifest_path.write_text("\n".join(rels) + "\n")
     print(
         f"wrote {manifest_path} with {len(rels):,} entries "
-        f"(skipped {failed:,} poison-tile rows; total wall {time.monotonic()-started:.0f}s)",
+        f"(total wall {time.monotonic()-started:.0f}s)",
         flush=True,
     )
 
@@ -223,7 +199,7 @@ def pack_from_jpeg_dir(jpeg_dir, manifest_path, out_dir):
         (jpeg_dir, paths[i * chunk_size: (i + 1) * chunk_size], out_dir / f"shard-{i:05d}.parquet")
         for i in range(NUM_SHARDS) if paths[i * chunk_size: (i + 1) * chunk_size]
     ]
-    workers = int(os.environ.get("PREPARE_WORKERS", os.cpu_count() or 8))
+    workers = PREPARE_WORKERS
     print(f"packing {len(paths):,} tiles into {len(args_list)} parquet shards with {workers} workers", flush=True)
     started = time.monotonic()
     with mp.Pool(workers) as pool:
@@ -239,7 +215,7 @@ def pack_from_jpeg_dir(jpeg_dir, manifest_path, out_dir):
 def fetch_tiles_from_hf(dataset_dir):
     from huggingface_hub import snapshot_download
     started = time.monotonic()
-    workers = int(os.environ.get("PREPARE_WORKERS", os.cpu_count() or 8))
+    workers = PREPARE_WORKERS
     print(f"downloading parquet shards from huggingface.co/datasets/{HF_TRAIN_REPO_ID} -> {dataset_dir} ({workers} workers)", flush=True)
     snapshot_download(
         repo_id=HF_TRAIN_REPO_ID,
@@ -263,7 +239,7 @@ def fetch_eval_dataset(name, root):
     import tarfile
     import zipfile
 
-    workers = int(os.environ.get("PREPARE_WORKERS", os.cpu_count() or 8))
+    workers = PREPARE_WORKERS
     download_dir = root.parent / f".nanopath-evals-{name}"
     patterns = ["manifest.json", f"archives/{name}.tar"]
     if name == "pannuke":
@@ -467,8 +443,8 @@ def is_populated(name, p):
         got = set(pq.read_table(p / "patches.parquet", columns=["slide_id"]).column("slide_id").to_pylist()) if (p / "patches.parquet").exists() else set()
         version = p / "tiling_version.txt"
         return version.exists() and version.read_text().strip() == CPTAC_PDA_OS_TILING_VERSION and (p / "labels.tsv").exists() and expected <= got
-    if name == "pathorob" and not all(list((p / s / "data").glob("*.parquet")) for s in ("camelyon", "tolkach_esca")):
-        return False
+    if name == "pathorob":
+        return all(list((p / subset / "data").glob("*.parquet")) for subset in ("camelyon", "tolkach_esca"))
     return True
 
 
