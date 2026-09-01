@@ -160,6 +160,7 @@ def main() -> int:
         "dinov2-vitl14-reg-no-continued-pretraining": "python baselines/dinov2_large_baseline.py configs/main.yaml",
         "dinov2-vitg14-reg-no-continued-pretraining": "python baselines/dinov2_giant_baseline.py configs/main.yaml",
         "genbio-pathfm-vitg16-rope-untouched": "python baselines/genbio_pathfm_baseline.py configs/main.yaml",
+        "uni2-h-vith14-untouched": "python baselines/uni2h_baseline.py configs/main.yaml",
     }
     if run_tier == "baseline" and recipe_id not in baseline_commands:
         raise ValueError("baseline is not tracked by labless")

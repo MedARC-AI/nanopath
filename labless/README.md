@@ -92,8 +92,9 @@ python baselines/dinov2_small_baseline.py configs/main.yaml
 ```
 
 The submit script detects `summary.family == "baseline"` and marks the run as
-`tier=baseline`. Labless currently tracks GenBio-PathFM plus DINOv2 giant, large,
-and small references; other nanopath baselines, including the separate Virchow and
+`tier=baseline`. Labless uses UNI-2-h as the top v2 reference and retains
+GenBio-PathFM for the legacy v1 record; DINOv2 giant, large, and small provide
+natural-image references. Other baselines, including the separate Virchow and
 GigaPath scripts, can stay in the repo README without becoming Labless reference
 rows. The nanopath leaderboard still ranks validated completed full runs by score.
 
