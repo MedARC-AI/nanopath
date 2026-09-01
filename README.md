@@ -45,20 +45,17 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
 </a>
 
 Protocol v2 defines `mean_probe_score`, aka `final_probe_score`, as 95% of the equally weighted classification, segmentation, progression, mutation, and survival mean plus 5% quality-adjusted robustness. Classification is one family even though its 12 THUNDER development tasks and linear, KNN, and 16-shot heads remain visible diagnostically. Segmentation uses PanNuke plus the two non-TCGA SegPath tasks with THUNDER's published metric; only PanNuke Fold1/Fold2 development arrays are referenced. See [benchmarking/README.md](benchmarking/README.md) for the train/validation-only protocol and PanNuke provenance caveat.
-Labless shows v2 and legacy v1 as separate plots because their scores are not interchangeable. Old v1 clients continue to submit only to the legacy plot. Validated historical checkpoints with retained exact weights are rerun unchanged under v2, retain their original submission dates, and link to distinct v2 metric pages; the v2 activity rail represents all remaining v1 submissions without inventing v2 scores for them.
-On Labless, the run labeled `main` reflects the promoted v2 branch state, and the run labeled `leader` reflects the recipe that passed the maintainer promotion study. Table values below are individual-checkpoint scores; leader promotion is based on the three-seed mean, not the luckiest point.
+`configs/main.yaml` intentionally uses the lr-and-curation recipe. On Labless, the run labeled `leader` reflects the recipe that passed the maintainer promotion study. Table values below are individual-checkpoint scores; leader promotion is based on the three-seed mean, not the luckiest point.
 
 ### Protocol-v2 nanopath models
 
 | # | Description | final score | classification | segmentation | progression | mutation | survival | robustness quality | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | [jepa-fino-s2026](https://labless.dev/runs/run_v2_sub_1879d32919) | **0.6485** | 0.7384 | 0.6016 | 0.5903 | 0.6190 | 0.6210 | 0.9240 | @ml-and-ml |
+| 1 | [jepa-fino](https://labless.dev/runs/run_v2_sub_1879d32919) | **0.6485** | 0.7384 | 0.6016 | 0.5903 | 0.6190 | 0.6210 | 0.9240 | @ml-and-ml |
 | 2 | [robust-norm](https://labless.dev/runs/run_v2_sub_16b156161d) | 0.6464 | 0.7507 | 0.6024 | 0.6136 | 0.5885 | 0.6010 | 0.9354 | @anishdulal |
-| 3 | [lctx14-kde05-s7375](https://labless.dev/runs/run_v2_sub_a80b532bdc) | 0.6457 | 0.7520 | 0.6029 | 0.5762 | 0.5939 | 0.6318 | 0.9175 | @occamsrazor0102 |
-| 4 | [I-JEPA contig patch](https://labless.dev/runs/run_v2_sub_816fc5d0ca) | 0.6439 | 0.7219 | 0.5993 | 0.5931 | 0.6148 | 0.6172 | 0.9225 | @NimaAsh |
-| 5 | [block-strided-cls](https://labless.dev/runs/run_v2_sub_59d24d6b7b) | 0.6411 | 0.7477 | 0.6039 | 0.5390 | 0.6066 | 0.6335 | 0.9253 | @RyanKim17920 |
-| 6 | [lr-and-curation](https://labless.dev/runs/run_v2_sub_6c6c051f71) | 0.6370 | 0.7048 | 0.5940 | 0.5948 | 0.6025 | 0.6199 | 0.9003 | @nevasini1 |
-| 7 | [dinov2-s-kde](https://labless.dev/runs/run_v2_sub_0d8aeb2511) | 0.6340 | 0.6922 | 0.5939 | 0.5870 | 0.5921 | 0.6361 | 0.8939 | @PaulScotti |
+| 3 | [I-JEPA contig patch](https://labless.dev/runs/run_v2_sub_816fc5d0ca) | 0.6439 | 0.7219 | 0.5993 | 0.5931 | 0.6148 | 0.6172 | 0.9225 | @NimaAsh |
+| 4 | [block-strided-cls](https://labless.dev/runs/run_v2_sub_59d24d6b7b) | 0.6411 | 0.7477 | 0.6039 | 0.5390 | 0.6066 | 0.6335 | 0.9253 | @RyanKim17920 |
+| 5 | [lr-and-curation](https://labless.dev/runs/run_v2_sub_6c6c051f71) | 0.6370 | 0.7048 | 0.5940 | 0.5948 | 0.6025 | 0.6199 | 0.9003 | @nevasini1 |
 
 ### Protocol-v2 reference baselines
 
@@ -145,7 +142,7 @@ Public full-run submissions must satisfy:
 
 The `run_name` is the short label shown next to your dot on the Labless plot; keep it under 20 characters and make it describe what changed. Short smoke-sized runs, failed runs, and runs missing the saved source snapshot stay local. Each verified GitHub login can submit at most 100 runs per 24 hours.
 
-A public submission is a discovery run, not by itself a promotion claim. After freezing a promising clean commit, the maintainer trains exactly three confirmation checkpoints at seeds `17`, `29`, and `43`, keeping the data split fixed. The discovery run is excluded and no confirmation seed may be dropped. Promotion requires the candidate's three-run mean to beat the incumbent's stored three-run mean by at least **0.007**. A promoted panel becomes the next stored incumbent, and its run nearest the mean is the Labless point marked validated rather than its luckiest seed. The fixed margin comes from the protocol-v2 repeated-training audit in [benchmarking/validation.md](benchmarking/validation.md); it replaces v1's single-run 0.006 rule and is not recomputed per candidate.
+A public submission is a discovery run, not by itself a promotion claim. After freezing a promising clean commit, the maintainer trains exactly three confirmation checkpoints at seeds `17`, `29`, and `43`, keeping the data split fixed. The discovery run is excluded and no confirmation seed may be dropped. Promotion requires the candidate's three-run mean to beat the incumbent's stored three-run mean by at least **0.007**. A promoted panel becomes the next stored incumbent, and its run nearest the mean is the Labless point marked validated rather than its luckiest seed. The fixed margin comes from the protocol-v2 repeated-training audit in [benchmarking/validation.md](benchmarking/validation.md) and is not recomputed per candidate.
 
 `train.py` and the SLURM launcher accept `seed=<int>`, and every new `summary.json` records both the training seed and fixed data-split seed. Public submissions have no wall-clock limit; each maintainer confirmation must still train on one 80 GB H100 within 2 hours. If the candidate code is pushed to nanopath `main`, Labless marks that run separately as `main`. **You don't need an H100 or a PR to submit**; Labless handles the public record and maintainer validation.
 
