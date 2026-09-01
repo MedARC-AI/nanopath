@@ -1,7 +1,7 @@
-# nanopath benchmark protocol v2
+# nanopath benchmark
 
 This directory is the audit trail for nanopath's fixed downstream benchmark.
-Protocol v2 is a fast development-data proxy for model ordering on held-out
+The benchmark is a fast development-data proxy for model ordering on held-out
 THUNDER, HEST, and CPTAC evaluations. It is not a replacement for those
 evaluations and does not expose or score their test samples.
 
@@ -50,12 +50,11 @@ for diagnosis but do not become extra top-level families.
 | Robustness | PathoROB Camelyon, Tolkach ESCA | quality-adjusted robustness | [pathorob.md](pathorob.md) |
 
 The complete fixed suite is mandatory. `prepare_probe_state()` rejects partial,
-reordered, added, or substituted task lists, and every result records
-`probe_protocol_version: 2`.
+reordered, added, or substituted task lists.
 
 ## Data boundary
 
-[`thunder_v2.json`](thunder_v2.json) is the only classification and
+[The THUNDER manifest](thunder_v2.json) is the only classification and
 segmentation manifest used at runtime. Every dataset entry has exactly `root`,
 `train`, and `val`; there is no `test` key. The four slide manifests contain
 only development records. UCLA, SurGen, and CPTAC-PDA use the original
@@ -74,8 +73,8 @@ absent.
 On the MedARC cluster, evaluation reads canonical shared roots under `/data`.
 A shared upstream root may contain unrelated official assets, but `probe.py`
 opens only the paths named by these manifests. A fresh download of the pinned
-Nanopath snapshot contains no such unrelated assets. `prepare.py` verifies the
-snapshot protocol flag, the explicit `contains_official_test_records: false`
+nanopath snapshot contains no such unrelated assets. `prepare.py` verifies the
+snapshot metadata, the explicit `contains_official_test_records: false`
 contract, manifest hashes, and every referenced file before a run starts.
 
 TCGA-pretraining overlap is handled explicitly:
@@ -111,13 +110,13 @@ and null-model evidence.
 
 | File | Role |
 |---|---|
-| [`thunder_v2.json`](thunder_v2.json) | Exact classification and segmentation train/validation records |
+| [THUNDER manifest](thunder_v2.json) | Exact classification and segmentation train/validation records |
 | [`ucla_lung.json`](ucla_lung.json) | UCLA fold-0 development-pool slide labels |
 | [`surgen.json`](surgen.json) | SurGen fold-0 development-pool slide labels |
 | [`leopard_bcr.json`](leopard_bcr.json) | LEOPARD public-training cohort and fixed folds |
 | [`cptac_pda_os.json`](cptac_pda_os.json) | CPTAC-PDA fold-0 development-pool survival labels and fixed folds |
-| [`proxy_fidelity_v2.csv`](proxy_fidelity_v2.csv) | Frozen 12- and 19-model proxy/official comparison values |
-| [`random_dinov2_s_v2.csv`](random_dinov2_s_v2.csv) | Ten-seed exact-suite randomized-backbone audit |
+| [Proxy-fidelity data](proxy_fidelity_v2.csv) | Frozen 12- and 19-model proxy/official comparison values |
+| [Random-feature audit](random_dinov2_s_v2.csv) | Ten-seed exact-suite randomized-backbone audit |
 | [classification.md](classification.md) | Dataset provenance, sampling, head math, and THUNDER deviations |
 | [segmentation.md](segmentation.md) | Source boundary, decoder, loss, metric, and PanNuke caveat |
 | [slide_probes.md](slide_probes.md) | Tile caching, pooling, folds, AUROC, and survival protocols |
@@ -133,9 +132,9 @@ of an official score. A difference should be interpreted alongside per-family,
 per-dataset, per-head, fold-variance, raw robustness, Jaccard, and timing fields.
 Small differences remain susceptible to training-seed and probe noise. Public
 leader promotion therefore requires the candidate's three-run mean to exceed
-the incumbent's stored three-run mean by the fixed v2 margin of 0.007. The
+the incumbent's stored three-run mean by the fixed margin of 0.007. The
 discovery run is excluded.
 
-Official THUNDER, HEST, and CPTAC results were consulted only after the v2
-protocol, manifests, and scalar were frozen. They are release-validation
+Official THUNDER, HEST, and CPTAC results were consulted only after the
+benchmark, manifests, and scalar were frozen. They are release-validation
 evidence, never inputs to a run and never weights or dataset-selection targets.

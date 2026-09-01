@@ -3,7 +3,7 @@
 The classification family follows THUNDER's frozen-feature evaluation on 12
 development tasks. It uses official training data to fit heads and official
 validation data exactly once for scoring. Official test paths and labels are
-not present in [`thunder_v2.json`](thunder_v2.json) or the downloadable v2
+not present in the [THUNDER manifest](thunder_v2.json) or the downloadable evaluation
 snapshot.
 
 ## Development selections
@@ -43,7 +43,7 @@ references are [BACH](https://iciar2018-challenge.grand-challenge.org/Dataset/),
 [MHIST](https://bmirds.github.io/MHIST/),
 [PatchCamelyon](https://zenodo.org/records/2546921),
 [SPIDER](https://github.com/HistAI/SPIDER), and
-[Camelyon17-WILDS](https://wilds.stanford.edu/datasets/). The v2 manifest is a
+[Camelyon17-WILDS](https://wilds.stanford.edu/datasets/). The manifest is a
 path-and-label selection, not a relicensed copy of those datasets; their
 original research-use terms still apply.
 
@@ -60,7 +60,7 @@ Images use the model's fixed probe transform and normalization. The backbone
 runs once per split under fp16 autocast; the resulting `probe_features()` vectors
 are stored as float32 and shared by every head. The backbone is never updated.
 
-For dataset `d`, protocol v2 computes three equally weighted head scores:
+For dataset `d`, the benchmark computes three equally weighted head scores:
 
 ```text
 linear_d     = mean macro-F1 over 9 fixed Adam heads
@@ -106,7 +106,7 @@ Official THUNDER can choose the best linear hyperparameter/epoch and KNN `k` on
 visible validation data, then report a separate held-out test score. Nanopath
 keeps test data sealed, so it has no independent split on which to report a
 validation-selected winner. Choosing the maximum cell and reporting that same
-validation cell would reward selection noise. Protocol v2 instead fixes the
+validation cell would reward selection noise. Nanopath instead fixes the
 official grids and marginalizes them, using no nested split, refit, or hidden
 selection rule. This is simpler, deterministic, and honest about the available
 data, while retaining the relative behavior of THUNDER's three probe types.

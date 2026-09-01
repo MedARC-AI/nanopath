@@ -52,9 +52,9 @@ over the complete development pool. On every fold:
 - report macro one-vs-rest validation AUC;
 - average the three fold scores.
 
-The head and `C` are fixed. There is no validation hyperparameter selection.
-This is closer to PathoBench's raw-feature linear protocol than v1's selection
-of `C` on the same folds being reported.
+The head and `C` are fixed. There is no validation hyperparameter selection,
+matching PathoBench's raw-feature linear protocol more closely than selecting
+`C` on the same folds being reported.
 
 ## Survival
 
@@ -72,11 +72,10 @@ validation cases. Within each fold:
 No best alpha is selected. Convergence warnings and numerical errors fail the
 evaluation rather than being suppressed or replaced with a fallback result.
 
-The original v2 plan described absolute alphas of 0.01, 0.02, and 0.07. In
-practice an absolute scale is not comparable across models with different
-feature dimensions and magnitudes. Fixed fractions of each training fold's
-`alpha_max` preserve the same relative regularization strengths without
-looking at validation outcomes.
+An absolute alpha scale is not comparable across models with different feature
+dimensions and magnitudes. Fixed fractions of each training fold's `alpha_max`
+preserve the same relative regularization strengths without looking at
+validation outcomes.
 
 ## CPTAC interpretation
 

@@ -14,7 +14,6 @@ Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:
 
 ```bash
 git clone https://github.com/MedARC-AI/nanopath.git && cd nanopath
-git switch v2
 uv sync && source .venv/bin/activate
 wandb login  # or: export WANDB_MODE=offline before launching noninteractive SLURM jobs
 
@@ -25,7 +24,7 @@ python prepare.py download=True
 ./submit/train_1gpu.sbatch configs/smoke.yaml
 # or directly on a GPU machine: python train.py configs/smoke.yaml
 
-# train and evaluate the current protocol-v2 nanopath recipe
+# train and evaluate the current nanopath recipe
 # auto-submits to Labless if config passes submission requirements and you provide run name/notes & GitHub login
 RUN_DIR=$PWD/data/main/my-run
 ./submit/train_1gpu.sbatch configs/main.yaml output_dir=$RUN_DIR
@@ -41,23 +40,23 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
 ## Leaderboard
 
 <a href="https://labless.dev/nano-projects/nanopath">
-  <img src="https://api.labless.dev/api/nano-projects/nanopath-v2/plot.svg" alt="nanopath v2 progress plot" width="1290">
+  <img src="https://api.labless.dev/api/nano-projects/nanopath-v2/plot.svg" alt="nanopath progress plot" width="1290">
 </a>
 
-Protocol v2 defines `mean_probe_score`, aka `final_probe_score`, as 95% of the equally weighted classification, segmentation, progression, mutation, and survival mean plus 5% quality-adjusted robustness. Classification is one family even though its 12 THUNDER development tasks and linear, KNN, and 16-shot heads remain visible diagnostically. Segmentation uses PanNuke plus the two non-TCGA SegPath tasks with THUNDER's published metric; only PanNuke Fold1/Fold2 development arrays are referenced. See [benchmarking/README.md](benchmarking/README.md) for the train/validation-only protocol and PanNuke provenance caveat.
+`mean_probe_score`, aka `final_probe_score`, is 95% of the equally weighted classification, segmentation, progression, mutation, and survival mean plus 5% quality-adjusted robustness. Classification is one family even though its 12 THUNDER development tasks and linear, KNN, and 16-shot heads remain visible diagnostically. Segmentation uses PanNuke plus the two non-TCGA SegPath tasks with THUNDER's published metric; only PanNuke Fold1/Fold2 development arrays are referenced. See [benchmarking/README.md](benchmarking/README.md) for the train/validation-only protocol and PanNuke provenance caveat.
 `configs/main.yaml` intentionally uses the lr-and-curation recipe. On Labless, the run labeled `leader` reflects the recipe that passed the maintainer promotion study. Table values below are individual-checkpoint scores; leader promotion is based on the three-seed mean, not the luckiest point.
 
-### Protocol-v2 nanopath models
+### nanopath models
 
 | # | Description | final score | classification | segmentation | progression | mutation | survival | robustness quality | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | [jepa-fino](https://labless.dev/runs/run_v2_sub_1879d32919) | **0.6485** | 0.7384 | 0.6016 | 0.5903 | 0.6190 | 0.6210 | 0.9240 | @ml-and-ml |
-| 2 | [robust-norm](https://labless.dev/runs/run_v2_sub_16b156161d) | 0.6464 | 0.7507 | 0.6024 | 0.6136 | 0.5885 | 0.6010 | 0.9354 | @anishdulal |
-| 3 | [I-JEPA contig patch](https://labless.dev/runs/run_v2_sub_816fc5d0ca) | 0.6439 | 0.7219 | 0.5993 | 0.5931 | 0.6148 | 0.6172 | 0.9225 | @NimaAsh |
-| 4 | [block-strided-cls](https://labless.dev/runs/run_v2_sub_59d24d6b7b) | 0.6411 | 0.7477 | 0.6039 | 0.5390 | 0.6066 | 0.6335 | 0.9253 | @RyanKim17920 |
-| 5 | [lr-and-curation](https://labless.dev/runs/run_v2_sub_6c6c051f71) | 0.6370 | 0.7048 | 0.5940 | 0.5948 | 0.6025 | 0.6199 | 0.9003 | @nevasini1 |
+| 1 | [jepa-fino](https://github.com/MedARC-AI/nanopath/tree/jepa-fino) | **0.6485** | 0.7384 | 0.6016 | 0.5903 | 0.6190 | 0.6210 | 0.9240 | @ml-and-ml |
+| 2 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm) | 0.6464 | 0.7507 | 0.6024 | 0.6136 | 0.5885 | 0.6010 | 0.9354 | @anishdulal |
+| 3 | [I-JEPA contig patch](https://github.com/MedARC-AI/nanopath/tree/JEPA-contig-patch) | 0.6439 | 0.7219 | 0.5993 | 0.5931 | 0.6148 | 0.6172 | 0.9225 | @NimaAsh |
+| 4 | [block-strided-cls](https://github.com/MedARC-AI/nanopath/tree/block-strided-cls) | 0.6411 | 0.7477 | 0.6039 | 0.5390 | 0.6066 | 0.6335 | 0.9253 | @RyanKim17920 |
+| 5 | [lr-and-curation](https://github.com/MedARC-AI/nanopath/tree/v2) | 0.6370 | 0.7048 | 0.5940 | 0.5948 | 0.6025 | 0.6199 | 0.9003 | @nevasini1 |
 
-### Protocol-v2 reference baselines
+### Baselines
 
 | # | Name | Description | final score | classification | segmentation | progression | mutation | survival | robustness quality |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|
@@ -76,8 +75,8 @@ Protocol v2 defines `mean_probe_score`, aka `final_probe_score`, as 95% of the e
 | 13 | DINOv2-B/14 | Meta DINOv2-B/14-reg | 0.6122 | 0.6500 | 0.5691 | 0.5753 | 0.6062 | 0.6015 | 0.8371 |
 | 14 | DINOv2-S/14 | Meta DINOv2-S/14-reg | 0.6104 | 0.6480 | 0.5665 | 0.5364 | 0.6202 | 0.6220 | 0.8353 |
 
-Across the original promotion set of five nanopath models and seven principal
-baselines, protocol-v2 classification has 0.987
+Across the promotion set of five nanopath models and seven principal
+baselines, classification has 0.987
 Pearson, 0.993 Spearman, and 0.985 all-pair concordance with official THUNDER
 classification. The nanopath-only ordering is identical.
 For the three THUNDER segmentation tasks present in this development proxy, the
@@ -85,7 +84,7 @@ corresponding values are 0.735 and 0.758, with 0.857 cross-family concordance.
 The complete four-task pinned THUNDER segmentation run, which additionally
 contains prohibited all-TCGA OCELOT, has lower 0.656 Pearson but retains 0.829
 cross-family concordance; the published THUNDER aggregate gives 0.719 Pearson
-and 0.818 all-pair concordance. Protocol v2 has 0.943 cross-family concordance
+and 0.818 all-pair concordance. The final score has 0.943 cross-family concordance
 with the existing official composite and never ranks a nanopath checkpoint
 above GigaPath or H-optimus-0 when that composite ranks it below the baseline.
 
@@ -98,11 +97,11 @@ Pearson, 0.798 Spearman, 0.844 all-pair, and 0.900 cross-family concordance. The
 lower Pearson is chiefly a score-magnitude miss for EXAONE; excluding EXAONE
 raises it to 0.831. Final score has 0.878 Pearson / 0.837 Spearman with HEST and
 0.752 / 0.782 with CPTAC classification across all 19 models. These values use
-the assembled fixed three-task v2 score for every row; intermediate two-SegPath
+the assembled fixed three-task score for every row; intermediate two-SegPath
 result files are not treated as final scores. Official-suite results are
 post-freeze validation only, and their test samples do not enter the nanopath
 data or score. Exact inputs are in
-[`benchmarking/proxy_fidelity_v2.csv`](benchmarking/proxy_fidelity_v2.csv).
+[proxy-fidelity data](benchmarking/proxy_fidelity_v2.csv).
 
 The reference scripts live in `baselines/`.
 
@@ -112,7 +111,7 @@ Labless is our public run ledger and live plot for `nanopath`. You do not need a
 
 See [labless/README.md](labless/README.md) for Labless submission details and public API usage.
 
-`configs/main.yaml` is the current protocol-v2 training recipe. A normal SLURM submission is:
+`configs/main.yaml` is the current nanopath training recipe. A normal SLURM submission is:
 
 ```bash
 RUN_DIR=$PWD/data/main/my-run
@@ -136,13 +135,12 @@ Public full-run submissions must satisfy:
 - `summary.tile_presentations <= 1000000`
 - `summary.max_train_flops == 1e18`
 - final `mean_probe_score` / `final_probe_score` is present
-- `final_probe_protocol_version == 2`
 - no saved-source changes to `probe.py` or anything under `benchmarking/`
 - no locked probe config changes except local `probe.dataset_roots`
 
 The `run_name` is the short label shown next to your dot on the Labless plot; keep it under 20 characters and make it describe what changed. Short smoke-sized runs, failed runs, and runs missing the saved source snapshot stay local. Each verified GitHub login can submit at most 100 runs per 24 hours.
 
-A public submission is a discovery run, not by itself a promotion claim. After freezing a promising clean commit, the maintainer trains exactly three confirmation checkpoints at seeds `17`, `29`, and `43`, keeping the data split fixed. The discovery run is excluded and no confirmation seed may be dropped. Promotion requires the candidate's three-run mean to beat the incumbent's stored three-run mean by at least **0.007**. A promoted panel becomes the next stored incumbent, and its run nearest the mean is the Labless point marked validated rather than its luckiest seed. The fixed margin comes from the protocol-v2 repeated-training audit in [benchmarking/validation.md](benchmarking/validation.md) and is not recomputed per candidate.
+A public submission is a discovery run, not by itself a promotion claim. After freezing a promising clean commit, the maintainer trains exactly three confirmation checkpoints at seeds `17`, `29`, and `43`, keeping the data split fixed. The discovery run is excluded and no confirmation seed may be dropped. Promotion requires the candidate's three-run mean to beat the incumbent's stored three-run mean by at least **0.007**. A promoted panel becomes the next stored incumbent, and its run nearest the mean is the Labless point marked validated rather than its luckiest seed. The fixed margin comes from the repeated-training audit in [benchmarking/validation.md](benchmarking/validation.md) and is not recomputed per candidate.
 
 `train.py` and the SLURM launcher accept `seed=<int>`, and every new `summary.json` records both the training seed and fixed data-split seed. Public submissions have no wall-clock limit; each maintainer confirmation must still train on one 80 GB H100 within 2 hours. If the candidate code is pushed to nanopath `main`, Labless marks that run separately as `main`. **You don't need an H100 or a PR to submit**; Labless handles the public record and maintainer validation.
 
@@ -191,7 +189,7 @@ The script reads `summary.json` and `metrics.jsonl`, reviews `output_dir/labless
 
 ### Helper files
 - `AGENTS.md` — guidelines for design philosophy, coding rules, experiment discipline, cluster conventions, etc. Note this is Paul's personal `AGENTS.md` file and has instructions specific to our MedARC cluster—you should modify this file to suit your own setup!
-- `benchmarking/` — locked v2 manifests, dataset/protocol documentation, null audit, and proxy-fidelity evidence.
+- `benchmarking/` — locked manifests, dataset/protocol documentation, null audit, and proxy-fidelity evidence.
 - `prepare.py` — data prep: verify or download pretraining data + probe datasets + any pretrained weights.
 - `probe.py` — downstream probes (KNN, few-shot, linear, segmentation, slide AUROC, survival, robustness).
 - `submit/train_1gpu.sbatch` — SLURM launcher for single-GPU training.
@@ -207,7 +205,7 @@ On the MedARC cluster, the checked-in `/data` paths are the intended shared defa
 
 **What `download=True` does**
 1. **TCGA tiles**: `huggingface_hub.snapshot_download` (filtered to `shard-*.parquet`) pulls the 200 parquet shards (~120 GB total, `{path: string, jpeg: binary}` rows with 64-row row groups) from [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) into `data.dataset_dir`.
-2. **Probe datasets**: downloads the exact protocol-v2 data snapshot from [`medarc/nanopath-evals`](https://huggingface.co/datasets/medarc/nanopath-evals) into each missing configured root, then verifies every required record. The snapshot is pinned to an immutable Hub revision in `prepare.py`; interrupted Hub downloads are resumable.
+2. **Probe datasets**: downloads the exact evaluation snapshot from [`medarc/nanopath-evals`](https://huggingface.co/datasets/medarc/nanopath-evals) into each missing configured root, then verifies every required record. The snapshot is pinned to an immutable Hub revision in `prepare.py`; interrupted Hub downloads are resumable.
 3. **DINOv2 backbone weights**: `torch.hub.load_state_dict_from_url` fetches the Meta checkpoint for `model.type` from `dl.fbaipublicfiles.com` into `~/.cache/torch/hub/checkpoints/`.
 
 **Prerequisites**

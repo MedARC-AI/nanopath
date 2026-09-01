@@ -91,9 +91,6 @@ task result is the weighted mean over images. Macro-F1 is scored;
 macro-Jaccard is retained only as a diagnostic. `seg_mean_f1` is the unweighted
 mean of the three task F1 values.
 
-This differs materially from v1, which used MoNuSAC, CoNSeP, and PanNuke
-Jaccard. That panel was neither dataset-matched nor metric-matched to current
-THUNDER and had negative correlation with official segmentation. Protocol v2
-uses two exact current THUNDER tasks, the same current metric, and PanNuke as a
-mixed-source diversity task. See [validation.md](validation.md) for the observed
-ordering fidelity and its remaining limitations.
+The panel uses two exact current THUNDER tasks, the same current metric, and
+PanNuke as a mixed-source diversity task. See [validation.md](validation.md)
+for the observed ordering fidelity and its remaining limitations.

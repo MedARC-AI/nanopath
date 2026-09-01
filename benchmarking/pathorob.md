@@ -44,10 +44,10 @@ The published-style robustness index is:
 robustness_index = SO / (SO + OS)
 ```
 
-Protocol v1 used this quantity directly. A representation can raise it by
-erasing center signal without becoming biologically useful, so v2 also predicts
-the query's biological class by majority vote among the same fixed neighbors
-and reports class-balanced accuracy.
+A representation can raise this quantity by erasing center signal without
+becoming biologically useful, so the benchmark also predicts the query's
+biological class by majority vote among the same fixed neighbors and reports
+class-balanced accuracy.
 
 ```text
 subset_quality = (robustness_index + biological_balanced_accuracy) / 2

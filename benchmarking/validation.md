@@ -1,4 +1,4 @@
-# Protocol-v2 validation record
+# Validation record
 
 Validation asks two different questions:
 
@@ -40,7 +40,7 @@ retained as an explicit exception, not represented as TCGA-free.
 
 ## Frozen-input parity
 
-Before official comparisons, protocol-v2 heads were checked against the
+Before official comparisons, benchmark heads were checked against the
 corresponding THUNDER/PathoBench computation on identical synthetic or cached
 embeddings:
 
@@ -59,7 +59,7 @@ foreground/background image weighting as the pinned official THUNDER harness.
 
 ## Runtime and determinism
 
-The current complete protocol was run in independent clean processes on one
+The complete benchmark was run in independent clean processes on one
 80 GB H100 with 16 CPUs:
 
 | Model / feature policy | Wall time | Final score | Note |
@@ -90,7 +90,7 @@ the data split and probe randomness stayed fixed:
 
 The estimated standard error between two independent three-run means is
 0.002417. Its one-sided 95% Welch margin is 0.006262; rounding up to the next
-0.001 fixes the protocol-v2 promotion margin at **0.007**. This number is not
+0.001 fixes the promotion margin at **0.007**. This number is not
 recomputed for each candidate. A discovery run is excluded, all three fixed
 confirmation seeds count, and a promoted panel becomes the stored incumbent.
 No official evaluation result was used in this calibration.
@@ -98,13 +98,14 @@ No official evaluation result was used in this calibration.
 ## Official-suite ordering fidelity
 
 The original promotion study contains five nanopath checkpoints and seven
-principal baselines. Official results were read only after the protocol,
+principal baselines. Official results were read only after the benchmark,
 manifests, and scalar were frozen.
 
 Pairwise concordance is the fraction of non-tied model pairs ordered the same
 way by nanopath and the official target. Cross-family concordance restricts
-that calculation to nanopath-versus-baseline pairs, directly testing the offset
-that motivated v2. Pearson measures score-shape agreement; Spearman and Kendall
+that calculation to nanopath-versus-baseline pairs, directly testing the
+cross-family offset the benchmark is intended to detect. Pearson measures
+score-shape agreement; Spearman and Kendall
 measure rank agreement. None alone is treated as sufficient.
 
 | Proxy / official target | Pearson | Spearman | All-pair concordance | Cross-family concordance |
@@ -124,10 +125,6 @@ the pinned harness; it yields 0.719 Pearson and 0.818 all-pair concordance.
 
 The final score never places a studied nanopath checkpoint above GigaPath or
 H-Optimus-0 when the existing official composite places it below that baseline.
-Relative to v1, the standardized nanopath-family residual shrinks for every
-target: 89.3% for THUNDER classification, 74.9% for THUNDER segmentation, 35.7%
-for HEST, 72.7% for CPTAC classification, and 53.3% for the official composite
-(65.2% mean reduction).
 
 An expanded 19-model table adds DINOv2-S/B/L/G, Kaiko-S/16, GigaPath-Flash, and
 EXAONE-Path-2.5-B:
@@ -146,23 +143,23 @@ proxies were available. These exclusions are fixed by result identity, not
 model performance.
 
 The exact comparison input is
-[`proxy_fidelity_v2.csv`](proxy_fidelity_v2.csv). The original 12 rows use the
-assembled fixed v2 result, which combines PanNuke with both SegPath tasks. This
+[proxy-fidelity data](proxy_fidelity_v2.csv). The original 12 rows use the
+assembled fixed result, which combines PanNuke with both SegPath tasks. This
 is important: their retained non-segmentation artifact paths happen to contain
 intermediate two-SegPath metrics and must not be reopened as if those partial
-runs were the final v2 score. The seven added rows use their completed fixed
+runs were the final score. The seven added rows use their completed fixed
 suite results. Empty DINOv2-S/G segmentation cells prevent different-size
 published proxies from silently entering the 17-model statistic.
 
 ## Random-feature null audit
 
-Protocol v2 was also run with independently randomized DINOv2-S backbones. This
+The benchmark was also run with independently randomized DINOv2-S backbones. This
 checks that heads do not obtain implausibly strong scores from class balance,
 spatial priors, slide leakage, or validation selection alone. The null audit
 uses the exact production manifests, transforms, heads, folds, and scalar; only
 the backbone initialization changes. Results are reported across ten seeds
 rather than from a favorable draw; raw values are checked in as
-[`random_dinov2_s_v2.csv`](random_dinov2_s_v2.csv). The existing
+[the random-feature audit](random_dinov2_s_v2.csv). The existing
 [`baselines/dinov2_random_baseline.py`](../baselines/dinov2_random_baseline.py)
 is the runner, so the benchmark does not carry a second stale null script.
 
@@ -177,7 +174,7 @@ is the runner, so the benchmark does not carry a second stale null script.
 | Robustness quality | 0.4322 | 0.0022 | 0.4293–0.4361 |
 
 All trained or pretrained reference final scores in
-[`proxy_fidelity_v2.csv`](proxy_fidelity_v2.csv) exceed the largest random
+[the proxy-fidelity data](proxy_fidelity_v2.csv) exceed the largest random
 final score by at least 0.073. Classification, mutation, and robustness provide
 clear separation. The segmentation null is numerically high because
 background and spatial priors earn F1. Every listed trained reference except
@@ -201,8 +198,8 @@ gate above remains the relevant 25-minute evidence.
 
 - PanNuke validation cannot be proven disjoint from TCGA pretraining at the
   image-source level.
-- Segmentation is substantially better aligned than v1 but does not perfectly
-  preserve ordering among closely spaced nanopath checkpoints.
+- Segmentation does not perfectly preserve ordering among closely spaced
+  nanopath checkpoints.
 - Validation-set marginalization avoids selection leakage but does not reproduce
   the absolute score of THUNDER's validation-selected, test-reported heads.
 - SPIDER-Skin has a one-example rare class in official validation, so its macro-
@@ -212,5 +209,5 @@ gate above remains the relevant 25-minute evidence.
 - A 0–1 weighted mean is transparent but not statistically calibrated across
   metrics with different variance. Official results are not used to fit weights.
 
-For those reasons, v2 should guide efficient hill climbing and baseline
+For those reasons, the benchmark should guide efficient hill climbing and baseline
 placement, not replace final evaluation on the intended official suites.
