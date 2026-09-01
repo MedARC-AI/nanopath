@@ -67,14 +67,15 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
 | 3 | H-optimus-0 | H-optimus-0 ViT-G/14-reg | 0.6960 | 0.8082 | 0.5916 | 0.6961 | 0.6485 | 0.6059 | 0.9290 |
 | 4 | Midnight-12K | Kaiko Midnight-12K ViT-G/14 | 0.6935 | 0.7761 | 0.6326 | 0.7080 | 0.6170 | 0.6100 | 0.9169 |
 | 5 | Virchow | Paige/Microsoft Virchow ViT-H/14 | 0.6889 | 0.7728 | 0.6326 | 0.6541 | 0.6291 | 0.6173 | 0.9388 |
-| 6 | GigaPath | Prov-GigaPath tile encoder ViT-G/16 | 0.6781 | 0.7948 | 0.6197 | 0.6813 | 0.6130 | 0.5802 | 0.8611 |
-| 7 | GigaPath-Flash | Prov-GigaPath-Flash tile encoder ViT-S/16 | 0.6573 | 0.7742 | 0.5569 | 0.6620 | 0.5796 | 0.6122 | 0.8407 |
-| 8 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.6538 | 0.6640 | 0.6306 | 0.6748 | 0.5829 | 0.6058 | 0.8534 |
-| 9 | Kaiko-S/16 | Kaiko pathology ViT-S/16 | 0.6432 | 0.7737 | 0.6060 | 0.5963 | 0.5539 | 0.5907 | 0.8151 |
-| 10 | DINOv2-G/14 | Meta DINOv2-G/14-reg | 0.6408 | 0.6804 | 0.5753 | 0.5928 | 0.6038 | 0.6288 | 0.8617 |
-| 11 | DINOv2-L/14 | Meta DINOv2-L/14-reg | 0.6363 | 0.6632 | 0.5667 | 0.6298 | 0.6005 | 0.6009 | 0.8530 |
-| 12 | DINOv2-B/14 | Meta DINOv2-B/14-reg | 0.6241 | 0.6500 | 0.5691 | 0.5753 | 0.6062 | 0.6015 | 0.8371 |
-| 13 | DINOv2-S/14 | Meta DINOv2-S/14-reg | 0.6223 | 0.6480 | 0.5665 | 0.5364 | 0.6202 | 0.6220 | 0.8353 |
+| 6 | [H0-mini](https://huggingface.co/bioptimus/H0-mini) | Bioptimus H0-mini ViT-B/14-reg | 0.6851 | 0.7956 | 0.6371 | 0.6586 | 0.6026 | 0.5945 | 0.9314 |
+| 7 | GigaPath | Prov-GigaPath tile encoder ViT-G/16 | 0.6781 | 0.7948 | 0.6197 | 0.6813 | 0.6130 | 0.5802 | 0.8611 |
+| 8 | GigaPath-Flash | Prov-GigaPath-Flash tile encoder ViT-S/16 | 0.6573 | 0.7742 | 0.5569 | 0.6620 | 0.5796 | 0.6122 | 0.8407 |
+| 9 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.6538 | 0.6640 | 0.6306 | 0.6748 | 0.5829 | 0.6058 | 0.8534 |
+| 10 | Kaiko-S/16 | Kaiko pathology ViT-S/16 | 0.6432 | 0.7737 | 0.6060 | 0.5963 | 0.5539 | 0.5907 | 0.8151 |
+| 11 | DINOv2-G/14 | Meta DINOv2-G/14-reg | 0.6408 | 0.6804 | 0.5753 | 0.5928 | 0.6038 | 0.6288 | 0.8617 |
+| 12 | DINOv2-L/14 | Meta DINOv2-L/14-reg | 0.6363 | 0.6632 | 0.5667 | 0.6298 | 0.6005 | 0.6009 | 0.8530 |
+| 13 | DINOv2-B/14 | Meta DINOv2-B/14-reg | 0.6241 | 0.6500 | 0.5691 | 0.5753 | 0.6062 | 0.6015 | 0.8371 |
+| 14 | DINOv2-S/14 | Meta DINOv2-S/14-reg | 0.6223 | 0.6480 | 0.5665 | 0.5364 | 0.6202 | 0.6220 | 0.8353 |
 
 Across the promotion set of five nanopath models and seven principal
 baselines, classification has 0.987
@@ -89,21 +90,23 @@ and 0.818 all-pair concordance. The final score has 0.914 cross-family concordan
 with the existing official composite and never ranks a nanopath checkpoint
 above GigaPath or H-optimus-0 when that composite ranks it below the baseline.
 
-The expanded 18-model comparison adds four DINOv2 sizes, Kaiko-S/16, and
-GigaPath-Flash. Classification remains faithful to official THUNDER (0.988
-Pearson, 0.990 Spearman, 0.974 all-pair, and 1.000 cross-family concordance).
-Among the 16 models with a matched completed or same-checkpoint published
-THUNDER segmentation result, segmentation has 0.831 Pearson, 0.761 Spearman,
-0.832 all-pair, and 0.891 cross-family concordance. Final score has 0.946
-Pearson / 0.936 Spearman with HEST and 0.851 / 0.876 with CPTAC classification
-across all 18 models. These values use
+The expanded 19-model comparison adds H0-mini, four DINOv2 sizes, Kaiko-S/16,
+and GigaPath-Flash. Classification remains faithful to official THUNDER (0.988
+Pearson, 0.991 Spearman, 0.977 all-pair, and 1.000 cross-family concordance).
+Among the 17 models with a matched completed or same-checkpoint published
+THUNDER segmentation result, segmentation has 0.850 Pearson, 0.783 Spearman,
+0.836 all-pair, and 0.900 cross-family concordance. Final score has 0.947
+Pearson / 0.942 Spearman with HEST and 0.848 / 0.863 with CPTAC classification
+across all 19 models. These values use
 the assembled fixed three-task score for every row; intermediate two-SegPath
 result files are not treated as final scores. Official-suite results validate
 the frozen benchmark components, and their test samples do not enter the
 nanopath data or score. Exact inputs are in
 [proxy-fidelity data](benchmarking/proxy_fidelity_v2.csv).
 
-The reference scripts live in `baselines/`.
+The reference scripts live in `baselines/`. H0-mini's gated weights are not
+redistributed; its [runner](baselines/h0_mini_baseline.py) defaults to the
+authorized snapshot at `/data/H0-mini` and accepts `checkpoint_path=/path`.
 
 ### How to submit to the leaderboard
 

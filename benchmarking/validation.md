@@ -69,6 +69,7 @@ The complete benchmark was run in independent clean processes on one
 | Representative nanopath ViT-S, run 1 | 1,156.7 s | 0.650906 | clean process |
 | Representative nanopath ViT-S, run 2 | 1,198.9 s | 0.650702 | clean process |
 | DINOv2-S reference | 1,018 s | 0.6223 | pretrained frozen baseline |
+| H0-mini reference | 1,273.1 s | 0.6851 | official CLS-plus-mean readout |
 | I-JEPA contig-patch nanopath | 1,187 s | 0.6586 | ordinary feature adapter |
 | block-strided-cls nanopath | 1,188.6 s | 0.6561 | test-time aggregation exercised |
 | robust-norm nanopath | 1,366.3 s | 0.6616 | 49,554 MiB peak; aggregation exercised |
@@ -131,14 +132,15 @@ the pinned harness; it yields 0.719 Pearson and 0.818 all-pair concordance.
 The final score never places a studied nanopath checkpoint above GigaPath or
 H-Optimus-0 when the existing official composite places it below that baseline.
 
-An expanded 18-model table adds DINOv2-S/B/L/G, Kaiko-S/16, and GigaPath-Flash:
+An expanded 19-model table adds H0-mini, DINOv2-S/B/L/G, Kaiko-S/16, and
+GigaPath-Flash:
 
 | Comparison | Pearson | Spearman | All-pair concordance | Cross-family concordance |
 |---|---:|---:|---:|---:|
-| Classification / THUNDER, 18 models | 0.988 | 0.990 | 0.974 | 1.000 |
-| Segmentation / THUNDER, 16 matched results | 0.831 | 0.761 | 0.832 | 0.891 |
-| Final score / HEST, 18 models | 0.946 | 0.936 | — | — |
-| Final score / CPTAC classification, 18 models | 0.851 | 0.876 | — | — |
+| Classification / THUNDER, 19 models | 0.988 | 0.991 | 0.977 | 1.000 |
+| Segmentation / THUNDER, 17 matched results | 0.850 | 0.783 | 0.836 | 0.900 |
+| Final score / HEST, 19 models | 0.947 | 0.942 | — | — |
+| Final score / CPTAC classification, 19 models | 0.848 | 0.863 | — | — |
 
 DINOv2-S and DINOv2-G segmentation are omitted because only different-size
 published DINO proxies were available. These exclusions are fixed by result
@@ -149,9 +151,9 @@ The exact comparison input is
 assembled fixed result, which combines PanNuke with both SegPath tasks. This
 is important: their retained non-segmentation artifact paths happen to contain
 intermediate two-SegPath metrics and must not be reopened as if those partial
-runs were the final score. The six added rows use their completed fixed
+runs were the final score. The seven added rows use their completed fixed
 suite results. Empty DINOv2-S/G segmentation cells prevent different-size
-published proxies from silently entering the 16-model statistic.
+published proxies from silently entering the 17-model statistic.
 
 ## Random-feature null audit
 

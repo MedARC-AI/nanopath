@@ -115,7 +115,7 @@ and null-model evidence.
 | [`surgen.json`](surgen.json) | SurGen fold-0 development-pool slide labels |
 | [`leopard_bcr.json`](leopard_bcr.json) | LEOPARD public-training cohort and fixed folds |
 | [`cptac_pda_os.json`](cptac_pda_os.json) | CPTAC-PDA fold-0 development-pool survival labels and fixed folds |
-| [Proxy-fidelity data](proxy_fidelity_v2.csv) | Frozen 12- and 18-model proxy/official comparison values |
+| [Proxy-fidelity data](proxy_fidelity_v2.csv) | Frozen 12- and 19-model proxy/official comparison values |
 | [Random-feature audit](random_dinov2_s_v2.csv) | Ten-seed exact-suite randomized-backbone audit |
 | [classification.md](classification.md) | Dataset provenance, sampling, head math, and THUNDER deviations |
 | [segmentation.md](segmentation.md) | Source boundary, decoder, loss, metric, and PanNuke caveat |

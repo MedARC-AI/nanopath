@@ -342,8 +342,8 @@ def embed_classification_dataset(model, mean, std, dataset, split, device, trans
     embs, labels = [], []
     # THUNDER's published adapter extracts frozen tile embeddings in fp16.
     autocast = torch.autocast(device_type="cuda", dtype=torch.float16)
-    # Probe embeddings use model.probe_features(), which returns the cls token
-    # — none of the DINO/iBOT training heads are involved.
+    # probe_features() supplies each encoder's published frozen representation;
+    # none of the DINO/iBOT training heads are involved.
     with torch.no_grad():
         for x, y in loader:
             x = x.to(device, non_blocking=True)
