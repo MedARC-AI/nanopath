@@ -52,11 +52,13 @@ On Labless, the run labeled `main` reflects the promoted v2 branch state, and th
 
 | # | Description | final score | classification | segmentation | progression | mutation | survival | robustness quality | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | [robust-norm](https://labless.dev/runs/run_v2_sub_16b156161d) | **0.6464** | 0.7507 | 0.6024 | 0.6136 | 0.5885 | 0.6010 | 0.9354 | @anishdulal |
-| 2 | [I-JEPA contig patch](https://labless.dev/runs/run_v2_sub_1879d32919) | 0.6439 | 0.7219 | 0.5993 | 0.5931 | 0.6148 | 0.6172 | 0.9225 | @NimaAsh |
-| 3 | [block-strided-cls](https://labless.dev/runs/run_v2_sub_59d24d6b7b) | 0.6411 | 0.7477 | 0.6039 | 0.5390 | 0.6066 | 0.6335 | 0.9253 | @RyanKim17920 |
-| 4 | [lr-and-curation](https://labless.dev/runs/run_v2_sub_6c6c051f71) | 0.6370 | 0.7048 | 0.5940 | 0.5948 | 0.6025 | 0.6199 | 0.9003 | @nevasini1 |
-| 5 | [dinov2-s-kde](https://labless.dev/runs/run_v2_sub_0d8aeb2511) | 0.6340 | 0.6922 | 0.5939 | 0.5870 | 0.5921 | 0.6361 | 0.8939 | @PaulScotti |
+| 1 | [jepa-fino-s2026](https://labless.dev/runs/run_v2_sub_1879d32919) | **0.6485** | 0.7384 | 0.6016 | 0.5903 | 0.6190 | 0.6210 | 0.9240 | @ml-and-ml |
+| 2 | [robust-norm](https://labless.dev/runs/run_v2_sub_16b156161d) | 0.6464 | 0.7507 | 0.6024 | 0.6136 | 0.5885 | 0.6010 | 0.9354 | @anishdulal |
+| 3 | [lctx14-kde05-s7375](https://labless.dev/runs/run_v2_sub_a80b532bdc) | 0.6457 | 0.7520 | 0.6029 | 0.5762 | 0.5939 | 0.6318 | 0.9175 | @occamsrazor0102 |
+| 4 | [I-JEPA contig patch](https://labless.dev/runs/run_v2_sub_816fc5d0ca) | 0.6439 | 0.7219 | 0.5993 | 0.5931 | 0.6148 | 0.6172 | 0.9225 | @NimaAsh |
+| 5 | [block-strided-cls](https://labless.dev/runs/run_v2_sub_59d24d6b7b) | 0.6411 | 0.7477 | 0.6039 | 0.5390 | 0.6066 | 0.6335 | 0.9253 | @RyanKim17920 |
+| 6 | [lr-and-curation](https://labless.dev/runs/run_v2_sub_6c6c051f71) | 0.6370 | 0.7048 | 0.5940 | 0.5948 | 0.6025 | 0.6199 | 0.9003 | @nevasini1 |
+| 7 | [dinov2-s-kde](https://labless.dev/runs/run_v2_sub_0d8aeb2511) | 0.6340 | 0.6922 | 0.5939 | 0.5870 | 0.5921 | 0.6361 | 0.8939 | @PaulScotti |
 
 ### Protocol-v2 reference baselines
 
