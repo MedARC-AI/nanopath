@@ -30,12 +30,12 @@ predictive_mean = mean(classification, segmentation, progression,
 robustness_quality = mean over PathoROB subsets of
                      (robustness index + biological balanced accuracy) / 2
 
-mean_probe_score = 0.95 * predictive_mean + 0.05 * robustness_quality
+mean_probe_score = 0.90 * predictive_mean + 0.10 * robustness_quality
 ```
 
 `mean_probe_score` and `final_probe_score` are identical public aliases. Each
-predictive family contributes 19% of the final score and robustness contributes
-5%. Classification's datasets, heads, and hyperparameter cells remain visible
+predictive family contributes 18% of the final score and robustness contributes
+10%. Classification's datasets, heads, and hyperparameter cells remain visible
 for diagnosis but do not become extra top-level families.
 
 ## Fixed suite
@@ -136,5 +136,7 @@ the incumbent's stored three-run mean by the fixed margin of 0.004. The
 discovery run is excluded.
 
 Official THUNDER, HEST, and CPTAC results were consulted only after the
-benchmark, manifests, and scalar were frozen. They are release-validation
-evidence, never inputs to a run and never weights or dataset-selection targets.
+benchmark components and manifests were frozen. The 10% robustness weight is a
+later governance choice about component importance, not a value selected from
+official outcomes. Official results remain release-validation evidence, never
+inputs to a run or dataset-selection targets.

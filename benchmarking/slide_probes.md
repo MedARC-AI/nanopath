@@ -89,5 +89,5 @@ It does mean the final score is not completely domain-independent of CPTAC.
 Consequently, correlation with official CPTAC classification is treated as
 post-freeze external validation of transfer and ordering, not as an untouched
 estimate of generalization to an unseen institution or organ. CPTAC-PDA
-survival contributes half of the 19%-weighted survival family, or 9.5% of the
-final scalar before the robustness mixture.
+survival contributes half of the 18%-weighted survival family, or 9% of the
+final scalar.

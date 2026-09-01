@@ -1,8 +1,8 @@
 # PathoROB robustness protocol
 
 PathoROB is an auxiliary check that a representation is insensitive to center
-while still separating biological classes. It contributes 5% of the final
-score; the five predictive families contribute the other 95%.
+while still separating biological classes. It contributes 10% of the final
+score; the five predictive families contribute the other 90%.
 
 ## Data and fixed adapter
 
@@ -56,5 +56,5 @@ robustness_quality_mean = mean(Camelyon quality, Tolkach ESCA quality)
 
 Raw `SO`, `OS`, robustness index, and biological balanced accuracy remain in
 the result for diagnosis. Only `robustness_quality_mean` enters the final
-scalar, at 5%. This prevents a center-invariant but biologically collapsed
+scalar, at 10%. This prevents a center-invariant but biologically collapsed
 representation from dominating genuinely predictive improvements.

@@ -1,6 +1,6 @@
 # Inline downstream probes. Protocol v2 weights five predictive families
 # (THUNDER classification/segmentation plus progression, mutation, survival)
-# at 19% each and PathoROB biological-quality-adjusted robustness at 5%.
+# at 18% each and PathoROB biological-quality-adjusted robustness at 10%.
 #
 # train.py can snapshot a probe checkpoint at each FLOP milestone to run
 # this file as a subprocess (`python probe.py req.json`), whereby training pauses,
@@ -1207,7 +1207,7 @@ def run_probe_job(request_path):
     predictive_metrics = ("classification_mean_f1", "seg_mean_f1", "slide_mean_auc", "auc_mean", "survival_mean_cindex")
     metrics["probe_protocol_version"] = PROBE_PROTOCOL_VERSION
     metrics["predictive_mean"] = sum(metrics[k] for k in predictive_metrics) / len(predictive_metrics)
-    metrics["mean_probe_score"] = 0.95 * metrics["predictive_mean"] + 0.05 * metrics["robustness_quality_mean"]
+    metrics["mean_probe_score"] = 0.90 * metrics["predictive_mean"] + 0.10 * metrics["robustness_quality_mean"]
 
     print(
         f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
