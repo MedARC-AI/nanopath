@@ -41,14 +41,14 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
 ## Leaderboard
 
 <a href="https://labless.dev/nano-projects/nanopath">
-  <img src="https://api.labless.dev/api/nano-projects/nanopath-v2/plot.svg" alt="Nanopath v2 progress plot" width="1290">
+  <img src="https://api.labless.dev/api/nano-projects/nanopath-v2/plot.svg" alt="nanopath v2 progress plot" width="1290">
 </a>
 
 Protocol v2 defines `mean_probe_score`, aka `final_probe_score`, as 95% of the equally weighted classification, segmentation, progression, mutation, and survival mean plus 5% quality-adjusted robustness. Classification is one family even though its 12 THUNDER development tasks and linear, KNN, and 16-shot heads remain visible diagnostically. Segmentation uses PanNuke plus the two non-TCGA SegPath tasks with THUNDER's published metric; only PanNuke Fold1/Fold2 development arrays are referenced. See [benchmarking/README.md](benchmarking/README.md) for the train/validation-only protocol and PanNuke provenance caveat.
 Labless shows v2 and legacy v1 as separate plots because their scores are not interchangeable. Old v1 clients continue to submit only to the legacy plot. Validated historical checkpoints with retained exact weights are rerun unchanged under v2, retain their original submission dates, and link to distinct v2 metric pages; the v2 activity rail represents all remaining v1 submissions without inventing v2 scores for them.
 On Labless, the run labeled `main` reflects the promoted v2 branch state, and the run labeled `leader` reflects the recipe that passed the maintainer promotion study. Table values below are individual-checkpoint scores; leader promotion is based on the three-seed mean, not the luckiest point.
 
-### Protocol-v2 NanoPath models
+### Protocol-v2 nanopath models
 
 | # | Description | final score | classification | segmentation | progression | mutation | survival | robustness quality | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
@@ -79,17 +79,17 @@ On Labless, the run labeled `main` reflects the promoted v2 branch state, and th
 | 13 | DINOv2-B/14 | Meta DINOv2-B/14-reg | 0.6122 | 0.6500 | 0.5691 | 0.5753 | 0.6062 | 0.6015 | 0.8371 |
 | 14 | DINOv2-S/14 | Meta DINOv2-S/14-reg | 0.6104 | 0.6480 | 0.5665 | 0.5364 | 0.6202 | 0.6220 | 0.8353 |
 
-Across the original promotion set of five NanoPath models and seven principal
+Across the original promotion set of five nanopath models and seven principal
 baselines, protocol-v2 classification has 0.987
 Pearson, 0.993 Spearman, and 0.985 all-pair concordance with official THUNDER
-classification. The NanoPath-only ordering is identical.
+classification. The nanopath-only ordering is identical.
 For the three THUNDER segmentation tasks present in this development proxy, the
 corresponding values are 0.735 and 0.758, with 0.857 cross-family concordance.
 The complete four-task pinned THUNDER segmentation run, which additionally
 contains prohibited all-TCGA OCELOT, has lower 0.656 Pearson but retains 0.829
 cross-family concordance; the published THUNDER aggregate gives 0.719 Pearson
 and 0.818 all-pair concordance. Protocol v2 has 0.943 cross-family concordance
-with the existing official composite and never ranks a NanoPath checkpoint
+with the existing official composite and never ranks a nanopath checkpoint
 above GigaPath or H-optimus-0 when that composite ranks it below the baseline.
 
 The expanded 19-model comparison adds four DINOv2 sizes, Kaiko-S/16,
@@ -103,7 +103,7 @@ raises it to 0.831. Final score has 0.878 Pearson / 0.837 Spearman with HEST and
 0.752 / 0.782 with CPTAC classification across all 19 models. These values use
 the assembled fixed three-task v2 score for every row; intermediate two-SegPath
 result files are not treated as final scores. Official-suite results are
-post-freeze validation only, and their test samples do not enter the NanoPath
+post-freeze validation only, and their test samples do not enter the nanopath
 data or score. Exact inputs are in
 [`benchmarking/proxy_fidelity_v2.csv`](benchmarking/proxy_fidelity_v2.csv).
 

@@ -1,6 +1,6 @@
-# NanoPath benchmark protocol v2
+# nanopath benchmark protocol v2
 
-This directory is the audit trail for NanoPath's fixed downstream benchmark.
+This directory is the audit trail for nanopath's fixed downstream benchmark.
 Protocol v2 is a fast development-data proxy for model ordering on held-out
 THUNDER, HEST, and CPTAC evaluations. It is not a replacement for those
 evaluations and does not expose or score their test samples.
@@ -74,7 +74,7 @@ absent.
 On the MedARC cluster, evaluation reads canonical shared roots under `/data`.
 A shared upstream root may contain unrelated official assets, but `probe.py`
 opens only the paths named by these manifests. A fresh download of the pinned
-NanoPath snapshot contains no such unrelated assets. `prepare.py` verifies the
+Nanopath snapshot contains no such unrelated assets. `prepare.py` verifies the
 snapshot protocol flag, the explicit `contains_official_test_records: false`
 contract, manifest hashes, and every referenced file before a run starts.
 

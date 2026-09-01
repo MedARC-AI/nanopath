@@ -64,12 +64,12 @@ The current complete protocol was run in independent clean processes on one
 
 | Model / feature policy | Wall time | Final score | Note |
 |---|---:|---:|---|
-| Representative NanoPath ViT-S, run 1 | 1,156.7 s | 0.637050 | clean process |
-| Representative NanoPath ViT-S, run 2 | 1,198.9 s | 0.636834 | clean process |
+| Representative nanopath ViT-S, run 1 | 1,156.7 s | 0.637050 | clean process |
+| Representative nanopath ViT-S, run 2 | 1,198.9 s | 0.636834 | clean process |
 | DINOv2-S reference | 1,018 s | 0.6104 | pretrained frozen baseline |
-| I-JEPA contig-patch NanoPath | 1,187 s | 0.6439 | ordinary feature adapter |
-| block-strided-cls NanoPath | 1,188.6 s | 0.6411 | test-time aggregation exercised |
-| robust-norm NanoPath | 1,366.3 s | 0.6464 | 49,554 MiB peak; aggregation exercised |
+| I-JEPA contig-patch nanopath | 1,187 s | 0.6439 | ordinary feature adapter |
+| block-strided-cls nanopath | 1,188.6 s | 0.6411 | test-time aggregation exercised |
+| robust-norm nanopath | 1,366.3 s | 0.6464 | 49,554 MiB peak; aggregation exercised |
 
 The two independent representative scores differ by 0.000216, below the 0.001
 determinism gate. Every listed run is below the 1,500-second release limit,
@@ -80,7 +80,7 @@ H100, not a promise for arbitrary hardware.
 
 ## Training-seed audit and promotion margin
 
-Two NanoPath recipes were independently trained at seeds 17, 29, and 43 while
+Two nanopath recipes were independently trained at seeds 17, 29, and 43 while
 the data split and probe randomness stayed fixed:
 
 | Recipe | Seed 17 | Seed 29 | Seed 43 | Mean | Sample SD |
@@ -97,13 +97,13 @@ No official evaluation result was used in this calibration.
 
 ## Official-suite ordering fidelity
 
-The original promotion study contains five NanoPath checkpoints and seven
+The original promotion study contains five nanopath checkpoints and seven
 principal baselines. Official results were read only after the protocol,
 manifests, and scalar were frozen.
 
 Pairwise concordance is the fraction of non-tied model pairs ordered the same
-way by NanoPath and the official target. Cross-family concordance restricts
-that calculation to NanoPath-versus-baseline pairs, directly testing the offset
+way by nanopath and the official target. Cross-family concordance restricts
+that calculation to nanopath-versus-baseline pairs, directly testing the offset
 that motivated v2. Pearson measures score-shape agreement; Spearman and Kendall
 measure rank agreement. None alone is treated as sufficient.
 
@@ -114,17 +114,17 @@ measure rank agreement. None alone is treated as sufficient.
 | Segmentation / pinned full 4-task THUNDER segmentation | 0.656 | 0.515 | 0.720 | 0.829 |
 | Final score / existing official composite | 0.935 | 0.916 | 0.879 | 0.943 |
 
-Classification preserves all 10 pairwise orderings among the five NanoPath
-checkpoints. Matched-task segmentation preserves 6 of 10 NanoPath-only pairs;
+Classification preserves all 10 pairwise orderings among the five nanopath
+checkpoints. Matched-task segmentation preserves 6 of 10 nanopath-only pairs;
 its strongest evidence is cross-family separation, not exact within-family
 ordering. The full four-task segmentation diagnostic includes all-TCGA OCELOT,
-which is deliberately unavailable to NanoPath. The published THUNDER aggregate
+which is deliberately unavailable to nanopath. The published THUNDER aggregate
 is also tracked because published GigaPath and Midnight-12K values differ from
 the pinned harness; it yields 0.719 Pearson and 0.818 all-pair concordance.
 
-The final score never places a studied NanoPath checkpoint above GigaPath or
+The final score never places a studied nanopath checkpoint above GigaPath or
 H-Optimus-0 when the existing official composite places it below that baseline.
-Relative to v1, the standardized NanoPath-family residual shrinks for every
+Relative to v1, the standardized nanopath-family residual shrinks for every
 target: 89.3% for THUNDER classification, 74.9% for THUNDER segmentation, 35.7%
 for HEST, 72.7% for CPTAC classification, and 53.3% for the official composite
 (65.2% mean reduction).
@@ -202,7 +202,7 @@ gate above remains the relevant 25-minute evidence.
 - PanNuke validation cannot be proven disjoint from TCGA pretraining at the
   image-source level.
 - Segmentation is substantially better aligned than v1 but does not perfectly
-  preserve ordering among closely spaced NanoPath checkpoints.
+  preserve ordering among closely spaced nanopath checkpoints.
 - Validation-set marginalization avoids selection leakage but does not reproduce
   the absolute score of THUNDER's validation-selected, test-reported heads.
 - SPIDER-Skin has a one-example rare class in official validation, so its macro-

@@ -17,13 +17,13 @@ data and the downloadable snapshot. Camelyon is used as published.
 The upstream sources are
 [`PathoROB-camelyon`](https://huggingface.co/datasets/bifold-pathomics/PathoROB-camelyon),
 [`PathoROB-tolkach_esca`](https://huggingface.co/datasets/bifold-pathomics/PathoROB-tolkach_esca),
-and the [PathoROB paper](https://arxiv.org/abs/2507.17845). The NanoPath mirror
+and the [PathoROB paper](https://arxiv.org/abs/2507.17845). The nanopath mirror
 retains the upstream labels and selected images under their original terms.
 
 PathoROB intentionally does not call a model's configurable
 `probe_features()`. Its fixed adapter concatenates the final normalized CLS
 token and the mean normalized patch token, then L2-normalizes the result. This
-keeps the robustness test comparable even when a NanoPath recipe changes
+keeps the robustness test comparable even when a nanopath recipe changes
 test-time layer or view aggregation for predictive probes.
 
 ## Different-slide neighbors

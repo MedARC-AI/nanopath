@@ -19,10 +19,10 @@ dominant foreground class where applicable. Crops from one source image never
 cross train/validation boundaries. THUNDER's separate test records are absent.
 
 PanNuke is the explicit provenance exception. Its released folds combine TCGA
-and local-hospital images without a reliable per-image origin field. NanoPath
+and local-hospital images without a reliable per-image origin field. Nanopath
 therefore cannot make Fold2 demonstrably TCGA-free. Fold1/Fold2 were retained
 only after the two SegPath tasks alone did not preserve the desired
-NanoPath-family ordering against official THUNDER segmentation. This possible
+Nanopath-family ordering against official THUNDER segmentation. This possible
 pretraining overlap must be considered when interpreting the segmentation
 component; Fold3 remains fully sealed.
 
@@ -65,7 +65,7 @@ learning rate, or decay. Decoder initialization and training use seed 0. Only
 decoder attention is forced through PyTorch's deterministic math SDPA kernel;
 the frozen backbone retains its ordinary inference path.
 
-THUNDER's published decoder uses `d_model=768` and `d_ff=3072`. NanoPath uses
+THUNDER's published decoder uses `d_model=768` and `d_ff=3072`. Nanopath uses
 `d_model=192` and `d_ff=768` with the same two-layer/eight-head structure. This
 is the principal capacity deviation needed to keep the complete evaluation
 under 25 minutes. Controlled wider/longer decoder trials did not improve the

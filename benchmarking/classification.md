@@ -103,7 +103,7 @@ as 17 additional top-level tasks.
 ## Deliberate difference from official THUNDER
 
 Official THUNDER can choose the best linear hyperparameter/epoch and KNN `k` on
-visible validation data, then report a separate held-out test score. NanoPath
+visible validation data, then report a separate held-out test score. Nanopath
 keeps test data sealed, so it has no independent split on which to report a
 validation-selected winner. Choosing the maximum cell and reporting that same
 validation cell would reward selection noise. Protocol v2 instead fixes the

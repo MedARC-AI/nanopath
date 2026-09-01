@@ -6,7 +6,7 @@ usage() {
 Usage: bash download_TCGA.sh [download_root] [n_processes]
 
 Downloads the open-access TCGA SVS slide set with the GDC Data Transfer Tool
-and downloads NanoPath's sample_dataset_30.txt from Hugging Face.
+and downloads nanopath's sample_dataset_30.txt from Hugging Face.
 
 Defaults:
   download_root: /data/TCGA
@@ -86,7 +86,7 @@ normalize_sample_list() {
   local tmp="${dst}.$$.$(date +%s).tmp"
 
   if ! awk 'NR == 1 {exit !(NF >= 4 && $1 ~ /\.svs$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9]+$/)}' "$src"; then
-    echo "sample_dataset_30.txt did not look like a NanoPath sample list. First lines:" >&2
+    echo "sample_dataset_30.txt did not look like a nanopath sample list. First lines:" >&2
     head "$src" >&2
     exit 1
   fi
