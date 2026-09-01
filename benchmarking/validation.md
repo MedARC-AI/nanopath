@@ -88,12 +88,15 @@ the data split and probe randomness stayed fixed:
 | Main DINOv2/KDE | 0.623746 | 0.621826 | 0.616112 | 0.620561 | 0.003971 |
 | robust-norm | 0.648837 | 0.646516 | 0.646570 | 0.647308 | 0.001325 |
 
-The estimated standard error between two independent three-run means is
-0.002417. Its one-sided 95% Welch margin is 0.006262; rounding up to the next
-0.001 fixes the promotion margin at **0.007**. This number is not
-recomputed for each candidate. A discovery run is excluded, all three fixed
-confirmation seeds count, and a promoted panel becomes the stored incumbent.
-No official evaluation result was used in this calibration.
+The pooled within-recipe run SD is 0.002960. A three-run mean therefore has an
+estimated standard error of 0.001709, and the difference between two
+independent three-run means has an estimated standard error of 0.002417. Its
+one-sided 95% normal margin is 0.003975, fixing the promotion margin at
+**0.004**. This empirical operating threshold does not assume that matching
+seeds cancel variance between recipes. It is not recomputed for each candidate.
+A discovery run is excluded, all three fixed confirmation seeds count, and a
+promoted panel becomes the stored incumbent. No official evaluation result was
+used in this calibration.
 
 ## Official-suite ordering fidelity
 

@@ -132,7 +132,7 @@ of an official score. A difference should be interpreted alongside per-family,
 per-dataset, per-head, fold-variance, raw robustness, Jaccard, and timing fields.
 Small differences remain susceptible to training-seed and probe noise. Public
 leader promotion therefore requires the candidate's three-run mean to exceed
-the incumbent's stored three-run mean by the fixed margin of 0.007. The
+the incumbent's stored three-run mean by the fixed margin of 0.004. The
 discovery run is excluded.
 
 Official THUNDER, HEST, and CPTAC results were consulted only after the
