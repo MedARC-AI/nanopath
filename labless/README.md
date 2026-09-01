@@ -19,14 +19,14 @@ RUN_DIR=$PWD/data/main/my-run
 1. Reads `summary.json` and `metrics.jsonl` from `output_dir`.
 2. Requires `probe_protocol_version == 2` and extracts the final `mean_probe_score` plus diagnostic probe metrics.
 3. Uses the local `output_dir/labless_source` snapshot written by `train.py` and
-   diffs that source against the current main commit for `train.py`, `model.py`,
+   diffs that source against the current v2 branch (or promoted v2 main) for `train.py`, `model.py`,
    `dataloader.py`, `prepare.py`, and the config YAML used by the run.
 4. Records hardware, Python version, optional W&B run link, and the full changed
    path list from the saved source snapshot.
 5. Writes the submission payload to `output_dir/labless_submission.json`.
 6. Opens GitHub's device sign-in flow, or uses the preauthorized token file
    written by `submit/train_1gpu.sbatch`, and posts it to
-   `https://api.labless.dev/api/nano-projects/nanopath/submissions`.
+   `https://api.labless.dev/api/nano-projects/nanopath-v2/submissions`.
 
 The labless backend stores the submission as a run with saved source context and
 an optional W&B run link. It derives the public contributor from the verified
@@ -68,7 +68,9 @@ Then point the submit script at the same run directory:
 ```
 
 Completed submissions require both `summary.json` and `metrics.jsonl`. The run
-is shown as `unvalidated` until the organizer validates it. A copied config such as
+is shown as `unvalidated` until the organizer validates it. V1 and v2 are
+separate Labless streams: this adapter requires protocol 2 and cannot place a
+point on the legacy v1 plot. A copied config such as
 `configs/new_config.yaml` is accepted if the completed `summary.json` reports
 `max_train_samples: 1000000`, `tile_presentations <= 1000000`, and
 `max_train_flops: 1e18`; short local configs are rejected even if they are not named smoke.
@@ -144,10 +146,9 @@ may be online or offline because source review never depends on the W&B API.
 The payload intentionally makes the run inspectable. It includes:
 
 - verified GitHub login and notes
-- `probe_protocol_version=2`, the final metric, and public probe submetrics:
-  `classification_f1`, `linear`, `knn`, `few_shot`, `seg_f1`, diagnostic
-  `seg_jaccard`, `progression_auc`, `mutation_auc`, `survival_cindex`,
-  `robustness_index`, and `robustness_quality`
+- `probe_protocol_version=2`, the final metric, and canonical family metrics:
+  `classification_mean_f1`, `seg_mean_f1`, `slide_mean_auc`, `auc_mean`,
+  `survival_mean_cindex`, and `robustness_quality_mean`, plus diagnostic cells
 - run family, recipe id, and tier (`baseline` for frozen reference scripts)
 - source snapshot id, optional git remote, commit, full changed source path list,
   changed review files, and a capped review-file snapshot for server-built diffs
@@ -160,7 +161,7 @@ local artifact paths from submitted rows.
 Agents can crawl the public experiment ledger directly with the JSON API:
 
 ```bash
-curl -fsS "https://api.labless.dev/api/nano-projects/nanopath/experiment-log?limit=100" \
+curl -fsS "https://api.labless.dev/api/nano-projects/nanopath-v2/experiment-log?limit=100" \
   | jq '.runs[] | {run_id, title, validation, metric_value, summary}'
 ```
 

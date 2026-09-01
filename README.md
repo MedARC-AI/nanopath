@@ -14,6 +14,7 @@ Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:
 
 ```bash
 git clone https://github.com/MedARC-AI/nanopath.git && cd nanopath
+git switch v2
 uv sync && source .venv/bin/activate
 wandb login  # or: export WANDB_MODE=offline before launching noninteractive SLURM jobs
 
@@ -24,7 +25,7 @@ python prepare.py download=True
 ./submit/train_1gpu.sbatch configs/smoke.yaml
 # or directly on a GPU machine: python train.py configs/smoke.yaml
 
-# train and evaluate the current main nanopath recipe
+# train and evaluate the current protocol-v2 nanopath recipe
 # auto-submits to Labless if config passes submission requirements and you provide run name/notes & GitHub login
 RUN_DIR=$PWD/data/main/my-run
 ./submit/train_1gpu.sbatch configs/main.yaml output_dir=$RUN_DIR
@@ -40,21 +41,22 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
 ## Leaderboard
 
 <a href="https://labless.dev/nano-projects/nanopath">
-  <img src="https://api.labless.dev/api/nano-projects/nanopath/plot.svg" alt="Nanopath progress plot" width="1290">
+  <img src="https://api.labless.dev/api/nano-projects/nanopath-v2/plot.svg" alt="Nanopath v2 progress plot" width="1290">
 </a>
 
 Protocol v2 defines `mean_probe_score`, aka `final_probe_score`, as 95% of the equally weighted classification, segmentation, progression, mutation, and survival mean plus 5% quality-adjusted robustness. Classification is one family even though its 12 THUNDER development tasks and linear, KNN, and 16-shot heads remain visible diagnostically. Segmentation uses PanNuke plus the two non-TCGA SegPath tasks with THUNDER's published metric; only PanNuke Fold1/Fold2 development arrays are referenced. See [benchmarking/README.md](benchmarking/README.md) for the train/validation-only protocol and PanNuke provenance caveat.
-On Labless, the run labeled `main` reflects the current GitHub `main` branch, and the run labeled `leader` reflects the branch that passed the maintainer promotion study. Table values below are individual-checkpoint scores; leader promotion is based on the three-seed mean, not the luckiest point.
+Labless shows v2 and legacy v1 as separate plots because their scores are not interchangeable. Old v1 clients continue to submit only to the legacy plot. Validated historical checkpoints with retained exact weights are rerun unchanged under v2, retain their original submission dates, and link to distinct v2 metric pages; the v2 activity rail represents all remaining v1 submissions without inventing v2 scores for them.
+On Labless, the run labeled `main` reflects the promoted v2 branch state, and the run labeled `leader` reflects the recipe that passed the maintainer promotion study. Table values below are individual-checkpoint scores; leader promotion is based on the three-seed mean, not the luckiest point.
 
 ### Protocol-v2 NanoPath models
 
 | # | Description | final score | classification | segmentation | progression | mutation | survival | robustness quality | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm) | **0.6464** | 0.7507 | 0.6024 | 0.6136 | 0.5885 | 0.6010 | 0.9354 | @anishdulal |
-| 2 | [I-JEPA contig patch](https://github.com/MedARC-AI/nanopath/tree/JEPA-contig-patch) | 0.6439 | 0.7219 | 0.5993 | 0.5931 | 0.6148 | 0.6172 | 0.9225 | @NimaAsh |
-| 3 | [block-strided-cls](https://github.com/MedARC-AI/nanopath/tree/block-strided-cls) | 0.6411 | 0.7477 | 0.6039 | 0.5390 | 0.6066 | 0.6335 | 0.9253 | @RyanKim17920 |
-| 4 | [lr-and-curation](https://labless.dev/runs/run_sub_6c6c051f71) | 0.6370 | 0.7048 | 0.5940 | 0.5948 | 0.6025 | 0.6199 | 0.9003 | @nevasini1 |
-| 5 | [dinov2-s-kde](https://labless.dev/runs/run_sub_0d8aeb2511) | 0.6340 | 0.6922 | 0.5939 | 0.5870 | 0.5921 | 0.6361 | 0.8939 | @PaulScotti |
+| 1 | [robust-norm](https://labless.dev/runs/run_v2_sub_16b156161d) | **0.6464** | 0.7507 | 0.6024 | 0.6136 | 0.5885 | 0.6010 | 0.9354 | @anishdulal |
+| 2 | [I-JEPA contig patch](https://labless.dev/runs/run_v2_sub_1879d32919) | 0.6439 | 0.7219 | 0.5993 | 0.5931 | 0.6148 | 0.6172 | 0.9225 | @NimaAsh |
+| 3 | [block-strided-cls](https://labless.dev/runs/run_v2_sub_59d24d6b7b) | 0.6411 | 0.7477 | 0.6039 | 0.5390 | 0.6066 | 0.6335 | 0.9253 | @RyanKim17920 |
+| 4 | [lr-and-curation](https://labless.dev/runs/run_v2_sub_6c6c051f71) | 0.6370 | 0.7048 | 0.5940 | 0.5948 | 0.6025 | 0.6199 | 0.9003 | @nevasini1 |
+| 5 | [dinov2-s-kde](https://labless.dev/runs/run_v2_sub_0d8aeb2511) | 0.6340 | 0.6922 | 0.5939 | 0.5870 | 0.5921 | 0.6361 | 0.8939 | @PaulScotti |
 
 ### Protocol-v2 reference baselines
 
@@ -111,7 +113,7 @@ Labless is our public run ledger and live plot for `nanopath`. You do not need a
 
 See [labless/README.md](labless/README.md) for Labless submission details and public API usage.
 
-`configs/main.yaml` is the current `nanopath` main-branch training recipe. A normal SLURM submission is:
+`configs/main.yaml` is the current protocol-v2 training recipe. A normal SLURM submission is:
 
 ```bash
 RUN_DIR=$PWD/data/main/my-run

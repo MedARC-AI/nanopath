@@ -25,8 +25,9 @@ import yaml
 
 
 API_URL = "https://api.labless.dev"
-PROJECT_SLUG = "nanopath"
+PROJECT_SLUG = "nanopath-v2"
 NANOPATH_MAIN_REMOTE = "https://github.com/MedARC-AI/nanopath.git"
+NANOPATH_DEFAULT_BRANCH = "v2"
 PRIMARY_METRIC = "mean_probe_score"
 PROBE_PROTOCOL_VERSION = 2
 LOCKED_PATHS = ("probe.py", "benchmarking/")
@@ -316,10 +317,12 @@ def resolve_main(opts: dict[str, str], dry_run: bool) -> dict[str, str]:
         api_url = (opts.get("api_url") or API_URL).rstrip("/")
         project = opts.get("project", PROJECT_SLUG)
         status, main_ref = api_json(api_url, "GET", f"/api/nano-projects/{project}/main")
-        if status >= 400:
+        if status == 404:
+            main_ref = {"run_id": "nanopath-v2"}
+        elif status >= 400:
             raise ValueError(main_ref.get("detail") or f"main lookup failed with HTTP {status}")
-        if project == PROJECT_SLUG and api_url == API_URL:
-            main_ref["commit"] = current_nanopath_main_commit()
+        if (project == PROJECT_SLUG and api_url == API_URL) or not main_ref.get("commit"):
+            main_ref["commit"] = current_nanopath_branch_commit()
     if not main_ref.get("run_id"):
         raise ValueError("current main response is missing run_id")
     if not isinstance(main_ref.get("commit"), str) or not GIT_SHA_RE.match(main_ref["commit"]):
@@ -327,11 +330,11 @@ def resolve_main(opts: dict[str, str], dry_run: bool) -> dict[str, str]:
     return {"run_id": str(main_ref["run_id"]), "commit": main_ref["commit"]}
 
 
-def current_nanopath_main_commit() -> str:
-    subprocess.run(["git", "fetch", "--depth=1", NANOPATH_MAIN_REMOTE, "refs/heads/main"], check=True)
+def current_nanopath_branch_commit() -> str:
+    subprocess.run(["git", "fetch", "--depth=1", NANOPATH_MAIN_REMOTE, f"refs/heads/{NANOPATH_DEFAULT_BRANCH}"], check=True)
     commit = subprocess.check_output(["git", "rev-parse", "FETCH_HEAD"], text=True).strip()
     if not GIT_SHA_RE.match(commit):
-        raise ValueError("official nanopath main lookup did not return a full git SHA")
+        raise ValueError(f"official nanopath {NANOPATH_DEFAULT_BRANCH} lookup did not return a full git SHA")
     return commit
 
 
@@ -393,17 +396,17 @@ def final_metrics(summary: dict[str, Any], rows: list[dict[str, Any]]) -> dict[s
     name_map = {
         "score": PRIMARY_METRIC,
         "protocol_version": "probe_protocol_version",
-        "classification_mean_f1": "classification_f1",
-        "linear_mean_f1": "linear",
-        "knn_mean_f1": "knn",
-        "fewshot_mean_f1": "few_shot",
-        "seg_mean_jaccard": "seg_jaccard",
-        "seg_mean_f1": "seg_f1",
-        "slide_mean_auc": "progression_auc",
-        "auc_mean": "mutation_auc",
-        "survival_mean_cindex": "survival_cindex",
-        "robustness_mean": "robustness_index",
-        "robustness_quality_mean": "robustness_quality",
+        "classification_mean_f1": "classification_mean_f1",
+        "linear_mean_f1": "linear_mean_f1",
+        "knn_mean_f1": "knn_mean_f1",
+        "fewshot_mean_f1": "fewshot_mean_f1",
+        "seg_mean_jaccard": "seg_mean_jaccard",
+        "seg_mean_f1": "seg_mean_f1",
+        "slide_mean_auc": "slide_mean_auc",
+        "auc_mean": "auc_mean",
+        "survival_mean_cindex": "survival_mean_cindex",
+        "robustness_mean": "robustness_mean",
+        "robustness_quality_mean": "robustness_quality_mean",
     }
     metrics: dict[str, float] = {}
     for key, value in summary.items():
