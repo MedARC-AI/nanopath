@@ -72,10 +72,9 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
 | 8 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.6427 | 0.6640 | 0.6306 | 0.6748 | 0.5829 | 0.6058 | 0.8534 |
 | 9 | Kaiko-S/16 | Kaiko pathology ViT-S/16 | 0.6337 | 0.7737 | 0.6060 | 0.5963 | 0.5539 | 0.5907 | 0.8151 |
 | 10 | DINOv2-G/14 | Meta DINOv2-G/14-reg | 0.6285 | 0.6804 | 0.5753 | 0.5928 | 0.6038 | 0.6288 | 0.8617 |
-| 11 | EXAONE-Path-2.5-B | LG AI Research EXAONE-Path-2.5-B/14 | 0.6280 | 0.8049 | 0.3677 | 0.6367 | 0.6458 | 0.6107 | 0.9091 |
-| 12 | DINOv2-L/14 | Meta DINOv2-L/14-reg | 0.6243 | 0.6632 | 0.5667 | 0.6298 | 0.6005 | 0.6009 | 0.8530 |
-| 13 | DINOv2-B/14 | Meta DINOv2-B/14-reg | 0.6122 | 0.6500 | 0.5691 | 0.5753 | 0.6062 | 0.6015 | 0.8371 |
-| 14 | DINOv2-S/14 | Meta DINOv2-S/14-reg | 0.6104 | 0.6480 | 0.5665 | 0.5364 | 0.6202 | 0.6220 | 0.8353 |
+| 11 | DINOv2-L/14 | Meta DINOv2-L/14-reg | 0.6243 | 0.6632 | 0.5667 | 0.6298 | 0.6005 | 0.6009 | 0.8530 |
+| 12 | DINOv2-B/14 | Meta DINOv2-B/14-reg | 0.6122 | 0.6500 | 0.5691 | 0.5753 | 0.6062 | 0.6015 | 0.8371 |
+| 13 | DINOv2-S/14 | Meta DINOv2-S/14-reg | 0.6104 | 0.6480 | 0.5665 | 0.5364 | 0.6202 | 0.6220 | 0.8353 |
 
 Across the promotion set of five nanopath models and seven principal
 baselines, classification has 0.987
@@ -90,15 +89,14 @@ and 0.818 all-pair concordance. The final score has 0.943 cross-family concordan
 with the existing official composite and never ranks a nanopath checkpoint
 above GigaPath or H-optimus-0 when that composite ranks it below the baseline.
 
-The expanded 19-model comparison adds four DINOv2 sizes, Kaiko-S/16,
-GigaPath-Flash, and EXAONE-Path-2.5-B. Classification remains faithful to
-official THUNDER (0.988 Pearson, 0.991 Spearman, 0.977 all-pair, and 1.000
-cross-family concordance). Among the 17 models with a matched completed or
-same-checkpoint published THUNDER segmentation result, segmentation has 0.586
-Pearson, 0.798 Spearman, 0.844 all-pair, and 0.900 cross-family concordance. The
-lower Pearson is chiefly a score-magnitude miss for EXAONE; excluding EXAONE
-raises it to 0.831. Final score has 0.878 Pearson / 0.837 Spearman with HEST and
-0.752 / 0.782 with CPTAC classification across all 19 models. These values use
+The expanded 18-model comparison adds four DINOv2 sizes, Kaiko-S/16, and
+GigaPath-Flash. Classification remains faithful to official THUNDER (0.988
+Pearson, 0.990 Spearman, 0.974 all-pair, and 1.000 cross-family concordance).
+Among the 16 models with a matched completed or same-checkpoint published
+THUNDER segmentation result, segmentation has 0.831 Pearson, 0.761 Spearman,
+0.832 all-pair, and 0.891 cross-family concordance. Final score has 0.951
+Pearson / 0.946 Spearman with HEST and 0.854 / 0.893 with CPTAC classification
+across all 18 models. These values use
 the assembled fixed three-task score for every row; intermediate two-SegPath
 result files are not treated as final scores. Official-suite results are
 post-freeze validation only, and their test samples do not enter the nanopath

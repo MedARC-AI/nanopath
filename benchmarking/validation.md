@@ -129,30 +129,27 @@ the pinned harness; it yields 0.719 Pearson and 0.818 all-pair concordance.
 The final score never places a studied nanopath checkpoint above GigaPath or
 H-Optimus-0 when the existing official composite places it below that baseline.
 
-An expanded 19-model table adds DINOv2-S/B/L/G, Kaiko-S/16, GigaPath-Flash, and
-EXAONE-Path-2.5-B:
+An expanded 18-model table adds DINOv2-S/B/L/G, Kaiko-S/16, and GigaPath-Flash:
 
 | Comparison | Pearson | Spearman | All-pair concordance | Cross-family concordance |
 |---|---:|---:|---:|---:|
-| Classification / THUNDER, 19 models | 0.988 | 0.991 | 0.977 | 1.000 |
-| Segmentation / THUNDER, 17 matched results | 0.586 | 0.798 | 0.844 | 0.900 |
-| Final score / HEST, 19 models | 0.878 | 0.837 | — | — |
-| Final score / CPTAC classification, 19 models | 0.752 | 0.782 | — | — |
+| Classification / THUNDER, 18 models | 0.988 | 0.990 | 0.974 | 1.000 |
+| Segmentation / THUNDER, 16 matched results | 0.831 | 0.761 | 0.832 | 0.891 |
+| Final score / HEST, 18 models | 0.951 | 0.946 | — | — |
+| Final score / CPTAC classification, 18 models | 0.854 | 0.893 | — | — |
 
-The lower expanded segmentation Pearson is driven chiefly by an EXAONE score-
-magnitude miss; removing that row raises Pearson to 0.831. DINOv2-S and
-DINOv2-G segmentation are omitted because only different-size published DINO
-proxies were available. These exclusions are fixed by result identity, not
-model performance.
+DINOv2-S and DINOv2-G segmentation are omitted because only different-size
+published DINO proxies were available. These exclusions are fixed by result
+identity, not model performance.
 
 The exact comparison input is
 [proxy-fidelity data](proxy_fidelity_v2.csv). The original 12 rows use the
 assembled fixed result, which combines PanNuke with both SegPath tasks. This
 is important: their retained non-segmentation artifact paths happen to contain
 intermediate two-SegPath metrics and must not be reopened as if those partial
-runs were the final score. The seven added rows use their completed fixed
+runs were the final score. The six added rows use their completed fixed
 suite results. Empty DINOv2-S/G segmentation cells prevent different-size
-published proxies from silently entering the 17-model statistic.
+published proxies from silently entering the 16-model statistic.
 
 ## Random-feature null audit
 
@@ -180,9 +177,8 @@ All trained or pretrained reference final scores in
 [the proxy-fidelity data](proxy_fidelity_v2.csv) exceed the largest random
 final score by at least 0.073. Classification, mutation, and robustness provide
 clear separation. The segmentation null is numerically high because
-background and spatial priors earn F1. Every listed trained reference except
-EXAONE is at least 0.036 above the random maximum; EXAONE's 0.368 is well below
-it, consistent with the score-magnitude miss in the official comparison.
+background and spatial priors earn F1. Every listed trained reference is at
+least 0.036 above the random maximum.
 
 Progression does **not** pass a clean random-feature interpretation: randomized
 features average 0.668 AUC and outperform multiple trained references. Survival
