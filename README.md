@@ -44,7 +44,7 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
 </a>
 
 Protocol v2 defines `mean_probe_score`, aka `final_probe_score`, as 95% of the equally weighted classification, segmentation, progression, mutation, and survival mean plus 5% quality-adjusted robustness. Classification is one family even though its 12 THUNDER development tasks and linear, KNN, and 16-shot heads remain visible diagnostically. Segmentation uses PanNuke plus the two non-TCGA SegPath tasks with THUNDER's published metric; only PanNuke Fold1/Fold2 development arrays are referenced. See [benchmarking/README.md](benchmarking/README.md) for the train/validation-only protocol and PanNuke provenance caveat.
-On Labless, the run labeled `main` reflects the current GitHub `main` branch, and the run labeled `leader` reflects the branch highest in the nanopath models table below that passed threshold. A validated nanopath run must beat the current leader by at least 0.006 to become the new leader.
+On Labless, the run labeled `main` reflects the current GitHub `main` branch, and the run labeled `leader` reflects the branch that passed the maintainer promotion study. Table values below are individual-checkpoint scores; leader promotion is based on the three-seed mean, not the luckiest point.
 
 ### Protocol-v2 NanoPath models
 
@@ -141,7 +141,9 @@ Public full-run submissions must satisfy:
 
 The `run_name` is the short label shown next to your dot on the Labless plot; keep it under 20 characters and make it describe what changed. Short smoke-sized runs, failed runs, and runs missing the saved source snapshot stay local. Each verified GitHub login can submit at most 100 runs per 24 hours.
 
-To top the leaderboard you must beat the highest validated Labless run on `mean_probe_score` by at least 0.006. Public submissions have no wall-clock limit, so train on whatever hardware you have access to. [@PaulScotti](https://github.com/PaulScotti) will inspect promising submissions, independently rerun candidates that pass this threshold on maintainer compute with a different rng seed, and validate them on Labless if training completes within 2 hours and the rerun still improves by at least 0.006. If the candidate code is pushed to nanopath `main`, Labless marks that run separately as `main`. **You don't need an H100 or a PR to submit**; labless handles the public record and maintainer validation.
+A public submission is a discovery run, not by itself a promotion claim. After freezing a promising clean commit, the maintainer trains exactly three confirmation checkpoints at seeds `17`, `29`, and `43`, keeping the data split fixed. The discovery run is excluded and no confirmation seed may be dropped. Promotion requires the candidate's three-run mean to beat the incumbent's stored three-run mean by at least **0.007**. A promoted panel becomes the next stored incumbent, and its run nearest the mean is the Labless point marked validated rather than its luckiest seed. The fixed margin comes from the protocol-v2 repeated-training audit in [benchmarking/validation.md](benchmarking/validation.md); it replaces v1's single-run 0.006 rule and is not recomputed per candidate.
+
+`train.py` and the SLURM launcher accept `seed=<int>`, and every new `summary.json` records both the training seed and fixed data-split seed. Public submissions have no wall-clock limit; each maintainer confirmation must still train on one 80 GB H100 within 2 hours. If the candidate code is pushed to nanopath `main`, Labless marks that run separately as `main`. **You don't need an H100 or a PR to submit**; Labless handles the public record and maintainer validation.
 
 Code-cleanup PRs are still welcome when they simplify the codebase without changing benchmark performance on the main recipe. Leaderboard claims should go through labless instead of a pull request.
 

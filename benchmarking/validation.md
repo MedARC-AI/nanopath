@@ -78,6 +78,23 @@ pooling. Runtime depends on image-cache warmth, backbone size, feature width,
 and CPU decode throughput; the limit is a release qualification on the target
 H100, not a promise for arbitrary hardware.
 
+## Training-seed audit and promotion margin
+
+Two NanoPath recipes were independently trained at seeds 17, 29, and 43 while
+the data split and probe randomness stayed fixed:
+
+| Recipe | Seed 17 | Seed 29 | Seed 43 | Mean | Sample SD |
+|---|---:|---:|---:|---:|---:|
+| Main DINOv2/KDE | 0.623746 | 0.621826 | 0.616112 | 0.620561 | 0.003971 |
+| robust-norm | 0.648837 | 0.646516 | 0.646570 | 0.647308 | 0.001325 |
+
+The estimated standard error between two independent three-run means is
+0.002417. Its one-sided 95% Welch margin is 0.006262; rounding up to the next
+0.001 fixes the protocol-v2 promotion margin at **0.007**. This number is not
+recomputed for each candidate. A discovery run is excluded, all three fixed
+confirmation seeds count, and a promoted panel becomes the stored incumbent.
+No official evaluation result was used in this calibration.
+
 ## Official-suite ordering fidelity
 
 The original promotion study contains five NanoPath checkpoints and seven

@@ -14,7 +14,7 @@ set -euo pipefail
 
 # Single-GPU SLURM launcher. Run it directly so the login node can collect
 # Labless metadata before scheduling the noninteractive GPU job, e.g.
-#   ./submit/train_1gpu.sbatch configs/main.yaml output_dir=/data/$USER/nanopath/main/myrun
+#   ./submit/train_1gpu.sbatch configs/main.yaml output_dir=/data/$USER/nanopath/main/myrun seed=17
 # Plain `sbatch submit/train_1gpu.sbatch ...` still trains, but cannot auto-submit.
 REPO_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 CONFIG_FILE="${1:-${REPO_DIR}/configs/main.yaml}"

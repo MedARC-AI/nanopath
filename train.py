@@ -48,16 +48,18 @@ def console_prefix(): return f"{time.strftime('%H:%M:%S')} {os.environ.get('SLUR
 # expandvars is necessary to resolve `$USER` for checked-in configs.
 def load_config():
     if len(sys.argv) < 2:
-        raise ValueError("usage: python train.py <config.yaml> [output_dir=<path>]")
+        raise ValueError("usage: python train.py <config.yaml> [output_dir=<path>] [seed=<int>]")
     cfg = yaml.safe_load(os.path.expandvars(Path(sys.argv[1]).read_text()))
     cfg["config_path"] = str(Path(sys.argv[1]).resolve())
-    # Optional `key=value` overrides after the config; only output_dir is supported,
-    # since it's the run identifier and routinely set per-submission from the CLI.
+    # Run identity and confirmation seed are the only CLI overrides; recipes stay in YAML.
     for arg in sys.argv[2:]:
         key, _, value = arg.partition("=")
-        if key != "output_dir":
-            raise ValueError(f"unsupported override {arg!r}; only output_dir=<path> is supported")
-        cfg["project"]["output_dir"] = os.path.expandvars(value)
+        if key == "output_dir":
+            cfg["project"]["output_dir"] = os.path.expandvars(value)
+        elif key == "seed":
+            cfg["train"]["seed"] = int(value)
+        else:
+            raise ValueError(f"unsupported override {arg!r}; use output_dir=<path> or seed=<int>")
     dataset_dir = Path(cfg["data"]["dataset_dir"])
     if not any(dataset_dir.glob("shard-*.parquet")):
         raise FileNotFoundError(
@@ -301,6 +303,7 @@ def main():
     print(
         f"{console_prefix()} Run  start: {wandb_name}  "
         f"config: {cfg['config_path']}  batch_size: {batch_size}  max_train_samples: {max_train_samples}  "
+        f"seed: {train_cfg['seed']}  "
         f"max_train_flops: {train_cfg['max_train_flops']}  "
         f"probe_count: {cfg['probe']['count']}  warmup_fraction: {dino_cfg['warmup_fraction']}  "
         f"lr: {dino_cfg['lr']}  adam_beta2: {dino_cfg['adam_beta2']}  kde_loss_weight: {dino_cfg['kde_loss_weight']}  "
@@ -692,6 +695,8 @@ def main():
         "family": cfg["project"]["family"],
         "recipe_id": cfg["project"]["recipe_id"],
         "config_path": cfg["config_path"],
+        "train_seed": int(train_cfg["seed"]),
+        "data_split_seed": int(cfg["data"]["split_seed"]),
         "wandb": wandb_meta,
         "slurm_job_id": slurm_job_id,
         "backbone_activated_params": backbone_activated_params,

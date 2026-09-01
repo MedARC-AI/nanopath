@@ -131,9 +131,10 @@ across five predictive families while preventing robustness from dominating.
 It is strongest as a predictor of model ordering, not as a calibrated estimate
 of an official score. A difference should be interpreted alongside per-family,
 per-dataset, per-head, fold-variance, raw robustness, Jaccard, and timing fields.
-Small differences remain susceptible to finite validation samples and probe
-optimization noise; public leader promotion therefore requires an independent
-rerun and a 0.006 improvement.
+Small differences remain susceptible to training-seed and probe noise. Public
+leader promotion therefore requires the candidate's three-run mean to exceed
+the incumbent's stored three-run mean by the fixed v2 margin of 0.007. The
+discovery run is excluded.
 
 Official THUNDER, HEST, and CPTAC results were consulted only after the v2
 protocol, manifests, and scalar were frozen. They are release-validation

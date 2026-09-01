@@ -166,6 +166,8 @@ def main() -> int:
     run_command = public_command(run_command)
     if not opts.get("command") and "output_dir=" not in run_command:
         run_command = f"{run_command} output_dir=$OUTPUT_DIR"
+    if not opts.get("command") and summary.get("train_seed") is not None:
+        run_command = f"{run_command} seed={int(summary['train_seed'])}"
     payload = {
         "version": 1,
         "probe_protocol_version": PROBE_PROTOCOL_VERSION,
@@ -184,7 +186,7 @@ def main() -> int:
             "family": summary.get("family") or "nanopath",
             "recipe_id": summary.get("recipe_id"),
             "command": run_command,
-            "seed": int(opts["seed"]) if opts.get("seed") else summary.get("config", {}).get("train", {}).get("seed"),
+            "seed": int(opts["seed"]) if opts.get("seed") else summary.get("train_seed"),
             "hardware": opts.get("hardware") or env["hardware"],
             "started_at": opts.get("started_at"),
             "ended_at": opts.get("ended_at") or previous_submission.get("run", {}).get("ended_at") or now_iso(),

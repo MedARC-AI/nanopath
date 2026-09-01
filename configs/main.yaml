@@ -24,7 +24,7 @@ model:
   type: dinov2_vits14_reg
 
 train:
-  seed: 7777
+  seed: 7777 # discovery seed; maintainer promotion uses confirmation seeds 17, 29, and 43
   bf16: true
   activation_checkpointing: false
   batch_size: 128
