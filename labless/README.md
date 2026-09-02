@@ -157,9 +157,9 @@ The payload intentionally makes the run inspectable. It includes:
 The public API redacts local machine paths, hostnames, users, repo roots, and
 local artifact paths from submitted rows.
 
-The final score gives each of the five predictive families 18% and
-quality-adjusted robustness 10%. Labless rejects scores that do not match those
-submitted components.
+The final score weights classification, segmentation, progression, mutation,
+survival, and quality-adjusted robustness at 25%, 15%, 25%, 15%, 10%, and 10%.
+Labless rejects scores that do not match those submitted components.
 
 Agents can crawl the public experiment ledger directly with the JSON API:
 

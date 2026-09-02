@@ -2,7 +2,7 @@
 
 PathoROB is an auxiliary check that a representation is insensitive to center
 while still separating biological classes. It contributes 10% of the final
-score; the five predictive families contribute the other 90%.
+score; the weighted predictive families contribute the other 90%.
 
 ## Data and fixed adapter
 

@@ -13,9 +13,9 @@ outcomes.
 
 The benchmark components and manifests were frozen at commit
 `c21c9d8e1b824018badbf2a88b7693491f4daa4d` before the final official-result
-audit. The 10% robustness weight is a governance choice about component
-importance, not a value selected from official outcomes; stored component
-results were rescored arithmetically. The selected THUNDER manifest SHA-256 is
+audit. The updated 25/15/25/15/10/10 weights are a scoring-policy choice;
+stored component results were rescored arithmetically. The selected THUNDER
+manifest SHA-256 is
 `fc9a92587f78078c1d3c880f95a795ff229affb61c67de1a7886221dc99a0b8b`. Later
 release commits changed packaging, baseline launchers, comments, and
 documentation without changing the manifest or component protocols.
@@ -66,15 +66,15 @@ The complete benchmark was run in independent clean processes on one
 
 | Model / feature policy | Wall time | Final score | Note |
 |---|---:|---:|---|
-| Representative nanopath ViT-S, run 1 | 1,156.7 s | 0.650906 | clean process |
-| Representative nanopath ViT-S, run 2 | 1,198.9 s | 0.650702 | clean process |
-| DINOv2-S reference | 1,018 s | 0.6223 | pretrained frozen baseline |
-| H0-mini reference | 1,273.1 s | 0.6851 | official CLS-plus-mean readout |
-| I-JEPA contig-patch nanopath | 1,187 s | 0.6586 | ordinary feature adapter |
-| block-strided-cls nanopath | 1,188.6 s | 0.6561 | test-time aggregation exercised |
-| robust-norm nanopath | 1,366.3 s | 0.6616 | 49,554 MiB peak; aggregation exercised |
+| Representative nanopath ViT-S, run 1 | 1,156.7 s | 0.656388 | clean process |
+| Representative nanopath ViT-S, run 2 | 1,198.9 s | 0.656217 | clean process |
+| DINOv2-S reference | 1,018 s | 0.6198 | pretrained frozen baseline |
+| H0-mini reference | 1,273.1 s | 0.7021 | official CLS-plus-mean readout |
+| I-JEPA contig-patch nanopath | 1,187 s | 0.6648 | ordinary feature adapter |
+| block-strided-cls nanopath | 1,188.6 s | 0.6591 | test-time aggregation exercised |
+| robust-norm nanopath | 1,366.3 s | 0.6733 | 49,554 MiB peak; aggregation exercised |
 
-The two independent representative scores differ by 0.000204, below the 0.001
+The two independent representative scores differ by 0.000170, below the 0.001
 determinism gate. Every listed run is below the 1,500-second release limit,
 including the two feature-aggregation variants that motivated bounded spatial
 pooling. Runtime depends on image-cache warmth, backbone size, feature width,
@@ -88,15 +88,16 @@ the data split and probe randomness stayed fixed:
 
 | Recipe | Seed 17 | Seed 29 | Seed 43 | Mean | Sample SD |
 |---|---:|---:|---:|---:|---:|
-| Main DINOv2/KDE | 0.638205 | 0.636484 | 0.631237 | 0.635309 | 0.003630 |
-| robust-norm | 0.663998 | 0.661587 | 0.661768 | 0.662451 | 0.001343 |
+| Main DINOv2/KDE | 0.637656 | 0.637649 | 0.632825 | 0.636043 | 0.002787 |
+| robust-norm | 0.671812 | 0.669810 | 0.670370 | 0.670664 | 0.001033 |
 
-The pooled within-recipe run SD is 0.002737. A three-run mean therefore has an
-estimated standard error of 0.001580, and the difference between two
-independent three-run means has an estimated standard error of 0.002235. Its
-one-sided 95% normal margin is 0.003676, fixing the promotion margin at
-**0.004**. This empirical operating threshold does not assume that matching
-seeds cancel variance between recipes. It is not recomputed for each candidate.
+The pooled within-recipe run SD is 0.002102. A three-run mean therefore has an
+estimated standard error of 0.001213, and the difference between two
+independent three-run means has an estimated standard error of 0.001716. Its
+one-sided 95% normal margin is 0.002823; the existing **0.004** promotion
+margin remains a conservative fixed policy. This operating threshold does not
+assume that matching seeds cancel variance between recipes and is not
+recomputed for each candidate.
 A discovery run is excluded, all three fixed confirmation seeds count, and a
 promoted panel becomes the stored incumbent. No official evaluation result was
 used in this calibration.
@@ -119,7 +120,7 @@ measure rank agreement. None alone is treated as sufficient.
 | Classification / THUNDER classification | 0.987 | 0.995 | 0.987 | 1.000 |
 | Segmentation / matched 3-task THUNDER segmentation | 0.743 | 0.637 | 0.782 | 0.857 |
 | Segmentation / pinned full 4-task THUNDER segmentation | 0.668 | 0.558 | 0.753 | 0.833 |
-| Final score / existing official composite, 12 models | 0.923 | 0.902 | 0.864 | 0.914 |
+| Final score / existing official composite, 12 models | 0.932 | 0.916 | 0.879 | 0.943 |
 
 Classification preserves all 15 pairwise orderings among the six nanopath
 checkpoints. Matched-task segmentation preserves 11 of 15 nanopath-only pairs;
@@ -140,8 +141,8 @@ GigaPath-Flash:
 |---|---:|---:|---:|---:|
 | Classification / THUNDER, 20 models | 0.988 | 0.992 | 0.979 | 1.000 |
 | Segmentation / THUNDER, 18 matched results | 0.850 | 0.792 | 0.848 | 0.903 |
-| Final score / HEST, 20 models | 0.940 | 0.926 | — | — |
-| Final score / CPTAC classification, 20 models | 0.848 | 0.865 | — | — |
+| Final score / HEST, 20 models | 0.941 | 0.941 | — | — |
+| Final score / CPTAC classification, 20 models | 0.851 | 0.872 | — | — |
 
 DINOv2-S and DINOv2-G segmentation are omitted because only different-size
 published DINO proxies were available. These exclusions are fixed by result
@@ -170,7 +171,7 @@ is the runner, so the benchmark does not carry a second stale null script.
 
 | Component | Null mean | Sample SD | Min–max |
 |---|---:|---:|---:|
-| Final score | 0.5293 | 0.0022 | 0.5249–0.5322 |
+| Final score | 0.5223 | 0.0028 | 0.5174–0.5261 |
 | Classification | 0.3706 | 0.0026 | 0.3661–0.3739 |
 | Segmentation | 0.5128 | 0.0047 | 0.5067–0.5202 |
 | Progression | 0.6684 | 0.0085 | 0.6576–0.6841 |
@@ -180,7 +181,7 @@ is the runner, so the benchmark does not carry a second stale null script.
 
 All trained or pretrained reference final scores in
 [the proxy-fidelity data](proxy_fidelity_v2.csv) exceed the largest random
-final score by at least 0.090. Classification, mutation, and robustness provide
+final score by at least 0.094. Classification, mutation, and robustness provide
 clear separation. The segmentation null is numerically high because
 background and spatial priors earn F1. Every listed trained reference is at
 least 0.036 above the random maximum.
@@ -189,9 +190,9 @@ Progression does **not** pass a clean random-feature interpretation: randomized
 features average 0.668 AUC and outperform multiple trained references. Survival
 also has weak separation, with a random mean of 0.598 and maximum of 0.610.
 Those components may measure cohort/image shortcuts or useful random nonlinear
-features as much as learned representation quality. They remain only as parts
-of the five-family mean, not trustworthy standalone claims. This null evidence
-is a release limitation; it was not used to reweight the already frozen scalar.
+features as much as learned representation quality. They remain parts of the
+fixed scalar, not trustworthy standalone claims. This null evidence is a
+release limitation.
 
 Nine null runs finished in 18:52–19:22. One took 26:17 while all ten jobs
 contended for the shared image caches concurrently; it is retained in the null

@@ -26,17 +26,20 @@ mutation        = SurGen RAS macro-OVR AUC
 survival        = mean(LEOPARD BCR c-index, CPTAC-PDA OS c-index)
 
 predictive_mean = mean(classification, segmentation, progression,
-                       mutation, survival)
+                       mutation, survival)  # diagnostic only
 robustness_quality = mean over PathoROB subsets of
                      (robustness index + biological balanced accuracy) / 2
 
-mean_probe_score = 0.90 * predictive_mean + 0.10 * robustness_quality
+mean_probe_score = 0.25 * classification + 0.15 * segmentation
+                 + 0.25 * progression + 0.15 * mutation
+                 + 0.10 * survival + 0.10 * robustness_quality
 ```
 
-`mean_probe_score` and `final_probe_score` are identical public aliases. Each
-predictive family contributes 18% of the final score and robustness contributes
-10%. Classification's datasets, heads, and hyperparameter cells remain visible
-for diagnosis but do not become extra top-level families.
+`mean_probe_score` and `final_probe_score` are identical public aliases.
+Classification, segmentation, progression, mutation, survival, and robustness
+contribute 25%, 15%, 25%, 15%, 10%, and 10%, respectively. Classification's
+datasets, heads, and hyperparameter cells remain visible for diagnosis but do
+not become extra top-level families.
 
 ## Fixed suite
 
@@ -125,8 +128,8 @@ and null-model evidence.
 
 ## Interpretation
 
-The final scalar is a hill-climbing signal: it rewards improvements shared
-across five predictive families while preventing robustness from dominating.
+The final scalar is a hill-climbing signal: it emphasizes classification and
+progression while retaining segmentation, mutation, survival, and robustness.
 It is strongest as a predictor of model ordering, not as a calibrated estimate
 of an official score. A difference should be interpreted alongside per-family,
 per-dataset, per-head, fold-variance, raw robustness, Jaccard, and timing fields.
@@ -136,7 +139,6 @@ the incumbent's stored three-run mean by the fixed margin of 0.004. The
 discovery run is excluded.
 
 Official THUNDER, HEST, and CPTAC results were consulted only after the
-benchmark components and manifests were frozen. The 10% robustness weight is a
-later governance choice about component importance, not a value selected from
-official outcomes. Official results remain release-validation evidence, never
-inputs to a run or dataset-selection targets.
+benchmark components and manifests were frozen. The fixed component weights
+are scoring-policy choices. Official results remain release-validation
+evidence, never inputs to a run or dataset-selection targets.

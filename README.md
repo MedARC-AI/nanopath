@@ -43,7 +43,7 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
   <img src="https://api.labless.dev/api/nano-projects/nanopath-v2/plot.svg" alt="nanopath progress plot" width="1290">
 </a>
 
-`mean_probe_score`, aka `final_probe_score`, is 90% of the equally weighted classification, segmentation, progression, mutation, and survival mean plus 10% quality-adjusted robustness. Classification is one family even though its 12 THUNDER development tasks and linear, KNN, and 16-shot heads remain visible diagnostically. Segmentation uses PanNuke plus the two non-TCGA SegPath tasks with THUNDER's published metric; only PanNuke Fold1/Fold2 development arrays are referenced. See [benchmarking/README.md](benchmarking/README.md) for the train/validation-only protocol and PanNuke provenance caveat.
+`mean_probe_score`, aka `final_probe_score`, weights classification, segmentation, progression, mutation, survival, and quality-adjusted robustness at 25%, 15%, 25%, 15%, 10%, and 10%. Classification is one family even though its 12 THUNDER development tasks and linear, KNN, and 16-shot heads remain visible diagnostically. Segmentation uses PanNuke plus the two non-TCGA SegPath tasks with THUNDER's published metric; only PanNuke Fold1/Fold2 development arrays are referenced. See [benchmarking/README.md](benchmarking/README.md) for the train/validation-only protocol and PanNuke provenance caveat.
 `configs/main.yaml` intentionally uses the lr-and-curation recipe. On Labless, the run labeled `leader` reflects the recipe that passed the maintainer promotion study. Table values below are individual-checkpoint scores; leader promotion is based on the three-seed mean, not the luckiest point.
 
 ![nanopath development scores compared with held-out official evaluations](imgs/proxy_fidelity_v2.png)
@@ -52,30 +52,30 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
 
 | # | Description | final score | classification | segmentation | progression | mutation | survival | robustness quality | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | [jepa-fino](https://github.com/MedARC-AI/nanopath/tree/jepa-fino) | **0.6630** | 0.7384 | 0.6016 | 0.5903 | 0.6190 | 0.6210 | 0.9240 | @ml-and-ml |
-| 2 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm) | 0.6616 | 0.7507 | 0.6024 | 0.6136 | 0.5885 | 0.6010 | 0.9354 | @anishdulal |
-| 3 | [I-JEPA contig patch](https://github.com/MedARC-AI/nanopath/tree/JEPA-contig-patch) | 0.6586 | 0.7219 | 0.5993 | 0.5931 | 0.6148 | 0.6172 | 0.9225 | @NimaAsh |
-| 4 | [block-strided-cls](https://github.com/MedARC-AI/nanopath/tree/block-strided-cls) | 0.6561 | 0.7477 | 0.6039 | 0.5390 | 0.6066 | 0.6335 | 0.9253 | @RyanKim17920 |
-| 5 | [lr-and-curation](https://github.com/MedARC-AI/nanopath/tree/v2) | 0.6509 | 0.7048 | 0.5940 | 0.5948 | 0.6025 | 0.6199 | 0.9003 | @nevasini1 |
+| 1 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm) | **0.6733** | 0.7507 | 0.6024 | 0.6136 | 0.5885 | 0.6010 | 0.9354 | @anishdulal |
+| 2 | [jepa-fino](https://github.com/MedARC-AI/nanopath/tree/jepa-fino) | 0.6698 | 0.7384 | 0.6016 | 0.5903 | 0.6190 | 0.6210 | 0.9240 | @ml-and-ml |
+| 3 | [I-JEPA contig patch](https://github.com/MedARC-AI/nanopath/tree/JEPA-contig-patch) | 0.6648 | 0.7219 | 0.5993 | 0.5931 | 0.6148 | 0.6172 | 0.9225 | @NimaAsh |
+| 4 | [block-strided-cls](https://github.com/MedARC-AI/nanopath/tree/block-strided-cls) | 0.6591 | 0.7477 | 0.6039 | 0.5390 | 0.6066 | 0.6335 | 0.9253 | @RyanKim17920 |
+| 5 | [lr-and-curation](https://github.com/MedARC-AI/nanopath/tree/v2) | 0.6564 | 0.7048 | 0.5940 | 0.5948 | 0.6025 | 0.6199 | 0.9003 | @nevasini1 |
 
 ### Baselines
 
 | # | Name | Description | final score | classification | segmentation | progression | mutation | survival | robustness quality |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|
-| 1 | UNI-2-h | MahmoodLab UNI-2-h ViT-H/14 | **0.7070** | 0.8161 | 0.6323 | 0.7156 | 0.6408 | 0.6105 | 0.9221 |
-| 2 | GenBio-PathFM | GenBio-PathFM ViT-G/16 | 0.7065 | 0.8213 | 0.6100 | 0.7046 | 0.6232 | 0.6312 | 0.9628 |
-| 3 | H-optimus-0 | H-optimus-0 ViT-G/14-reg | 0.6960 | 0.8082 | 0.5916 | 0.6961 | 0.6485 | 0.6059 | 0.9290 |
-| 4 | Midnight-12K | Kaiko Midnight-12K ViT-G/14 | 0.6935 | 0.7761 | 0.6326 | 0.7080 | 0.6170 | 0.6100 | 0.9169 |
-| 5 | Virchow | Paige/Microsoft Virchow ViT-H/14 | 0.6889 | 0.7728 | 0.6326 | 0.6541 | 0.6291 | 0.6173 | 0.9388 |
-| 6 | [H0-mini](https://huggingface.co/bioptimus/H0-mini) | Bioptimus H0-mini ViT-B/14-reg | 0.6851 | 0.7956 | 0.6371 | 0.6586 | 0.6026 | 0.5945 | 0.9314 |
-| 7 | GigaPath | Prov-GigaPath tile encoder ViT-G/16 | 0.6781 | 0.7948 | 0.6197 | 0.6813 | 0.6130 | 0.5802 | 0.8611 |
-| 8 | GigaPath-Flash | Prov-GigaPath-Flash tile encoder ViT-S/16 | 0.6573 | 0.7742 | 0.5569 | 0.6620 | 0.5796 | 0.6122 | 0.8407 |
-| 9 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.6538 | 0.6640 | 0.6306 | 0.6748 | 0.5829 | 0.6058 | 0.8534 |
-| 10 | Kaiko-S/16 | Kaiko pathology ViT-S/16 | 0.6432 | 0.7737 | 0.6060 | 0.5963 | 0.5539 | 0.5907 | 0.8151 |
-| 11 | DINOv2-G/14 | Meta DINOv2-G/14-reg | 0.6408 | 0.6804 | 0.5753 | 0.5928 | 0.6038 | 0.6288 | 0.8617 |
-| 12 | DINOv2-L/14 | Meta DINOv2-L/14-reg | 0.6363 | 0.6632 | 0.5667 | 0.6298 | 0.6005 | 0.6009 | 0.8530 |
-| 13 | DINOv2-B/14 | Meta DINOv2-B/14-reg | 0.6241 | 0.6500 | 0.5691 | 0.5753 | 0.6062 | 0.6015 | 0.8371 |
-| 14 | DINOv2-S/14 | Meta DINOv2-S/14-reg | 0.6223 | 0.6480 | 0.5665 | 0.5364 | 0.6202 | 0.6220 | 0.8353 |
+| 1 | UNI-2-h | MahmoodLab UNI-2-h ViT-H/14 | **0.7271** | 0.8161 | 0.6323 | 0.7156 | 0.6408 | 0.6105 | 0.9221 |
+| 2 | GenBio-PathFM | GenBio-PathFM ViT-G/16 | 0.7259 | 0.8213 | 0.6100 | 0.7046 | 0.6232 | 0.6312 | 0.9628 |
+| 3 | H-optimus-0 | H-optimus-0 ViT-G/14-reg | 0.7156 | 0.8082 | 0.5916 | 0.6961 | 0.6485 | 0.6059 | 0.9290 |
+| 4 | Midnight-12K | Kaiko Midnight-12K ViT-G/14 | 0.7111 | 0.7761 | 0.6326 | 0.7080 | 0.6170 | 0.6100 | 0.9169 |
+| 5 | [H0-mini](https://huggingface.co/bioptimus/H0-mini) | Bioptimus H0-mini ViT-B/14-reg | 0.7021 | 0.7956 | 0.6371 | 0.6586 | 0.6026 | 0.5945 | 0.9314 |
+| 6 | Virchow | Paige/Microsoft Virchow ViT-H/14 | 0.7016 | 0.7728 | 0.6326 | 0.6541 | 0.6291 | 0.6173 | 0.9388 |
+| 7 | GigaPath | Prov-GigaPath tile encoder ViT-G/16 | 0.6981 | 0.7948 | 0.6197 | 0.6813 | 0.6130 | 0.5802 | 0.8611 |
+| 8 | GigaPath-Flash | Prov-GigaPath-Flash tile encoder ViT-S/16 | 0.6748 | 0.7742 | 0.5569 | 0.6620 | 0.5796 | 0.6122 | 0.8407 |
+| 9 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.6626 | 0.6640 | 0.6306 | 0.6748 | 0.5829 | 0.6058 | 0.8534 |
+| 10 | Kaiko-S/16 | Kaiko pathology ViT-S/16 | 0.6571 | 0.7737 | 0.6060 | 0.5963 | 0.5539 | 0.5907 | 0.8151 |
+| 11 | DINOv2-G/14 | Meta DINOv2-G/14-reg | 0.6442 | 0.6804 | 0.5753 | 0.5928 | 0.6038 | 0.6288 | 0.8617 |
+| 12 | DINOv2-L/14 | Meta DINOv2-L/14-reg | 0.6437 | 0.6632 | 0.5667 | 0.6298 | 0.6005 | 0.6009 | 0.8530 |
+| 13 | DINOv2-B/14 | Meta DINOv2-B/14-reg | 0.6265 | 0.6500 | 0.5691 | 0.5753 | 0.6062 | 0.6015 | 0.8371 |
+| 14 | DINOv2-S/14 | Meta DINOv2-S/14-reg | 0.6198 | 0.6480 | 0.5665 | 0.5364 | 0.6202 | 0.6220 | 0.8353 |
 
 Across the promotion set of six nanopath models and seven principal
 baselines, classification has 0.987
@@ -88,8 +88,9 @@ The complete four-task pinned THUNDER segmentation run, which additionally
 contains prohibited all-TCGA OCELOT, has lower 0.668 Pearson but retains 0.833
 cross-family concordance; the published THUNDER aggregate gives 0.719 Pearson
 and 0.818 all-pair concordance. Across the 12 models with a pre-existing
-official composite, the final score has 0.914 cross-family concordance and
-never ranks a nanopath checkpoint above GigaPath or H-optimus-0 when that
+official composite, the final score has 0.932 Pearson, 0.916 Spearman, 0.879
+all-pair concordance, and 0.943 cross-family concordance. It never ranks a
+nanopath checkpoint above GigaPath or H-optimus-0 when that
 composite ranks it below the baseline.
 
 The expanded 20-model comparison adds H0-mini, four DINOv2 sizes, Kaiko-S/16,
@@ -97,8 +98,8 @@ and GigaPath-Flash. Classification remains faithful to official THUNDER (0.988
 Pearson, 0.992 Spearman, 0.979 all-pair, and 1.000 cross-family concordance).
 Among the 18 models with a matched completed or same-checkpoint published
 THUNDER segmentation result, segmentation has 0.850 Pearson, 0.792 Spearman,
-0.848 all-pair, and 0.903 cross-family concordance. Final score has 0.940
-Pearson / 0.926 Spearman with HEST and 0.848 / 0.865 with CPTAC classification
+0.848 all-pair, and 0.903 cross-family concordance. Final score has 0.941
+Pearson / 0.941 Spearman with HEST and 0.851 / 0.872 with CPTAC classification
 across all 20 models. These values use
 the assembled fixed three-task score for every row; intermediate two-SegPath
 result files are not treated as final scores. Official-suite results validate
