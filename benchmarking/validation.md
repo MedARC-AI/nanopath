@@ -103,7 +103,7 @@ used in this calibration.
 
 ## Official-suite ordering fidelity
 
-The original promotion study contains five nanopath checkpoints and seven
+The promotion study contains six nanopath checkpoints and seven
 principal baselines. Official results were read only after the benchmark,
 manifests, and scalar were frozen.
 
@@ -116,44 +116,45 @@ measure rank agreement. None alone is treated as sufficient.
 
 | Proxy / official target | Pearson | Spearman | All-pair concordance | Cross-family concordance |
 |---|---:|---:|---:|---:|
-| Classification / THUNDER classification | 0.987 | 0.993 | 0.985 | 1.000 |
-| Segmentation / matched 3-task THUNDER segmentation | 0.735 | 0.608 | 0.758 | 0.857 |
-| Segmentation / pinned full 4-task THUNDER segmentation | 0.656 | 0.515 | 0.720 | 0.829 |
-| Final score / existing official composite | 0.923 | 0.902 | 0.864 | 0.914 |
+| Classification / THUNDER classification | 0.987 | 0.995 | 0.987 | 1.000 |
+| Segmentation / matched 3-task THUNDER segmentation | 0.743 | 0.637 | 0.782 | 0.857 |
+| Segmentation / pinned full 4-task THUNDER segmentation | 0.668 | 0.558 | 0.753 | 0.833 |
+| Final score / existing official composite, 12 models | 0.923 | 0.902 | 0.864 | 0.914 |
 
-Classification preserves all 10 pairwise orderings among the five nanopath
-checkpoints. Matched-task segmentation preserves 6 of 10 nanopath-only pairs;
+Classification preserves all 15 pairwise orderings among the six nanopath
+checkpoints. Matched-task segmentation preserves 11 of 15 nanopath-only pairs;
 its strongest evidence is cross-family separation, not exact within-family
 ordering. The full four-task segmentation diagnostic includes all-TCGA OCELOT,
 which is deliberately unavailable to nanopath. The published THUNDER aggregate
 is also tracked because published GigaPath and Midnight-12K values differ from
 the pinned harness; it yields 0.719 Pearson and 0.818 all-pair concordance.
 
-The final score never places a studied nanopath checkpoint above GigaPath or
-H-Optimus-0 when the existing official composite places it below that baseline.
+Across those 12 pre-existing composite rows, the final score never places a
+studied nanopath checkpoint above GigaPath or H-Optimus-0 when the composite
+places it below that baseline.
 
-An expanded 19-model table adds H0-mini, DINOv2-S/B/L/G, Kaiko-S/16, and
+An expanded 20-model table adds H0-mini, DINOv2-S/B/L/G, Kaiko-S/16, and
 GigaPath-Flash:
 
 | Comparison | Pearson | Spearman | All-pair concordance | Cross-family concordance |
 |---|---:|---:|---:|---:|
-| Classification / THUNDER, 19 models | 0.988 | 0.991 | 0.977 | 1.000 |
-| Segmentation / THUNDER, 17 matched results | 0.850 | 0.783 | 0.836 | 0.900 |
-| Final score / HEST, 19 models | 0.947 | 0.942 | — | — |
-| Final score / CPTAC classification, 19 models | 0.848 | 0.863 | — | — |
+| Classification / THUNDER, 20 models | 0.988 | 0.992 | 0.979 | 1.000 |
+| Segmentation / THUNDER, 18 matched results | 0.850 | 0.792 | 0.848 | 0.903 |
+| Final score / HEST, 20 models | 0.940 | 0.926 | — | — |
+| Final score / CPTAC classification, 20 models | 0.848 | 0.865 | — | — |
 
 DINOv2-S and DINOv2-G segmentation are omitted because only different-size
 published DINO proxies were available. These exclusions are fixed by result
 identity, not model performance.
 
 The exact comparison input is
-[proxy-fidelity data](proxy_fidelity_v2.csv). The original 12 rows use the
+[proxy-fidelity data](proxy_fidelity_v2.csv). The 13 promotion rows use the
 assembled fixed result, which combines PanNuke with both SegPath tasks. This
 is important: their retained non-segmentation artifact paths happen to contain
 intermediate two-SegPath metrics and must not be reopened as if those partial
 runs were the final score. The seven added rows use their completed fixed
 suite results. Empty DINOv2-S/G segmentation cells prevent different-size
-published proxies from silently entering the 17-model statistic.
+published proxies from silently entering the 18-model statistic.
 
 ## Random-feature null audit
 

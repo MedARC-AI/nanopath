@@ -77,27 +77,29 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
 | 13 | DINOv2-B/14 | Meta DINOv2-B/14-reg | 0.6241 | 0.6500 | 0.5691 | 0.5753 | 0.6062 | 0.6015 | 0.8371 |
 | 14 | DINOv2-S/14 | Meta DINOv2-S/14-reg | 0.6223 | 0.6480 | 0.5665 | 0.5364 | 0.6202 | 0.6220 | 0.8353 |
 
-Across the promotion set of five nanopath models and seven principal
+Across the promotion set of six nanopath models and seven principal
 baselines, classification has 0.987
-Pearson, 0.993 Spearman, and 0.985 all-pair concordance with official THUNDER
-classification. The nanopath-only ordering is identical.
+Pearson, 0.995 Spearman, and 0.987 all-pair concordance with official THUNDER
+classification. Cross-family concordance is 1.000, and all 15 nanopath-only
+pairwise orderings are identical.
 For the three THUNDER segmentation tasks present in this development proxy, the
-corresponding values are 0.735 and 0.758, with 0.857 cross-family concordance.
+corresponding values are 0.743 and 0.782, with 0.857 cross-family concordance.
 The complete four-task pinned THUNDER segmentation run, which additionally
-contains prohibited all-TCGA OCELOT, has lower 0.656 Pearson but retains 0.829
+contains prohibited all-TCGA OCELOT, has lower 0.668 Pearson but retains 0.833
 cross-family concordance; the published THUNDER aggregate gives 0.719 Pearson
-and 0.818 all-pair concordance. The final score has 0.914 cross-family concordance
-with the existing official composite and never ranks a nanopath checkpoint
-above GigaPath or H-optimus-0 when that composite ranks it below the baseline.
+and 0.818 all-pair concordance. Across the 12 models with a pre-existing
+official composite, the final score has 0.914 cross-family concordance and
+never ranks a nanopath checkpoint above GigaPath or H-optimus-0 when that
+composite ranks it below the baseline.
 
-The expanded 19-model comparison adds H0-mini, four DINOv2 sizes, Kaiko-S/16,
+The expanded 20-model comparison adds H0-mini, four DINOv2 sizes, Kaiko-S/16,
 and GigaPath-Flash. Classification remains faithful to official THUNDER (0.988
-Pearson, 0.991 Spearman, 0.977 all-pair, and 1.000 cross-family concordance).
-Among the 17 models with a matched completed or same-checkpoint published
-THUNDER segmentation result, segmentation has 0.850 Pearson, 0.783 Spearman,
-0.836 all-pair, and 0.900 cross-family concordance. Final score has 0.947
-Pearson / 0.942 Spearman with HEST and 0.848 / 0.863 with CPTAC classification
-across all 19 models. These values use
+Pearson, 0.992 Spearman, 0.979 all-pair, and 1.000 cross-family concordance).
+Among the 18 models with a matched completed or same-checkpoint published
+THUNDER segmentation result, segmentation has 0.850 Pearson, 0.792 Spearman,
+0.848 all-pair, and 0.903 cross-family concordance. Final score has 0.940
+Pearson / 0.926 Spearman with HEST and 0.848 / 0.865 with CPTAC classification
+across all 20 models. These values use
 the assembled fixed three-task score for every row; intermediate two-SegPath
 result files are not treated as final scores. Official-suite results validate
 the frozen benchmark components, and their test samples do not enter the
