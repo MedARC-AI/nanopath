@@ -13,7 +13,7 @@ from safetensors.torch import load_file
 from baselines.dinov2_small_baseline import run_frozen_baseline
 from model import ViT
 
-MIDNIGHT12K_VITG14 = (1536, 40, 24, 37, "swiglu", True, None, 0)
+MIDNIGHT12K_VITG14 = (1536, 40, 24, 37, 14, "swiglu", True, None, 0)
 
 
 class Midnight12KViT(ViT):
@@ -26,7 +26,7 @@ class Midnight12KViT(ViT):
 
 
 def load_probe_model(checkpoint_path, device):
-    model = Midnight12KViT("midnight12k_vitg14", variant_cfg=MIDNIGHT12K_VITG14)
+    model = Midnight12KViT(variant_cfg=MIDNIGHT12K_VITG14)
     raw = load_file(str(Path(checkpoint_path) / "model.safetensors"))
     state = {
         "cls_token": raw["embeddings.cls_token"],

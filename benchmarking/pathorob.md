@@ -2,7 +2,7 @@
 
 PathoROB is an auxiliary check that a representation is insensitive to center
 while still separating biological classes. It contributes 10% of the final
-score; the weighted predictive families contribute the other 90%.
+score; the five task families contribute the other 90%.
 
 ## Data and fixed adapter
 
@@ -24,7 +24,7 @@ PathoROB intentionally does not call a model's configurable
 `probe_features()`. Its fixed adapter concatenates the final normalized CLS
 token and the mean normalized patch token, then L2-normalizes the result. This
 keeps the robustness test comparable even when a nanopath recipe changes
-test-time layer or view aggregation for predictive probes.
+test-time layer or view aggregation for task probes.
 
 ## Different-slide neighbors
 
@@ -57,4 +57,4 @@ robustness_quality_mean = mean(Camelyon quality, Tolkach ESCA quality)
 Raw `SO`, `OS`, robustness index, and biological balanced accuracy remain in
 the result for diagnosis. Only `robustness_quality_mean` enters the final
 scalar, at 10%. This prevents a center-invariant but biologically collapsed
-representation from dominating genuinely predictive improvements.
+representation from dominating genuine task improvements.

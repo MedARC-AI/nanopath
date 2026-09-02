@@ -12,10 +12,10 @@ import torch.nn as nn
 from baselines.dinov2_small_baseline import run_frozen_baseline
 
 
-class GigaPathModel(nn.Module):
+class GigaPathFlashModel(nn.Module):
     def __init__(self, backbone):
         super().__init__()
-        self.backbone, self.registers = backbone, 0
+        self.backbone = backbone
 
     def forward(self, x):
         tokens = self.backbone.forward_features(x)
@@ -39,7 +39,7 @@ def load_probe_model(checkpoint_path, device):
         reg_tokens=0,
     )
     model.load_state_dict(torch.load(checkpoint_path, map_location="cpu", weights_only=True, mmap=True), strict=True)
-    return GigaPathModel(model).to(device).eval()
+    return GigaPathFlashModel(model).to(device).eval()
 
 
 if __name__ == "__main__":

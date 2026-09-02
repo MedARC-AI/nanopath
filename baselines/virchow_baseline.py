@@ -16,7 +16,7 @@ from baselines.dinov2_small_baseline import run_frozen_baseline
 class VirchowModel(nn.Module):
     def __init__(self, backbone):
         super().__init__()
-        self.backbone, self.registers = backbone, 0
+        self.backbone = backbone
 
     def forward(self, x):
         # Virchow's model card defines model(x) as [cls, patch tokens].

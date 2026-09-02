@@ -12,11 +12,11 @@ import torch
 from baselines.dinov2_small_baseline import run_frozen_baseline
 from model import ViT
 
-HOPTIMUS0_VITG14_REG = (1536, 40, 24, 16, "swiglu", False, None)
+HOPTIMUS0_VITG14_REG = (1536, 40, 24, 16, 14, "swiglu", False, None)
 
 
 def load_probe_model(checkpoint_path, device):
-    model = ViT("hoptimus0_vitg14_reg", variant_cfg=HOPTIMUS0_VITG14_REG)
+    model = ViT(variant_cfg=HOPTIMUS0_VITG14_REG)
     state = {}
     for key, value in torch.load(checkpoint_path, map_location="cpu", weights_only=False).items():
         key = key.replace("reg_token", "register_tokens").replace("mlp.fc1", "mlp.w12").replace("mlp.fc2", "mlp.w3")

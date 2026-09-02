@@ -2,7 +2,7 @@
 # DINOv2 checkpoints; the current variants can load Meta's pretrained weights.
 # Attention runs on `F.scaled_dot_product_attention` so we get FlashAttention-2
 # on H100 bf16 with no third-party kernel dependency. Module names below match
-# Meta's checkpoint key layout exactly, so `load_dinov2_pretrained(model)` does
+# Meta's checkpoint key layout exactly, so `load_pretrained(model)` does
 # a strict load.
 #
 # DINOHead is the small MLP + weight-normed classifier used by train.py for the
@@ -15,12 +15,12 @@ import torch.nn.functional as F
 from torchvision import transforms
 
 
-# (dim, depth, heads, pretrain_grid, ffn, pos_has_cls, weight URL[, registers]) for each supported variant.
-DINOV2_VARIANTS = {
-    "dinov2_vits14_reg": (384, 12, 6, 37, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vits14/dinov2_vits14_reg4_pretrain.pth"),
-    "dinov2_vitb14_reg": (768, 12, 12, 37, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitb14/dinov2_vitb14_reg4_pretrain.pth"),
-    "dinov2_vitl14_reg": (1024, 24, 16, 37, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitl14/dinov2_vitl14_reg4_pretrain.pth"),
-    "dinov2_vitg14_reg": (1536, 40, 24, 37, "swiglu", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitg14/dinov2_vitg14_reg4_pretrain.pth"),
+# (dim, depth, heads, pretrain_grid, patch, ffn, pos_has_cls, weight URL[, registers]) per variant.
+VIT_VARIANTS = {
+    "dinov2_vits14_reg": (384, 12, 6, 37, 14, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vits14/dinov2_vits14_reg4_pretrain.pth"),
+    "dinov2_vitb14_reg": (768, 12, 12, 37, 14, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitb14/dinov2_vitb14_reg4_pretrain.pth"),
+    "dinov2_vitl14_reg": (1024, 24, 16, 37, 14, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitl14/dinov2_vitl14_reg4_pretrain.pth"),
+    "dinov2_vitg14_reg": (1536, 40, 24, 37, 14, "swiglu", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitg14/dinov2_vitg14_reg4_pretrain.pth"),
 }
 
 
@@ -100,7 +100,7 @@ class Block(nn.Module):
         return x
 
 
-# Width, depth, grid, and register count are configurable; the default key layout matches
+# Width, depth, patch/grid size, and register count are configurable; the default key layout matches
 # Meta's DINOv2 register checkpoints
 # (cls_token, register_tokens, pos_embed (1, 1+37^2, dim), mask_token (1, dim), patch_embed.proj,
 # blocks.{i}.{norm1,norm2,attn.qkv,attn.proj,ls1,ls2,mlp.fc1,mlp.fc2}, norm).
@@ -111,10 +111,9 @@ class ViT(nn.Module):
 
     def __init__(self, variant="dinov2_vits14_reg", drop_path_rate=0.0, variant_cfg=None):
         super().__init__()
-        cfg = variant_cfg or DINOV2_VARIANTS[variant]
-        dim, depth, heads, pretrain_grid, ffn, pos_has_cls, _ = cfg[:7]
-        mlp_ratio, patch, registers = 4.0, 14, cfg[7] if len(cfg) > 7 else 4
-        self.variant = variant
+        cfg = variant_cfg or VIT_VARIANTS[variant]
+        dim, depth, heads, pretrain_grid, patch, ffn, pos_has_cls, self.pretrained_url = cfg[:8]
+        mlp_ratio, registers = 4.0, cfg[8] if len(cfg) > 8 else 4
         self.patch_size, self.registers, self.embed_dim = patch, registers, dim
         self._pretrain_grid, self._pos_has_cls = pretrain_grid, pos_has_cls
         self.patch_embed = nn.Module()
@@ -174,22 +173,19 @@ class ViT(nn.Module):
             "patches": x[:, 1 + self.registers :],
         }
 
-    # Default probe contract: encode_image returns [registers || patches] for segmentation
+    # Default probe contract: encode_image returns patches for segmentation
     # and probe_features returns CLS for pooled probes. Recipes may override either method
     # to define their test-time feature aggregation without changing the locked probe suite.
     def encode_image(self, x, checkpoint=False):
-        out = self(x, checkpoint=checkpoint)
-        return torch.cat([out["registers"], out["patches"]], dim=1)
+        return self(x, checkpoint=checkpoint)["patches"]
 
     def probe_features(self, x):
         return self(x)["cls"]
 
 
-# Strict-load Meta's pretrained weights for the model's declared variant.
-# Strict matches our key layout against Meta's; any drift fails loudly per AGENTS.md.
-def load_dinov2_pretrained(model):
-    *_, url = DINOV2_VARIANTS[model.variant]
-    state = torch.hub.load_state_dict_from_url(url, progress=False, map_location="cpu")
+# Strict-load the model's declared pretrained weights; incompatible layouts fail loudly.
+def load_pretrained(model):
+    state = torch.hub.load_state_dict_from_url(model.pretrained_url, progress=False, map_location="cpu")
     model.load_state_dict(state, strict=True)
     return model
 

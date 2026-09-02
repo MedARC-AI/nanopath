@@ -12,11 +12,11 @@ import torch
 from baselines.dinov2_small_baseline import run_frozen_baseline
 from model import ViT
 
-OPENMIDNIGHT_VITG14_REG = (1536, 40, 24, 16, "swiglu", True, None)
+OPENMIDNIGHT_VITG14_REG = (1536, 40, 24, 16, 14, "swiglu", True, None)
 
 
 def load_probe_model(checkpoint_path, device):
-    model = ViT("openmidnight_vitg14_reg", variant_cfg=OPENMIDNIGHT_VITG14_REG)
+    model = ViT(variant_cfg=OPENMIDNIGHT_VITG14_REG)
     raw = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     raw = raw["teacher"] if "teacher" in raw else raw
     state = {}

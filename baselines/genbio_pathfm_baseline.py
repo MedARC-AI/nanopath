@@ -37,7 +37,7 @@ def load_probe_model(checkpoint_path, device):
     backbone = VisionTransformer(**json.loads(Path(path, "config.json").read_text()))
     backbone.load_state_dict(torch.load(str(Path(path, "model.pth")), map_location="cpu", weights_only=False), strict=True)
     class _GenBioPathFM(nn.Module):
-        def __init__(self, b): super().__init__(); self.backbone, self.registers = b, 0
+        def __init__(self, b): super().__init__(); self.backbone = b
         def _encode(self, x):
             tokens, (h, w) = self.backbone.prepare_tokens(x)
             rope = self.backbone.rope_embed(H=h, W=w)

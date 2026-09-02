@@ -102,8 +102,6 @@ class TCGATileDataset(Dataset):
                 f"`python prepare.py {cfg['config_path']} download=True` to fetch them from "
                 f"the medarc/nanopath HF dataset before training."
             )
-        if int(train["global_size"]) > TILE_SIZE:
-            raise ValueError(f"global_size must be <= {TILE_SIZE}, got global_size={train['global_size']}")
         # Lazy ParquetFile handles, opened on first __getitem__ in each worker
         # so fork-children own their own file positions.
         self._readers = [None] * len(self.shards)
@@ -128,32 +126,17 @@ class TCGATileDataset(Dataset):
         self.global_views = int(train["global_views"])
         self.local_views = int(train["local_views"])
         self.to_tensor = v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])
-        # Global crops carry the high-context view used by the DINO/iBOT objectives.
-        self.global_aug = v2.Compose(
-            [
-                v2.RandomResizedCrop(train["global_size"], scale=tuple(data["global_crop_scale"]), antialias=True),
-                *([HEDJitter(data["hed_jitter"])] if data["hed_jitter"] > 0 else []),
-                v2.RandomHorizontalFlip(),
-                v2.RandomVerticalFlip(),
-                v2.ColorJitter(data["color_jitter"], data["color_jitter"], data["color_jitter_saturation"], 0.0),
-                v2.RandomGrayscale(p=0.1),
-                v2.RandomApply([v2.GaussianBlur(9, sigma=(0.1, 1.8))], p=0.35),
-                v2.Normalize(mean=mean, std=std),
-            ]
-        )
-        # Local crops force the encoder to align small tissue regions with the global context.
-        self.local_aug = v2.Compose(
-            [
-                v2.RandomResizedCrop(train["local_size"], scale=tuple(data["local_crop_scale"]), antialias=True),
-                *([HEDJitter(data["hed_jitter"])] if data["hed_jitter"] > 0 else []),
-                v2.RandomHorizontalFlip(),
-                v2.RandomVerticalFlip(),
-                v2.ColorJitter(data["color_jitter"], data["color_jitter"], data["color_jitter_saturation"], 0.0),
-                v2.RandomGrayscale(p=0.1),
-                v2.RandomApply([v2.GaussianBlur(9, sigma=(0.1, 1.8))], p=0.35),
-                v2.Normalize(mean=mean, std=std),
-            ]
-        )
+        # Global and local views differ only in crop scale/size; the stochastic tail is shared.
+        augment = [
+            *([HEDJitter(data["hed_jitter"])] if data["hed_jitter"] > 0 else []),
+            v2.RandomHorizontalFlip(), v2.RandomVerticalFlip(),
+            v2.ColorJitter(data["color_jitter"], data["color_jitter"], data["color_jitter_saturation"], 0.0),
+            v2.RandomGrayscale(p=0.1),
+            v2.RandomApply([v2.GaussianBlur(9, sigma=(0.1, 1.8))], p=0.35),
+            v2.Normalize(mean=mean, std=std),
+        ]
+        self.global_aug = v2.Compose([v2.RandomResizedCrop(train["global_size"], scale=tuple(data["global_crop_scale"]), antialias=True), *augment])
+        self.local_aug = v2.Compose([v2.RandomResizedCrop(train["local_size"], scale=tuple(data["local_crop_scale"]), antialias=True), *augment])
 
     # Dataset length is the number of tiles in this train/val split.
     def __len__(self):
@@ -186,7 +169,7 @@ class TCGATileDataset(Dataset):
                 break
             idx = random.randint(0, self.shard_of.shape[0] - 1)
         slide_stem = rel.split("/", 1)[0]
-        patient_id = "-".join(slide_stem.split("-")[:3])
+        patient_id = patient_id_from_relpath(rel)
         slide_key = int.from_bytes(hashlib.blake2b(slide_stem.encode(), digest_size=8).digest(), "big") & 0x7FFFFFFFFFFFFFFF
         patient_key = int.from_bytes(hashlib.blake2b(patient_id.encode(), digest_size=8).digest(), "big") & 0x7FFFFFFFFFFFFFFF
         # Augmentations are stochastic per view; reproducibility comes from worker seeds.

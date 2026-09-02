@@ -25,8 +25,6 @@ progression     = UCLA Lung macro-OVR AUC
 mutation        = SurGen RAS macro-OVR AUC
 survival        = mean(LEOPARD BCR c-index, CPTAC-PDA OS c-index)
 
-predictive_mean = mean(classification, segmentation, progression,
-                       mutation, survival)  # diagnostic only
 robustness_quality = mean over PathoROB subsets of
                      (robustness index + biological balanced accuracy) / 2
 

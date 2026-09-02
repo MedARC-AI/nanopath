@@ -15,7 +15,7 @@ sys.path.insert(0, str(REPO_DIR))
 import torch
 import yaml
 
-from model import ViT, load_dinov2_pretrained
+from model import ViT, load_pretrained
 from probe import (
     TASK_FIELDS,
     completed_probe_summary,
@@ -132,7 +132,7 @@ def run_dinov2_baseline(script, project, recipe_id, variant, output_default, pre
     torch.manual_seed(seed)
     model = ViT(variant=variant)
     if pretrained:
-        model = load_dinov2_pretrained(model)
+        model = load_pretrained(model)
     else:
         # The loader normally overwrites these token/pos parameters; initialize
         # them here so the random baseline is not partly zero by construction.

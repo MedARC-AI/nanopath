@@ -12,11 +12,11 @@ import torch
 from baselines.dinov2_small_baseline import run_frozen_baseline
 from model import ViT
 
-UNI2H_VITH14 = (1536, 24, 24, 16, "swiglu", False, None, 8)
+UNI2H_VITH14 = (1536, 24, 24, 16, 14, "swiglu", False, None, 8)
 
 
 def load_probe_model(checkpoint_path, device):
-    model = ViT("uni2h_vith14", variant_cfg=UNI2H_VITH14)
+    model = ViT(variant_cfg=UNI2H_VITH14)
     raw = torch.load(Path(checkpoint_path) / "pytorch_model.bin", map_location="cpu", weights_only=True)
     state = {}
     for key, value in raw.items():

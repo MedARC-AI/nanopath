@@ -456,7 +456,7 @@ def embed_segmentation_dataset(model, mean, std, dataset, split, device, transfo
                     if len(batch_images) == EMBED_BATCH_SIZE or (i == len(tiles) and crop_index == len(crops)):
                         images = torch.stack(batch_images).to(device)
                         with autocast:
-                            batch_feats = model.encode_image((images - mean) / std)[:, model.registers:]
+                            batch_feats = model.encode_image((images - mean) / std)
                         # Preserve model-defined test-time feature aggregation while preventing an
                         # upsampled token grid from multiplying the shared decoder's quadratic cost.
                         # Ordinary outputs are unchanged; expanded spatial grids are area-pooled to
@@ -575,7 +575,7 @@ def inline_segmentation_f1(model, mean, std, dataset, device, transform):
 
 # PathoROB robustness index over held-out camelyon + tolkach_esca subsets. Its published
 # adapter is fixed to final CLS plus mean patch tokens, so it intentionally reads forward()
-# rather than the model-defined probe_features() used by predictive pooled probes.
+# rather than the model-defined probe_features() used by the other pooled probes.
 def inline_pathorob(model, mean, std, device, transform):
     import io
     import numpy as np
@@ -1203,10 +1203,8 @@ def run_probe_job(request_path):
     metrics["robustness_biological_balanced_accuracy_mean"] = sum(metrics[f"probe_{d}_biological_balanced_accuracy"] for d in robustness) / len(robustness)
     metrics["robustness_quality_mean"] = sum(metrics[f"probe_{d}_robustness_quality"] for d in robustness) / len(robustness)
 
-    predictive_metrics = ("classification_mean_f1", "seg_mean_f1", "slide_mean_auc", "auc_mean", "survival_mean_cindex")
     metrics["probe_protocol_version"] = PROBE_PROTOCOL_VERSION
-    metrics["predictive_mean"] = sum(metrics[k] for k in predictive_metrics) / len(predictive_metrics)
-    score_metrics = (*predictive_metrics, "robustness_quality_mean")
+    score_metrics = ("classification_mean_f1", "seg_mean_f1", "slide_mean_auc", "auc_mean", "survival_mean_cindex", "robustness_quality_mean")
     metrics["final_score"] = sum(weight * metrics[key] for weight, key in zip((0.25, 0.15, 0.25, 0.15, 0.10, 0.10), score_metrics))
 
     print(

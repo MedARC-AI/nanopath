@@ -18,8 +18,7 @@ from baselines.dinov2_small_baseline import run_frozen_baseline
 class H0MiniModel(nn.Module):
     def __init__(self, backbone):
         super().__init__()
-        # encode_image() already removes the class and four register tokens.
-        self.backbone, self.registers = backbone, 0
+        self.backbone = backbone
 
     def forward(self, x):
         tokens = self.backbone(x)
