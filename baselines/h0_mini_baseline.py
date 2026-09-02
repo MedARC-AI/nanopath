@@ -24,17 +24,17 @@ class H0MiniModel(nn.Module):
     def forward(self, x):
         tokens = self.backbone(x)
         return {
-            "x_norm_clstoken": tokens[:, 0],
-            "x_norm_patchtokens": tokens[:, self.backbone.num_prefix_tokens :],
+            "cls": tokens[:, 0],
+            "patches": tokens[:, self.backbone.num_prefix_tokens :],
         }
 
     def encode_image(self, x):
-        return self.forward(x)["x_norm_patchtokens"]
+        return self.forward(x)["patches"]
 
     def probe_features(self, x):
         # Match H0-mini's official THUNDER frozen representation.
         out = self.forward(x)
-        return torch.cat([out["x_norm_clstoken"], out["x_norm_patchtokens"].mean(1)], dim=-1)
+        return torch.cat([out["cls"], out["patches"].mean(1)], dim=-1)
 
 
 def load_probe_model(checkpoint_path, device):

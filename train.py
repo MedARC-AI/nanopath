@@ -1,9 +1,9 @@
-# Continual DINOv2 pretraining on TCGA tiles (single-GPU). Three loss terms:
+# DINO/iBOT pretraining on TCGA tiles (single-GPU), currently initialized from DINOv2. Three loss terms:
 # DINO CLS self-distillation (Sinkhorn-Knopp centred teacher targets),
 # iBOT masked-patch self-distillation, and a KDE uniformity term on the
 # L2-normalised CLS tokens. YAML drives the tunable knobs (backbone variant,
 # LR + LR scheduler, drop path, layerwise decay, KDE weight + concentration,
-# FLOP/sample budgets, batch size); other DINOv2 hyperparameters are hardcoded
+# FLOP/sample budgets, batch size); other objective hyperparameters are hardcoded
 # inline at their use sites.
 
 import atexit
@@ -30,7 +30,7 @@ from torch.utils.data import DataLoader
 from torch.utils.flop_counter import FlopCounterMode
 
 from dataloader import TCGATileDataset, TILE_SIZE
-from model import DINOHead, DinoV2ViT, load_dinov2_pretrained
+from model import DINOHead, ViT, load_dinov2_pretrained
 from probe import (
     completed_probe_summary,
     collect_probe_results,
@@ -231,7 +231,7 @@ def main():
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     variant = cfg["model"]["type"]
-    student_backbone = load_dinov2_pretrained(DinoV2ViT(variant=variant, drop_path_rate=dino_cfg["drop_path_rate"])).to(device)
+    student_backbone = load_dinov2_pretrained(ViT(variant=variant, drop_path_rate=dino_cfg["drop_path_rate"])).to(device)
     teacher_backbone = deepcopy(student_backbone)
     teacher_backbone.train(False)
     for p in teacher_backbone.parameters():
@@ -422,18 +422,18 @@ def main():
     def compute_losses(gf, lf, b, masks, mask_idx, mask_w, t_temp, k_scale, ckpt=False):
         with torch.no_grad():
             t = teacher_backbone(gf)
-            t_cls = teacher_dino_head(t["x_norm_clstoken"]).chunk(train_cfg["global_views"])
+            t_cls = teacher_dino_head(t["cls"]).chunk(train_cfg["global_views"])
             t_prob = sinkhorn(torch.cat((t_cls[1], t_cls[0])), t_temp).view(2, b, -1)
-            t_patch_prob = sinkhorn(teacher_ibot_head(t["x_norm_patchtokens"].flatten(0, 1)[mask_idx]), t_temp)
+            t_patch_prob = sinkhorn(teacher_ibot_head(t["patches"].flatten(0, 1)[mask_idx]), t_temp)
         sg = student_backbone(gf, masks=masks, checkpoint=ckpt)
         sl = student_backbone(lf, checkpoint=ckpt)
-        sg_cls, sl_cls = student_dino_head(sg["x_norm_clstoken"]), student_dino_head(sl["x_norm_clstoken"])
+        sg_cls, sl_cls = student_dino_head(sg["cls"]), student_dino_head(sl["cls"])
         L = train_cfg["local_views"]
         local_loss = sum(dino_ce(x, y) for x in sl_cls.chunk(L) for y in t_prob) / (2 * L + 2)
         global_loss = dino_ce(sg_cls, t_prob.flatten(0, 1)) * 2 / (2 * L + 2)
-        s_patch = student_ibot_head(sg["x_norm_patchtokens"].flatten(0, 1)[mask_idx])
+        s_patch = student_ibot_head(sg["patches"].flatten(0, 1)[mask_idx])
         ibot_loss = -(t_patch_prob * F.log_softmax(s_patch / 0.1, dim=-1)).sum(-1).mul(mask_w).sum() / max(1, b * 2)
-        kde = dino_cfg["kde_loss_weight"] * k_scale * sum(kde_loss(x, dino_cfg["kde_concentration"]) for x in sg["x_norm_clstoken"].chunk(train_cfg["global_views"]))
+        kde = dino_cfg["kde_loss_weight"] * k_scale * sum(kde_loss(x, dino_cfg["kde_concentration"]) for x in sg["cls"].chunk(train_cfg["global_views"]))
         return local_loss + global_loss, ibot_loss, kde
 
     # Held-out validation pass: same DINO + iBOT + KDE losses on `val_batches` of the val split.
@@ -727,13 +727,13 @@ def main():
         "probe_target_fractions": [None if max_train_samples == 0 else target / max_train_samples for target in probe_targets],
         **({} if probe_state is None else completed_probe_summary(output_dir)),
     }
-    if probe_state is not None and "final_probe_score" not in summary:
-        raise ValueError("probe.enabled is true but final_probe_score is missing; check probe.count, probe failures, and final checkpoint scheduling")
+    if probe_state is not None and "final_score" not in summary:
+        raise ValueError("probe.enabled is true but final_score is missing; check probe.count, probe failures, and final checkpoint scheduling")
     summary_path.write_text(json.dumps(summary, indent=2) + "\n")
     print(
         f"{console_prefix()} Summary  "
         f"steps: {step}  train_wall: {train_loop_wall_seconds:.2f}s  "
-        f"final_probe_score: {summary.get('final_probe_score')}",
+        f"final_score: {summary.get('final_score')}",
         flush=True,
     )
     for key, value in summary.items():

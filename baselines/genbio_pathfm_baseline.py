@@ -53,7 +53,7 @@ def load_probe_model(checkpoint_path, device):
         def forward(self, x):
             b, _, h, w = x.shape
             cls, patch = self._encode(x.reshape(b * 3, 1, h, w))
-            return {"x_norm_clstoken": torch.cat([cls.unflatten(0, (b, 3))[:, i] for i in range(3)], dim=-1), "x_norm_patchtokens": torch.cat([patch.unflatten(0, (b, 3))[:, i] for i in range(3)], dim=-1)}
+            return {"cls": torch.cat([cls.unflatten(0, (b, 3))[:, i] for i in range(3)], dim=-1), "patches": torch.cat([patch.unflatten(0, (b, 3))[:, i] for i in range(3)], dim=-1)}
         def encode_image(self, x): return self._stack(x, patches=True)
         def probe_features(self, x): return self._stack(x)
     return _GenBioPathFM(backbone).to(device).eval()

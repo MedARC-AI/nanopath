@@ -68,7 +68,7 @@ SLIDE_DATASETS = ["ucla_lung"]
 AUC_DATASETS = ["surgen"]
 SURVIVAL_DATASETS = ["leopard_bcr", "cptac_pda_os"]
 ROBUSTNESS_DATASETS = ["pathorob"]
-MEAN_PROBE_DATASETS = [
+PROBE_DATASETS = [
     *CLASSIFICATION_DATASETS, *SEGMENTATION_DATASETS,
     "ucla_lung", "surgen", "leopard_bcr", "cptac_pda_os", "pathorob",
 ]
@@ -160,7 +160,7 @@ def prepare_probe_state(cfg, output_dir):
             if dataset not in supported:
                 raise ValueError(f"unsupported {request_key}: {dataset}")
     configured = [d for request_key in TASK_FIELDS for d in data[request_key]]
-    assert set(configured) == set(MEAN_PROBE_DATASETS), f"probe config must contain exactly {MEAN_PROBE_DATASETS}, got {configured}"
+    assert set(configured) == set(PROBE_DATASETS), f"probe config must contain exactly {PROBE_DATASETS}, got {configured}"
     state = {"paths": paths, "data": data}
     write_probe_state(state)
     return state
@@ -607,7 +607,7 @@ def inline_pathorob(model, mean, std, device, transform):
                 x = batch.to(device, non_blocking=True)
                 with autocast:
                     o = model((x - mean) / std)
-                    feat = torch.cat([o["x_norm_clstoken"], o["x_norm_patchtokens"].mean(dim=1)], dim=-1)
+                    feat = torch.cat([o["cls"], o["patches"].mean(dim=1)], dim=-1)
                 embs.append(feat.float().cpu().numpy())
         embs = np.concatenate(embs).astype(np.float32)
         embs /= np.maximum(np.linalg.norm(embs, axis=1, keepdims=True), 1e-12)
@@ -1000,7 +1000,7 @@ def worker_probe_transforms(cfg):
 
 def run_probe_job(request_path):
     import importlib
-    from model import DinoV2ViT
+    from model import ViT
 
     # Fixed seeds keep every head, minibatch order, and support draw stable.
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
@@ -1034,7 +1034,7 @@ def run_probe_job(request_path):
     else:
         if checkpoint is None:
             checkpoint = torch.load(request["checkpoint_path"], map_location="cpu", weights_only=False)
-        model = DinoV2ViT(variant=cfg["model"]["type"]).to(device).eval()
+        model = ViT(variant=cfg["model"]["type"]).to(device).eval()
         # Recipes can compare live model weights or EMA weights without changing probe code.
         state_key = {"ema": "model_ema", "model": "model"}[str(cfg["probe"]["model_weights"])]
         model.load_state_dict(checkpoint[state_key], strict=True)
@@ -1207,11 +1207,11 @@ def run_probe_job(request_path):
     metrics["probe_protocol_version"] = PROBE_PROTOCOL_VERSION
     metrics["predictive_mean"] = sum(metrics[k] for k in predictive_metrics) / len(predictive_metrics)
     score_metrics = (*predictive_metrics, "robustness_quality_mean")
-    metrics["mean_probe_score"] = sum(weight * metrics[key] for weight, key in zip((0.25, 0.15, 0.25, 0.15, 0.10, 0.10), score_metrics))
+    metrics["final_score"] = sum(weight * metrics[key] for weight, key in zip((0.25, 0.15, 0.25, 0.15, 0.10, 0.10), score_metrics))
 
     print(
         f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
-        f"result: mean_probe_score={metrics.get('mean_probe_score')}  "
+        f"result: final_score={metrics.get('final_score')}  "
         f"linear={metrics.get('linear_mean_f1')}  knn={metrics.get('knn_mean_f1')}  "
         f"fewshot={metrics.get('fewshot_mean_f1')}  classification={metrics.get('classification_mean_f1')}  "
         f"slide={metrics.get('slide_mean_auc')}  seg={metrics.get('seg_mean_f1')}  "
@@ -1270,7 +1270,7 @@ def collect_probe_results(state, wandb_run, metrics_path):
             handle.write(json.dumps(event_payload) + "\n")
         print(
             f"{console_prefix()} Probe  [{result['train_step']}]  "
-            f"log_result: mean_probe_score={metrics.get('mean_probe_score')}  "
+            f"log_result: final_score={metrics.get('final_score')}  "
             f"wall={result['wall_seconds']:.2f}s",
             flush=True,
         )
@@ -1285,13 +1285,13 @@ def collect_probe_results(state, wandb_run, metrics_path):
     write_probe_state(state)
 
 
-# Flatten the latest successful probe result into summary.json final_probe_* keys.
+# Flatten the latest successful probe result into summary.json.
 def completed_probe_summary(output_dir):
     summary = {}
     final_result = None
     for result_path in sorted(probe_paths(output_dir)["results_dir"].glob("step_*.json")):
         result = json.loads(result_path.read_text())
-        if "mean_probe_score" not in result["metrics"]:
+        if "final_score" not in result["metrics"]:
             continue
         if final_result is None or int(result["train_step"]) > int(final_result["train_step"]):
             final_result = result
@@ -1302,8 +1302,8 @@ def completed_probe_summary(output_dir):
     summary["final_probe_target_fraction"] = float(final_result["target_fraction"])
     summary["final_probe_wall_seconds"] = float(final_result["wall_seconds"])
     for key, value in final_result["metrics"].items():
-        flat = "score" if key == "mean_probe_score" else key.removeprefix("probe_")
-        summary[f"final_probe_{flat}"] = float(value)
+        flat = key.removeprefix("probe_")
+        summary[key if key == "final_score" else f"final_probe_{flat}"] = float(value)
     return summary
 
 

@@ -20,10 +20,10 @@ class KaikoModel(nn.Module):
 
     def forward(self, x):
         tokens = self.backbone.forward_features(x)
-        return {"x_norm_clstoken": tokens[:, 0], "x_norm_patchtokens": tokens[:, 1:]}
+        return {"cls": tokens[:, 0], "patches": tokens[:, 1:]}
 
     def encode_image(self, x):
-        return self.forward(x)["x_norm_patchtokens"]
+        return self.forward(x)["patches"]
 
     def probe_features(self, x):
         return self.backbone(x)

@@ -11,18 +11,18 @@ import torch
 from safetensors.torch import load_file
 
 from baselines.dinov2_small_baseline import run_frozen_baseline
-from model import DinoV2ViT
+from model import ViT
 
 MIDNIGHT12K_VITG14 = (1536, 40, 24, 37, "swiglu", True, None, 0)
 
 
-class Midnight12KViT(DinoV2ViT):
+class Midnight12KViT(ViT):
     # Hugging Face DINOv2 interpolates this non-register checkpoint without antialiasing.
     pos_interpolation_antialias = False
 
     def probe_features(self, x):
         out = self(x)
-        return torch.cat([out["x_norm_clstoken"], out["x_norm_patchtokens"].mean(1)], dim=-1)
+        return torch.cat([out["cls"], out["patches"].mean(1)], dim=-1)
 
 
 def load_probe_model(checkpoint_path, device):

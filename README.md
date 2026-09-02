@@ -2,6 +2,8 @@
 
 ![nanopath logo](imgs/nanopath_logo.png)
 
+> **Sept 2026 update**: Our ~20 min. fast evaluation suite now adds more downstream datasets, removes explicitly TCGA-derived tasks, reworks the lightweight probing code, and reweights final score calculation. "nanopath-evals" is now a much more faithful proxy for performance on official benchmarks. However, this required resetting the Labless live leaderboard plot (original is still preserved but should not be hillclimbed on).
+
 `nanopath` is a super lean experimental harness for training tile-level computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). In ~1 hour it trains on 1 million pathology tiles on a single GPU and evaluates a broad suite of downstream probes spanning tile classification, segmentation, slide-level mutation/progression/survival, and robustness. The goal is to easily explore and iterate on research directions to see what works best on small-scale, then scale up the best performing training recipes with more data and larger compute.
 
 This repository is intentionally made to be compatible with [autoresearch](https://github.com/karpathy/autoresearch)-style pursuits, and we even have a live autoresearch-style plot in [Leaderboard](#leaderboard). Nanopath models train until the next full batch would exceed the 1,000,000 tile-presentation cap or until the run reaches the 1e18-FLOP cap.
@@ -43,7 +45,7 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
   <img src="https://api.labless.dev/api/nano-projects/nanopath-v2/plot.svg" alt="nanopath progress plot" width="1290">
 </a>
 
-`mean_probe_score`, aka `final_probe_score`, weights classification, segmentation, progression, mutation, survival, and quality-adjusted robustness at 25%, 15%, 25%, 15%, 10%, and 10%. Classification is one family even though its 12 THUNDER development tasks and linear, KNN, and 16-shot heads remain visible diagnostically. Segmentation uses PanNuke plus the two non-TCGA SegPath tasks with THUNDER's published metric; only PanNuke Fold1/Fold2 development arrays are referenced. See [benchmarking/README.md](benchmarking/README.md) for the train/validation-only protocol and PanNuke provenance caveat.
+`final_score` weights classification, segmentation, progression, mutation, survival, and quality-adjusted robustness at 25%, 15%, 25%, 15%, 10%, and 10%. Classification is one family even though its 12 THUNDER development tasks and linear, KNN, and 16-shot heads remain visible diagnostically. Segmentation uses PanNuke plus the two non-TCGA SegPath tasks with THUNDER's published metric; only PanNuke Fold1/Fold2 development arrays are referenced. See [benchmarking/README.md](benchmarking/README.md) for the train/validation-only protocol and PanNuke provenance caveat.
 `configs/main.yaml` intentionally uses the lr-and-curation recipe. On Labless, the run labeled `leader` reflects the recipe that passed the maintainer promotion study. Table values below are individual-checkpoint scores; leader promotion is based on the three-seed mean, not the luckiest point.
 
 ![nanopath development scores compared with held-out official evaluations](imgs/proxy_fidelity_v2.png)
@@ -140,7 +142,7 @@ Public full-run submissions must satisfy:
 - `summary.max_train_samples == 1000000`
 - `summary.tile_presentations <= 1000000`
 - `summary.max_train_flops == 1e18`
-- final `mean_probe_score` / `final_probe_score` is present
+- `final_score` is present
 - no saved-source changes to `probe.py` or anything under `benchmarking/`
 - no locked probe config changes except local `probe.dataset_roots`
 

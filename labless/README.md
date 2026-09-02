@@ -17,7 +17,7 @@ RUN_DIR=$PWD/data/main/my-run
 `train.py` finishes. It:
 
 1. Reads `summary.json` and `metrics.jsonl` from `output_dir`.
-2. Extracts the final `mean_probe_score` plus diagnostic probe metrics.
+2. Extracts `final_score` plus diagnostic probe metrics.
 3. Uses the local `output_dir/labless_source` snapshot written by `train.py` and
    diffs that source against the current main commit for `train.py`, `model.py`,
    `dataloader.py`, `prepare.py`, and the config YAML used by the run.

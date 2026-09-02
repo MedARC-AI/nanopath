@@ -28,7 +28,7 @@ API_URL = "https://api.labless.dev"
 PROJECT_SLUG = "nanopath-v2"
 NANOPATH_MAIN_REMOTE = "https://github.com/MedARC-AI/nanopath.git"
 NANOPATH_DEFAULT_BRANCH = "v2"
-PRIMARY_METRIC = "mean_probe_score"
+PRIMARY_METRIC = "final_score"
 PROBE_PROTOCOL_VERSION = 2
 LOCKED_PATHS = ("probe.py", "benchmarking/")
 FULL_RUN_MIN_FLOPS = 1_000_000_000_000_000_000
@@ -360,7 +360,7 @@ def validate_output(output_dir: Path, summary_path: Path, metrics_path: Path, me
     if not metrics_path.exists():
         errors.append("metrics.jsonl missing")
     if metric_value is None:
-        errors.append(f"completed run is missing {PRIMARY_METRIC} / final_probe_score")
+        errors.append(f"completed run is missing {PRIMARY_METRIC}")
     summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
     rows = read_jsonl(metrics_path) if metrics_path.exists() else []
     protocol = number(summary.get("final_probe_protocol_version"))
@@ -382,21 +382,18 @@ def number(value: Any) -> float | None:
 
 
 def primary_metric(summary: dict[str, Any], rows: list[dict[str, Any]]) -> float | None:
-    for value in (summary.get("final_probe_score"), summary.get(PRIMARY_METRIC), summary.get(f"final_probe_{PRIMARY_METRIC}")):
-        parsed = number(value)
+    parsed = number(summary.get(PRIMARY_METRIC))
+    if parsed is not None:
+        return parsed
+    for row in reversed(rows):
+        parsed = number(row.get(PRIMARY_METRIC))
         if parsed is not None:
             return parsed
-    for row in reversed(rows):
-        for key in (PRIMARY_METRIC, "final_probe_score"):
-            parsed = number(row.get(key))
-            if parsed is not None:
-                return parsed
     return None
 
 
 def final_metrics(summary: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, float]:
     name_map = {
-        "score": PRIMARY_METRIC,
         "protocol_version": "probe_protocol_version",
         "classification_mean_f1": "classification_mean_f1",
         "linear_mean_f1": "linear_mean_f1",

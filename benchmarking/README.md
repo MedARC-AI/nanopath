@@ -30,12 +30,11 @@ predictive_mean = mean(classification, segmentation, progression,
 robustness_quality = mean over PathoROB subsets of
                      (robustness index + biological balanced accuracy) / 2
 
-mean_probe_score = 0.25 * classification + 0.15 * segmentation
-                 + 0.25 * progression + 0.15 * mutation
-                 + 0.10 * survival + 0.10 * robustness_quality
+final_score = 0.25 * classification + 0.15 * segmentation
+            + 0.25 * progression + 0.15 * mutation
+            + 0.10 * survival + 0.10 * robustness_quality
 ```
 
-`mean_probe_score` and `final_probe_score` are identical public aliases.
 Classification, segmentation, progression, mutation, survival, and robustness
 contribute 25%, 15%, 25%, 15%, 10%, and 10%, respectively. Classification's
 datasets, heads, and hyperparameter cells remain visible for diagnosis but do

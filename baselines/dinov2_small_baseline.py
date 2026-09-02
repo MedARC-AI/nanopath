@@ -15,7 +15,7 @@ sys.path.insert(0, str(REPO_DIR))
 import torch
 import yaml
 
-from model import DinoV2ViT, load_dinov2_pretrained
+from model import ViT, load_dinov2_pretrained
 from probe import (
     TASK_FIELDS,
     completed_probe_summary,
@@ -97,7 +97,7 @@ def run_frozen_baseline(script, project, recipe_id, model_type, checkpoint_defau
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(f"baseline metrics: {output_dir / 'metrics.jsonl'}")
-    print(f"mean_probe_score: {event['mean_probe_score']:.6f}")
+    print(f"final_score: {event['final_score']:.6f}")
 
 
 def run_dinov2_baseline(script, project, recipe_id, variant, output_default, pretrained=True, seed=0):
@@ -130,7 +130,7 @@ def run_dinov2_baseline(script, project, recipe_id, variant, output_default, pre
     output_dir.mkdir(parents=True)
     started_at = time.monotonic()
     torch.manual_seed(seed)
-    model = DinoV2ViT(variant=variant)
+    model = ViT(variant=variant)
     if pretrained:
         model = load_dinov2_pretrained(model)
     else:
@@ -169,7 +169,7 @@ def run_dinov2_baseline(script, project, recipe_id, variant, output_default, pre
     if checkpoint_path.exists():
         checkpoint_path.unlink()
     print(f"baseline metrics: {output_dir / 'metrics.jsonl'}")
-    print(f"mean_probe_score: {event['mean_probe_score']:.6f}")
+    print(f"final_score: {event['final_score']:.6f}")
 
 
 def main():
