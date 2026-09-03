@@ -142,10 +142,10 @@ class TCGATileDataset(Dataset):
     def __len__(self):
         return int(self.shard_of.shape[0])
 
-    # Read one JPEG row, decode, apply augmentations, and return train.py fields.
+    # Read one JPEG row, resampling until training tiles clear the tissue threshold.
     def __getitem__(self, idx):
         idx = int(idx)
-        for _ in range(9):
+        for _ in range(1000):
             shard_idx = int(self.shard_of[idx])
             row_idx = int(self.row_of[idx])
             reader = self._readers[shard_idx]
@@ -168,6 +168,8 @@ class TCGATileDataset(Dataset):
             if float((sat > 0.07).float().mean()) >= self.tissue_thresh:
                 break
             idx = random.randint(0, self.shard_of.shape[0] - 1)
+        else:
+            raise RuntimeError(f"no tile met tissue_thresh={self.tissue_thresh} after 1000 samples")
         slide_stem = rel.split("/", 1)[0]
         patient_id = patient_id_from_relpath(rel)
         slide_key = int.from_bytes(hashlib.blake2b(slide_stem.encode(), digest_size=8).digest(), "big") & 0x7FFFFFFFFFFFFFFF

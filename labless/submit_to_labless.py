@@ -167,7 +167,7 @@ def main() -> int:
             "family": summary.get("family") or "nanopath",
             "recipe_id": summary.get("recipe_id"),
             "command": run_command,
-            "seed": int(opts["seed"]) if opts.get("seed") else summary.get("config", {}).get("train", {}).get("seed"),
+            "seed": int(opts["seed"]) if opts.get("seed") else summary.get("train_seed"),
             "hardware": opts.get("hardware") or env["hardware"],
             "started_at": opts.get("started_at"),
             "ended_at": opts.get("ended_at") or previous_submission.get("run", {}).get("ended_at") or dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),

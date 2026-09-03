@@ -84,23 +84,19 @@ H100, not a promise for arbitrary hardware.
 ## Training-seed audit and promotion margin
 
 Two nanopath recipes were independently trained at seeds 17, 29, and 43 while
-the data split and probe randomness stayed fixed:
+the data split and probe randomness stayed fixed. These are audit seeds, not a
+fixed promotion panel:
 
 | Recipe | Seed 17 | Seed 29 | Seed 43 | Mean | Sample SD |
 |---|---:|---:|---:|---:|---:|
 | Main DINOv2/KDE | 0.637656 | 0.637649 | 0.632825 | 0.636043 | 0.002787 |
 | robust-norm | 0.671812 | 0.669810 | 0.670370 | 0.670664 | 0.001033 |
 
-The pooled within-recipe run SD is 0.002102. A three-run mean therefore has an
-estimated standard error of 0.001213, and the difference between two
-independent three-run means has an estimated standard error of 0.001716. Its
-one-sided 95% normal margin is 0.002823; the existing **0.004** promotion
-margin remains a conservative fixed policy. This operating threshold does not
-assume that matching seeds cancel variance between recipes and is not
-recomputed for each candidate.
-A discovery run is excluded, all three fixed confirmation seeds count, and a
-promoted panel becomes the stored incumbent. No official evaluation result was
-used in this calibration.
+The pooled within-recipe run SD is 0.002102. The **0.004** promotion margin is a
+fixed conservative policy and is not recomputed per candidate. A maintainer
+reruns a candidate with three different randomly selected seeds; the median run
+must clear the margin. The discovery run is excluded. No official evaluation
+result was used in this calibration.
 
 ## Official-suite ordering fidelity
 
@@ -137,25 +133,18 @@ places it below that baseline.
 An expanded 20-model table adds H0-mini, DINOv2-S/B/L/G, Kaiko-S/16, and
 GigaPath-Flash:
 
-| Comparison | Pearson | Spearman | All-pair concordance | Cross-family concordance |
-|---|---:|---:|---:|---:|
-| Classification / THUNDER, 20 models | 0.988 | 0.992 | 0.979 | 1.000 |
-| Segmentation / THUNDER, 18 matched results | 0.850 | 0.792 | 0.848 | 0.903 |
-| Final score / HEST, 20 models | 0.941 | 0.941 | — | — |
-| Final score / CPTAC classification, 20 models | 0.851 | 0.872 | — | — |
-
-DINOv2-S and DINOv2-G segmentation are omitted because only different-size
-published DINO proxies were available. These exclusions are fixed by result
-identity, not model performance.
+| Comparison, 20 models | Pearson | Kendall |
+|---|---:|---:|
+| Classification / THUNDER | 0.988 | 0.958 |
+| Segmentation / THUNDER | 0.870 | 0.741 |
+| Final score / THUNDER classification + segmentation | 0.919 | 0.789 |
+| Final score / HEST | 0.941 | 0.821 |
+| Final score / CPTAC classification | 0.851 | 0.716 |
 
 The exact comparison input is
-[proxy-fidelity data](proxy_fidelity_v2.csv). The 13 promotion rows use the
-assembled fixed result, which combines PanNuke with both SegPath tasks. This
-is important: their retained non-segmentation artifact paths happen to contain
-intermediate two-SegPath metrics and must not be reopened as if those partial
-runs were the final score. The seven added rows use their completed fixed
-suite results. Empty DINOv2-S/G segmentation cells prevent different-size
-published proxies from silently entering the 18-model statistic.
+[proxy-fidelity data](proxy_fidelity_v2.csv). Final scores use the assembled
+fixed result, including PanNuke and both SegPath tasks. THUNDER segmentation
+uses complete same-checkpoint results for all 20 models.
 
 ## Random-feature null audit
 

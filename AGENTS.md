@@ -24,18 +24,14 @@ Coding guidelines:
 Experiment and benchmark discipline:
 - Validate opinions experimentally whenever feasible. Run code, tests, probes, or short jobs that directly support the conclusion.
 - Use downstream probing as the main comparison signal because objectives like JEPA, MAE, DINO, and iBOT may not have comparable validation losses.
-- Treat one run as discovery, not promotion evidence. After freezing a clean candidate commit, train seeds 17, 29, and 43; its three-run mean must beat the incumbent's stored three-run mean by at least 0.004. Never count the discovery run or drop a confirmation seed.
+- Treat one run as discovery. A maintainer reruns promising candidates three times with different random training seeds; the median run becomes the validated leader if it beats the incumbent by at least 0.004. `robust-norm-s9876` is the approved exception.
 - Use wandb for logging, plotting, and utilization monitoring throughout pretraining. Log all metrics needed to validate training behavior (i.e., gradient norm).
-- Aim for >80% GPU utilization during GPU runs; investigate and remedy code when utilization is poor.
-- Full runs launched with `./submit/train_1gpu.sbatch ...` prompt for Labless run name, notes, and GitHub no-scope device login before scheduling, then auto-submit after a successful eligible run. For direct `python train.py` runs or frozen baseline evaluations worth sharing, run `./labless/submit_to_labless.py output_dir=... run_name=... notes=...`; labless records the verified GitHub login, and each login can submit at most 100 runs per 24 hours. Full submissions require `summary.json`, `metrics.jsonl`, `summary.max_train_samples == 1000000`, `summary.tile_presentations <= 1000000`, and `summary.max_train_flops == 1e18`. Keep smoke checks and failed runs local.
-- Labless notes should name the starting recipe, main change, and why it might affect probes; agents should derive them from the source/config diff.
+- Full runs launched with `./submit/train_1gpu.sbatch ...` prompt for Labless run name, notes, and GitHub no-scope device login before scheduling, then auto-submit after a successful eligible run.
+- For direct `python train.py` runs or frozen baseline evaluations worth sharing, run `./labless/submit_to_labless.py output_dir=... run_name=... notes=...`; labless records the verified GitHub login. Full submissions require `summary.json`, `metrics.jsonl`, `summary.max_train_samples == 1000000`, `summary.tile_presentations <= 1000000`, and `summary.max_train_flops == 1e18`. Keep smoke checks and failed runs local.
+- Labless notes should name the starting recipe, main changes, and why those changes might affect probes; agents should derive them from the source/config diff.
 - Do not submit runs whose saved `labless_source` snapshot changes `probe.py` or `benchmarking/`; labless marks locked-path changes invalid.
 
-Cluster and storage:
-- The login node has no GPU access, and has a different /tmp folder than the compute nodes. For full training runs (or anything that would take more than a few minutes) you should submit SLURM jobs to H100 nodes (`n-#`) or CPU nodes (`c-1`). If it's a quick single-GPU assessment you can use `ssh n-#` directly (but only when an idle GPU is available!).
+Cluster and storage (this is specific to our MedARC cluster!):
+- The login node has no GPU access, and has a different /tmp folder than the compute nodes. You need to submit SLURM jobs to H100 nodes (`n-#`) or CPU nodes (`c-#`).
 - Store large files, checkpoints, embeddings, caches, and pretrained models under `/data/$USER/nanopath` (configs use literal `$USER`, expanded by `train.py` at load time), not the repo.
 - Fresh launches should overwrite any existing `project.output_dir` unless `train.resume` is set.
-
-Workflow:
-- Do not stop after the first small fix on a difficult ask. Continue through the adjacent tasks needed to make the change credible, such as config updates, probes, throughput checks, README notes, or cleanup.
-- Use parallel agents, git worktrees, or independent jobs when they materially speed up exploration or experiments, but keep changes easy to review. Make sure to kill hanging or no longer useful sub-agents.

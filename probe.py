@@ -160,7 +160,7 @@ def prepare_probe_state(cfg, output_dir):
             if dataset not in supported:
                 raise ValueError(f"unsupported {request_key}: {dataset}")
     configured = [d for request_key in TASK_FIELDS for d in data[request_key]]
-    assert set(configured) == set(PROBE_DATASETS), f"probe config must contain exactly {PROBE_DATASETS}, got {configured}"
+    assert configured == PROBE_DATASETS, f"probe config must contain exactly {PROBE_DATASETS}, got {configured}"
     state = {"paths": paths, "data": data}
     write_probe_state(state)
     return state

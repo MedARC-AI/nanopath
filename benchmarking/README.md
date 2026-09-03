@@ -1,15 +1,8 @@
-# nanopath benchmark
+# nanopath-evals
 
-This directory is the audit trail for nanopath's fixed downstream benchmark.
-The benchmark is a fast development-data proxy for model ordering on held-out
-THUNDER, HEST, and CPTAC evaluations. It is not a replacement for those
-evaluations and does not expose or score their test samples.
+This directory describes and audits nanopath's fixed downstream benchmark, termed `nanopath-evals`, that completes a diverse suite of tile-level and slide-level evaluations in approximately 20 minutes on a single H100 GPU. This benchmark is a fast development-data proxy for performance on official THUNDER, HEST, and CPTAC evaluations; note that no test samples from these official benchmarks are touched by `nanopath-evals`.
 
-The executable definition is [`probe.py`](../probe.py) plus the five checked-in
-JSON manifests in this directory. The prose here explains that definition; if
-the code, manifests, and documentation ever disagree, the release is not valid.
-Labless locks `probe.py`, this entire directory, and the probe configuration for
-comparable public runs.
+The executable definition is [`probe.py`](../probe.py) plus the five checked-in JSON manifests in this directory. The prose here explains that definition; if the code, manifests, and documentation ever disagree, the release is not valid as a nanopath model. Labless locks `probe.py`, this entire directory, and the probe configuration for comparable public runs.
 
 ## Score definition
 
@@ -33,10 +26,7 @@ final_score = 0.25 * classification + 0.15 * segmentation
             + 0.10 * survival + 0.10 * robustness_quality
 ```
 
-Classification, segmentation, progression, mutation, survival, and robustness
-contribute 25%, 15%, 25%, 15%, 10%, and 10%, respectively. Classification's
-datasets, heads, and hyperparameter cells remain visible for diagnosis but do
-not become extra top-level families.
+Classification, segmentation, progression, mutation, survival, and robustness contribute 25%, 15%, 25%, 15%, 10%, and 10%, respectively.
 
 ## Fixed suite
 
@@ -49,62 +39,25 @@ not become extra top-level families.
 | Survival | LEOPARD BCR, CPTAC-PDA OS | Harrell c-index | [slide_probes.md](slide_probes.md) |
 | Robustness | PathoROB Camelyon, Tolkach ESCA | quality-adjusted robustness | [pathorob.md](pathorob.md) |
 
-The complete fixed suite is mandatory. `prepare_probe_state()` rejects partial,
-reordered, added, or substituted task lists.
+The complete fixed suite is mandatory. `prepare_probe_state()` rejects partial, reordered, added, or substituted task lists.
 
 ## Data boundary
 
-[The THUNDER manifest](thunder_v2.json) is the only classification and
-segmentation manifest used at runtime. Every dataset entry has exactly `root`,
-`train`, and `val`; there is no `test` key. The four slide manifests contain
-only development records. UCLA, SurGen, and CPTAC-PDA use the original
-PathoBench fold-0 training pool, and LEOPARD uses public challenge training
-labels. Their original test records are absent.
+[The THUNDER manifest](thunder_v2.json) is the only classification and segmentation manifest used at runtime. Every dataset entry has exactly `root`, `train`, and `val`; there is no `test` key.
 
-The downloadable evaluation snapshot is
-[`medarc/nanopath-evals`](https://huggingface.co/datasets/medarc/nanopath-evals)
-pinned in `prepare.py` to revision
-`635a83330b0dc2917d7524644f11b04188a63e53`. It is about 192 GiB and contains
-only the selected development assets. HEST is absent. No CPTAC classification
-task is present. CPTAC appears only as the pre-existing CPTAC-PDA survival
-development probe. PanNuke Fold3 and the unused TCGA center in Tolkach ESCA are
-absent.
+The downloadable evaluation snapshot is [`medarc/nanopath-evals`](https://huggingface.co/datasets/medarc/nanopath-evals) pinned in `prepare.py` to revision `635a83330b0dc2917d7524644f11b04188a63e53`. It is about 192 GiB and contains only the selected development assets. If you are on our MedARC cluster, you do not need to download this snapshot because contents are already under `/data`.
 
-On the MedARC cluster, evaluation reads canonical shared roots under `/data`.
-A shared upstream root may contain unrelated official assets, but `probe.py`
-opens only the paths named by these manifests. A fresh download of the pinned
-nanopath snapshot contains no such unrelated assets. `prepare.py` verifies the
-snapshot metadata, the explicit `contains_official_test_records: false`
-contract, manifest hashes, and every referenced file before a run starts.
+We try to reduce overlap between our pretraining dataset (TCGA) and downstream data distributions:
 
-TCGA-pretraining overlap is handled explicitly:
-
-- CCRCC, TCGA CRC-MSI, TCGA-TILs, TCGA-Uniform, and OCELOT are excluded because
-  their evaluation images are explicitly TCGA.
-- ESCA training may contain TCGA images, but its scored validation selection is
-  UKK-only.
-- MoNuSAC is excluded because the released cohort is TCGA-derived.
-- PanNuke mixes TCGA and local-hospital material and does not expose reliable
-  per-image source provenance. It is the one accepted mixed-source exception;
-  this limitation is documented in [segmentation.md](segmentation.md).
+- CCRCC, TCGA CRC-MSI, TCGA-TILs, TCGA-Uniform, and OCELOT are excluded because their evaluation images are explicitly TCGA.
+- We still include ESCA because while its training samples contain some TCGA images, its validation subset is UKK-only.
+- We still include PanNuke because it mixes TCGA and local hospital slides without specifying which slides belong to which source (this limitation is documented in [segmentation.md](segmentation.md)).
 
 ## Frozen-backbone contract
 
-The benchmark measures frozen representations. Classification and slide probes
-consume `model.probe_features()`, allowing a recipe to define bounded test-time
-feature aggregation. Segmentation consumes all non-register patch channels from
-`model.encode_image()`. If a model emits an expanded spatial grid, it is
-area-pooled back to its native patch grid before the shared decoder; feature
-channels are not discarded. PathoROB intentionally bypasses
-`probe_features()` and uses its fixed published-style CLS-plus-mean-patch
-adapter so model-specific aggregation cannot alter the robustness protocol.
+`nanopath-evals` operates on frozen representations. Classification and slide probes consume `model.probe_features()`, allowing a recipe to define test-time feature aggregation. Segmentation consumes all non-register patch channels from `model.encode_image()`. If a model emits an expanded spatial grid, it is area-pooled back to its native patch grid before the shared decoder; feature channels are not discarded. PathoROB intentionally bypasses `probe_features()` and uses its fixed published-style CLS-plus-mean-patch adapter so model-specific aggregation cannot alter the robustness protocol.
 
-Encoder inference uses fp16 autocast and caches classification/slide embeddings
-as float32. Segmentation patch vectors are cached as per-vector signed int8 plus
-fp16 scales to fit the one-GPU runtime and memory envelope. The complete suite
-must finish in less than 1,500 seconds on one 80 GB H100. See
-[validation.md](validation.md) for parity, determinism, runtime, rank-fidelity,
-and null-model evidence.
+Encoder inference uses fp16 autocast and caches classification/slide embeddings as float32. Segmentation patch vectors are cached as per-vector signed int8 plus fp16 scales. See [validation.md](validation.md) for release timing and validation evidence.
 
 ## Files
 
@@ -122,20 +75,3 @@ and null-model evidence.
 | [slide_probes.md](slide_probes.md) | Tile caching, pooling, folds, AUROC, and survival protocols |
 | [pathorob.md](pathorob.md) | Fixed adapter, neighbor construction, and quality correction |
 | [validation.md](validation.md) | Implementation parity, runtime, null checks, and official-suite fidelity |
-
-## Interpretation
-
-The final scalar is a hill-climbing signal: it emphasizes classification and
-progression while retaining segmentation, mutation, survival, and robustness.
-It is strongest as a predictor of model ordering, not as a calibrated estimate
-of an official score. A difference should be interpreted alongside per-family,
-per-dataset, per-head, fold-variance, raw robustness, Jaccard, and timing fields.
-Small differences remain susceptible to training-seed and probe noise. Public
-leader promotion therefore requires the candidate's three-run mean to exceed
-the incumbent's stored three-run mean by the fixed margin of 0.004. The
-discovery run is excluded.
-
-Official THUNDER, HEST, and CPTAC results were consulted only after the
-benchmark components and manifests were frozen. The fixed component weights
-are scoring-policy choices. Official results remain release-validation
-evidence, never inputs to a run or dataset-selection targets.
