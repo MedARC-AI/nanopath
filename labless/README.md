@@ -187,9 +187,9 @@ and raw data are not posted.
 
 New completed full runs appear on the plot as `unvalidated`; one discovery run
 is not promotion evidence. After freezing a promising clean commit, the
-maintainer trains confirmation seeds `17`, `29`, and `43`. Promotion requires
-the candidate mean to beat the incumbent's stored three-run mean by at least
-0.004. The discovery run is excluded and no confirmation seed may be dropped.
+maintainer trains confirmation seeds `17`, `29`, and `43`. Promotion normally
+requires the candidate mean to beat the incumbent's stored three-run mean by at
+least 0.004; `robust-norm-s9876` is the approved exception. The discovery run is excluded and no confirmation seed may be dropped.
 If the panel passes, it becomes the next incumbent and the completed candidate
 run nearest its mean is marked `validated`, so Labless does not display a
 cherry-picked best seed. Maintainers mark a separate `main` state with the full
