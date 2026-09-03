@@ -28,6 +28,7 @@ Experiment and benchmark discipline:
 - Use wandb for logging, plotting, and utilization monitoring throughout pretraining. Log all metrics needed to validate training behavior (i.e., gradient norm).
 - Aim for >80% GPU utilization during GPU runs; investigate and remedy code when utilization is poor.
 - Full runs launched with `./submit/train_1gpu.sbatch ...` prompt for Labless run name, notes, and GitHub no-scope device login before scheduling, then auto-submit after a successful eligible run. For direct `python train.py` runs or frozen baseline evaluations worth sharing, run `./labless/submit_to_labless.py output_dir=... run_name=... notes=...`; labless records the verified GitHub login, and each login can submit at most 100 runs per 24 hours. Full submissions require `summary.json`, `metrics.jsonl`, `summary.max_train_samples == 1000000`, `summary.tile_presentations <= 1000000`, and `summary.max_train_flops == 1e18`. Keep smoke checks and failed runs local.
+- Labless notes should name the starting recipe, main change, and why it might affect probes; agents should derive them from the source/config diff.
 - Do not submit runs whose saved `labless_source` snapshot changes `probe.py` or `benchmarking/`; labless marks locked-path changes invalid.
 
 Cluster and storage:

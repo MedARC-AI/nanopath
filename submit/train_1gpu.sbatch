@@ -54,10 +54,10 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     exit 127
   fi
   if [[ "${LABLESS_ELIGIBLE}" == "1" && -t 0 ]]; then
-    echo "This looks like a full Labless-eligible run. Leave either prompt blank to train without auto-submit."
+    echo "This looks like a full Labless-eligible run. Leave the run name blank to train without auto-submit."
     read -r -p "Labless run name (<=20 chars): " LABLESS_RUN_NAME || LABLESS_RUN_NAME=""
-    read -r -p "Labless notes: " LABLESS_NOTES || LABLESS_NOTES=""
-    if [[ -n "${LABLESS_RUN_NAME}" && -n "${LABLESS_NOTES}" && "${#LABLESS_RUN_NAME}" -le 20 ]]; then
+    read -r -p "Labless experiment note (unique change + why): " LABLESS_NOTES || LABLESS_NOTES=""
+    if [[ -n "${LABLESS_RUN_NAME}" && "${#LABLESS_RUN_NAME}" -le 20 ]]; then
       AUTOSUBMIT_FILE="${OUTPUT_DIR}.labless_autosubmit.json"
       set +e
       python labless/submit_to_labless.py login_only=true token_output="${AUTOSUBMIT_FILE}" run_name="${LABLESS_RUN_NAME}" notes="${LABLESS_NOTES}"
@@ -69,7 +69,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
         AUTOSUBMIT_FILE=""
       fi
     else
-      echo "Labless auto-submit skipped; run name and notes are required, and run name must be <=20 chars."
+      echo "Labless auto-submit skipped; run name is required and must be <=20 chars."
     fi
   elif [[ "${LABLESS_ELIGIBLE}" == "1" ]]; then
     echo "No interactive stdin; training will run without Labless auto-submit."

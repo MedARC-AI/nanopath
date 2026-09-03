@@ -91,11 +91,11 @@ def maybe_arm_labless_autosubmit(cfg, repo_dir):
         if not os.environ.get("SLURM_JOB_ID"):
             print(f"{console_prefix()} Labless  no interactive stdin; training will run without auto-submit.", flush=True)
         return ""
-    print("This looks like a full Labless-eligible run. Leave either prompt blank to train without auto-submit.", flush=True)
+    print("This looks like a full Labless-eligible run. Leave the run name blank to train without auto-submit.", flush=True)
     run_name = input("Labless run name (<=20 chars): ").strip()
-    notes = input("Labless notes: ").strip()
-    if not run_name or not notes or len(run_name) > 20:
-        print("Labless auto-submit skipped; run name and notes are required, and run name must be <=20 chars.", flush=True)
+    notes = input("Labless experiment note (unique change + why): ").strip()
+    if not run_name or len(run_name) > 20:
+        print("Labless auto-submit skipped; run name is required and must be <=20 chars.", flush=True)
         return ""
     token_path = str(Path(str(Path(cfg["project"]["output_dir"]).expanduser().resolve()) + ".labless_autosubmit.json"))
     status = subprocess.run(

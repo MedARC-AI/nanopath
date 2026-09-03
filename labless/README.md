@@ -8,7 +8,7 @@ after training, while direct runs can still be submitted with one command.
 RUN_DIR=$PWD/data/main/my-run
 ./labless/submit_to_labless.py output_dir=$RUN_DIR \
     run_name=kde-crops \
-    notes="what changed and why"
+    notes="vs v2/main: larger local crops to retain tissue context"
 ```
 
 ## What the submit script does
@@ -45,8 +45,8 @@ RUN_DIR=$PWD/data/main/my-run
 ```
 
 For configs with `max_train_samples=1000000`, `max_train_flops=1e18`, and
-probes enabled, the launcher asks for a Labless run name, notes, and GitHub
-device sign-in before scheduling the GPU job. If any prompt is skipped or login
+probes enabled, the launcher asks for a Labless run name, optional experiment
+note, and GitHub device sign-in before scheduling the GPU job. If the run name is skipped or login
 does not complete, the job still trains but does not auto-submit. Plain
 `sbatch submit/train_1gpu.sbatch ...` also trains without auto-submit because
 there is no interactive prompt before scheduling.
@@ -64,7 +64,7 @@ Then point the submit script at the same run directory:
 ./labless/submit_to_labless.py \
     output_dir=$RUN_DIR \
     run_name=kde-crops \
-    notes="changed the crop schedule and kept all probe paths untouched"
+    notes="vs v2/main: larger local crops to retain tissue context"
 ```
 
 Completed submissions require both `summary.json` and `metrics.jsonl`. The run
@@ -104,7 +104,7 @@ Arguments are `key=value`; there is no `argparse`.
 |---|---|
 | `output_dir` | Required run directory. |
 | `run_name` | Short plot label, 20 characters or fewer. |
-| `notes` | Short explanation of what changed and why. |
+| `notes` | Starting recipe, main change, and why it might affect probes. |
 | `wandb_url` | Optional W&B run URL for linking the external dashboard; private or unlisted W&B URLs are accepted because labless only validates URL shape. |
 | `tier` | `full` or `baseline`; inferred when omitted. |
 | `hardware` | Override detected hardware string. |
