@@ -8,7 +8,7 @@ after training, while direct runs can still be submitted with one command.
 RUN_DIR=$PWD/data/main/my-run
 ./labless/submit_to_labless.py output_dir=$RUN_DIR \
     run_name=kde-crops \
-    notes="vs v2/main: larger local crops to retain tissue context"
+    notes="vs main: larger local crops to retain tissue context"
 ```
 
 ## What the submit script does
@@ -64,7 +64,7 @@ Then point the submit script at the same run directory:
 ./labless/submit_to_labless.py \
     output_dir=$RUN_DIR \
     run_name=kde-crops \
-    notes="vs v2/main: larger local crops to retain tissue context"
+    notes="vs main: larger local crops to retain tissue context"
 ```
 
 Completed submissions require both `summary.json` and `metrics.jsonl`. The run

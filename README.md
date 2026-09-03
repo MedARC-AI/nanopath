@@ -109,7 +109,7 @@ The pipeline is:
 Manual submission is still available for direct `python train.py` runs or copied output directories:
 
 ```bash
-./labless/submit_to_labless.py output_dir=$RUN_DIR run_name=kde-crops notes="vs v2/main: larger local crops to retain tissue context"
+./labless/submit_to_labless.py output_dir=$RUN_DIR run_name=kde-crops notes="vs main: larger local crops to retain tissue context"
 ```
 
 Public full-run submissions must satisfy:
