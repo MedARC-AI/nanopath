@@ -57,15 +57,15 @@ As you can see in the above correlation plots, our fast ~20 minute evaluation su
 
 ### nanopath models
 
-The `main` branch of this `nanopath` codebase reflects the recipe that supports the below `lr-and-curation` nanopath run.
+The `main` branch of `nanopath` codebase reflects the `lr-and-curation` nanopath recipe. Clicking the model name in table below will take you to a GitHub branch for the code used to train its Labless validated run.
 
 | # | Description | final score | classification | segmentation | progression | mutation | survival | robustness quality | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | robust-norm | **0.6733** | 0.7507 | 0.6024 | 0.6136 | 0.5885 | 0.6010 | 0.9354 | @anishdulal |
+| 1 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm-v2) | **0.6733** | 0.7507 | 0.6024 | 0.6136 | 0.5885 | 0.6010 | 0.9354 | @anishdulal |
 | 2 | jepa-fino | 0.6698 | 0.7384 | 0.6016 | 0.5903 | 0.6190 | 0.6210 | 0.9240 | @ml-and-ml |
 | 3 | I-JEPA contig patch | 0.6648 | 0.7219 | 0.5993 | 0.5931 | 0.6148 | 0.6172 | 0.9225 | @NimaAsh |
 | 4 | block-strided-cls | 0.6591 | 0.7477 | 0.6039 | 0.5390 | 0.6066 | 0.6335 | 0.9253 | @RyanKim17920 |
-| 5 | lr-and-curation | 0.6564 | 0.7048 | 0.5940 | 0.5948 | 0.6025 | 0.6199 | 0.9003 | @nevasini1 |
+| 5 | [lr-and-curation](https://github.com/MedARC-AI/nanopath) | 0.6564 | 0.7048 | 0.5940 | 0.5948 | 0.6025 | 0.6199 | 0.9003 | @nevasini1 |
 
 ### Baselines
 
@@ -255,10 +255,6 @@ The checked-in `#SBATCH` lines are specific to our MedARC cluster. On another SL
 - labless submission payload: `project.output_dir/labless_submission.json`.
 - labless auto-submit token: `${project.output_dir}.labless_autosubmit.json` while a prompt-armed SLURM job is running; the launcher removes it after the post-run submission attempt.
 - checkpoints: rolling `latest.pt` written every `train.save_every` steps under `project.output_dir`, plus one final save at end of run. `save_every: null` (smoke) disables both; probes always get their own short-lived checkpoint regardless.
-
-## Experiment log
-
-See the live [Labless nanopath log](https://labless.dev/nano-projects/nanopath-v2) for submitted completed runs.
 
 ## Acknowledgements
 
