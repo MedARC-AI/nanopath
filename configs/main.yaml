@@ -1,8 +1,8 @@
 project:
-  name: main-dinov2
+  name: robust-norm-s9876
   family: nanopath
-  recipe_id: dinov2-vits14-reg-kde
-  output_dir: /data/$USER/nanopath/main/default
+  recipe_id: dinov2-vits14-reg-jepa-mask10
+  output_dir: /data/$USER/nanopath/robust-norm/s9876
   wandb_dir: /data/$USER/nanopath/wandb
 
 data:
@@ -13,18 +13,19 @@ data:
   val_fraction: 0.05
   mean: [0.485, 0.456, 0.406]
   std: [0.229, 0.224, 0.225]
-  global_crop_scale: [0.2, 1.0]
-  local_crop_scale: [0.03, 0.25]
-  color_jitter: 0.45
-  color_jitter_saturation: 0.4
-  hed_jitter: 0.12
-  tissue_thresh: 0.5 # training rejects tiles unless this fraction of pixels has RGB saturation > 0.07
+  global_crop_scale: [0.4, 1.0]
+  local_crop_scale: [0.08, 0.35]
+  color_jitter: 0.3
+  color_jitter_saturation: 0.30
+  hed_jitter: 0.07
+  tissue_thresh: 0.0 # training rejects tiles unless this fraction of pixels has RGB saturation > 0.07
 
 model:
-  type: dinov2_vits14_reg
+  type: robust_norm_dinov2_vits14_reg
 
 train:
-  seed: 7777
+  robust_norm: true
+  seed: 9876
   bf16: true
   activation_checkpointing: false
   batch_size: 128
@@ -39,16 +40,16 @@ train:
   eval_every: 200
   val_batches: 16
   global_views: 2
-  local_views: 8
+  local_views: 14
   global_size: 224
-  local_size: 98
+  local_size: 128
   resume: null # optional explicit checkpoint path; null means always start fresh and wipe output_dir
 
 dino:
-  lr: 1.0e-4
+  lr: 0.000125
   lr_min: 1.0e-6
-  adam_beta2: 0.99
-  warmup_fraction: 0.03
+  adam_beta2: 0.999
+  warmup_fraction: 0.0909
   freeze_last_layer_fraction: 0.0091
   layerwise_decay: 0.7
   patch_embed_lr_mult: 0.2
@@ -56,8 +57,12 @@ dino:
   head_hidden_dim: 2048
   head_bottleneck_dim: 384
   clip_grad: 3.0
-  kde_loss_weight: 0.005
+  kde_loss_weight: 0.1
   kde_concentration: 10.0
+  jepa_pred_depth: 4
+  jepa_pred_width: 0
+  jepa_blocks: 4
+  jepa_block_scale: 0.1
 
 probe:
   enabled: true
@@ -110,3 +115,9 @@ probe:
     pathorob: /data/pathorob
     surgen: /data/surgen
     ucla_lung: /data/ucla-lung
+
+fino:
+  enabled: true
+  gamma_max: 0.7
+  discrete: [[subtype, 1]]
+  continuous: [[expr512, 1], [fga, 1]]

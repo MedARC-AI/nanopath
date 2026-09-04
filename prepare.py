@@ -1,6 +1,7 @@
 # Single data-prep entry point. Reads configs/main.yaml by default (or a
 # user-passed YAML config) and checks every path train.py will read:
 #   - data.dataset_dir/shard-NNNNN.parquet   (the 4M-tile dataset, sharded)
+#   - data.dataset_dir/fino_meta.json         (robust-norm's patient metadata)
 #   - probe.dataset_roots[name] for each configured probe dataset
 #   - pretrained weights for cfg["model"]["type"] (torch.hub cache)
 # The tile dataset and protocol-v2 evaluation snapshot are downloaded from their
@@ -40,6 +41,8 @@ REPO_ROOT = Path(__file__).resolve().parent
 HF_TRAIN_REPO_ID = "medarc/nanopath"
 HF_EVAL_REPO_ID = "medarc/nanopath-evals"
 HF_EVAL_REVISION = "635a83330b0dc2917d7524644f11b04188a63e53"
+FINO_META_URL = "https://raw.githubusercontent.com/MedARC-AI/nanopath/371533a9d7d670216859e369500a70f84abc3460/metadata/fino_meta.json"
+FINO_META_SHA256 = "45b49a11891c6889f2f240de5ffaecd5ded57f2146c151c73cb43ca3872a5d55"
 TILE_SIZE = 224
 JPEG_QUALITY = 95
 TARGET_TILE_COUNT = 4_000_000
@@ -489,6 +492,21 @@ def main():
         dataset_dir.mkdir(parents=True, exist_ok=True)
         fetch_tiles_from_hf(dataset_dir)
         assert sum(1 for _ in dataset_dir.glob("shard-*.parquet")) == NUM_SHARDS, f"tiles still incomplete after fetch: {dataset_dir}"
+
+    # Stage 1b — the exact FINO metadata artifact used by the historical robust-norm run.
+    fino_path = dataset_dir / "fino_meta.json"
+    if (cfg.get("fino") or {}).get("enabled"):
+        if fino_path.is_file() and hashlib.sha256(fino_path.read_bytes()).hexdigest() == FINO_META_SHA256:
+            print(f"[verify] FINO metadata: {fino_path}", flush=True)
+        elif not download:
+            raise SystemExit(f"missing or stale FINO metadata at {fino_path}.\nRerun: {prepare_cmd}")
+        else:
+            from urllib.request import urlretrieve
+            tmp = fino_path.with_suffix(".json.tmp")
+            urlretrieve(FINO_META_URL, tmp)
+            assert hashlib.sha256(tmp.read_bytes()).hexdigest() == FINO_META_SHA256
+            os.replace(tmp, fino_path)
+            print(f"[done] FINO metadata: {fino_path}", flush=True)
 
     # Stage 2 — probe datasets. Verify-only collects every gap and reports
     # them all at once so the user fixes the YAML in a single edit.

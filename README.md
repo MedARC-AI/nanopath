@@ -22,13 +22,13 @@ wandb login  # or: export WANDB_MODE=offline before launching noninteractive SLU
 # download pretraining & probe datasets & DINOv2 pretrained ckpt
 python prepare.py download=True
 
-# smoke test: very short training, then probe evals to ensure no errors
+# smoke test the retained DINO+iBOT path; robust-norm remains the full main recipe below
 ./submit/train_1gpu.sbatch configs/smoke.yaml
 # or directly on a GPU machine: python train.py configs/smoke.yaml
 
 # train and evaluate the current nanopath recipe
 # auto-submits to Labless if config passes submission requirements and you provide run name/notes & GitHub login
-RUN_DIR=$PWD/data/main/my-run
+RUN_DIR=$PWD/data/robust-norm/my-run
 ./submit/train_1gpu.sbatch configs/main.yaml output_dir=$RUN_DIR
 # or directly on a GPU machine: python train.py configs/main.yaml output_dir=$RUN_DIR
 ```
@@ -57,7 +57,7 @@ As you can see in the above correlation plots, our fast ~20 minute evaluation su
 
 ### nanopath models
 
-The `main` branch of this `nanopath` codebase reflects the recipe that supports the below `lr-and-curation` nanopath run.
+This `robust-norm-v2` branch reproduces the `robust-norm` training recipe below while using the current protocol-v2 probe suite.
 
 | # | Description | final score | classification | segmentation | progression | mutation | survival | robustness quality | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
@@ -94,10 +94,10 @@ Labless is our public run ledger and live plot for `nanopath`. You do not need a
 
 See [labless/README.md](labless/README.md) for Labless submission details and public API usage.
 
-`configs/main.yaml` is the current nanopath training recipe. A normal SLURM submission is:
+`configs/main.yaml` is the robust-norm training recipe. A normal SLURM submission is:
 
 ```bash
-RUN_DIR=$PWD/data/main/my-run
+RUN_DIR=$PWD/data/robust-norm/my-run
 ./submit/train_1gpu.sbatch configs/main.yaml output_dir=$RUN_DIR
 ```
 
@@ -186,8 +186,9 @@ On the MedARC cluster, the checked-in `/data` paths are the intended shared defa
 
 **What `download=True` does**
 1. **TCGA tiles**: `huggingface_hub.snapshot_download` (filtered to `shard-*.parquet`) pulls the 200 parquet shards (~120 GB total, `{path: string, jpeg: binary}` rows with 64-row row groups) from [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) into `data.dataset_dir`.
-2. **Probe datasets**: downloads the exact evaluation snapshot from [`medarc/nanopath-evals`](https://huggingface.co/datasets/medarc/nanopath-evals) into each missing configured root, then verifies every required record.
-3. **DINOv2 backbone weights**: `torch.hub.load_state_dict_from_url` fetches the Meta checkpoint for `model.type` from `dl.fbaipublicfiles.com` into `~/.cache/torch/hub/checkpoints/`.
+2. **FINO metadata**: fetches and verifies the exact patient metadata artifact used by the historical robust-norm run.
+3. **Probe datasets**: downloads the exact evaluation snapshot from [`medarc/nanopath-evals`](https://huggingface.co/datasets/medarc/nanopath-evals) into each missing configured root, then verifies every required record.
+4. **DINOv2 backbone weights**: `torch.hub.load_state_dict_from_url` fetches the Meta checkpoint for `model.type` from `dl.fbaipublicfiles.com` into `~/.cache/torch/hub/checkpoints/`.
 
 **Prerequisites**
 - About 355 GB free for a fresh complete setup: ~120 GB of pretraining shards, ~215 GB of extracted probe data, and temporary room while the largest image archive is extracted. Existing populated roots reduce the download and space requirement.
@@ -245,9 +246,10 @@ The checked-in `#SBATCH` lines are specific to our MedARC cluster. On another SL
 
 `prepare.py … download=True` reads `configs/main.yaml` by default and checks every path train.py will read, downloading data if specified config paths are missing.
 
-- run outputs: `project.output_dir` (MedARC cluster default `/data/$USER/nanopath/main/...`; auto-localized default `nanopath/data/main/...`). Final probe results log to `metrics.jsonl`.
+- run outputs: `project.output_dir` (MedARC cluster default `/data/$USER/nanopath/robust-norm/...`; auto-localized under `nanopath/data/`). Final probe results log to `metrics.jsonl`.
 - wandb: `project.wandb_dir` (cluster default `/data/$USER/nanopath/wandb`; auto-localized default `nanopath/data/wandb`).
 - parquet tile shards: `data.dataset_dir` (defaults to `/data/nanopath_parquet`).
+- FINO metadata: `data.dataset_dir/fino_meta.json`.
 - probe datasets: canonical shared `/data/thunder-data`, `/data/surgen`, `/data/leopard_bcr`, `/data/CPTAC-PDA`, `/data/pathorob`, and `/data/ucla-lung` roots declared in `probe.dataset_roots`.
 - DINOv2 backbone weights: `~/.cache/torch/hub/checkpoints/` for the selected `model.type`.
 - SLURM logs: `slurm/<jobid>.{out,err}` in the repo.

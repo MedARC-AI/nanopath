@@ -9,7 +9,7 @@
 # Patients (not tiles) are hashed by TCGA barcode and the bottom `val_fraction`
 # of the hash space is held out from training; train.py instantiates the dataset
 # twice (`is_train=True` for the training loop, `is_train=False` for the
-# lightweight DINO/iBOT/KDE validation pass), so the held-out patient slice
+# lightweight DINO/iBOT or I-JEPA/KDE validation pass), so the held-out patient slice
 # stays cleanly out-of-distribution from optimization.
 #
 # Augmentation per view: RandomResizedCrop -> optional HEDJitter -> horizontal/
@@ -20,6 +20,7 @@
 
 import hashlib
 import io
+import json
 import random
 from pathlib import Path
 
@@ -122,6 +123,15 @@ class TCGATileDataset(Dataset):
         # Two parallel int32 arrays (~32 MB total for 4M tiles) shared COW across DataLoader fork-workers.
         self.shard_of = np.asarray(in_split_shard, dtype=np.int32)
         self.row_of = np.asarray(in_split_row, dtype=np.int32)
+        # FINO metadata is patient-keyed and shared copy-on-write by loader workers.
+        self.fino = (cfg.get("fino") or {}).get("enabled")
+        if self.fino:
+            meta = json.loads((dataset_dir / "fino_meta.json").read_text())
+            self.fino_disc = [factor for factor, _ in cfg["fino"]["discrete"]]
+            self.fino_cont = [factor for factor, _ in cfg["fino"]["continuous"]]
+            self.meta_disc = {factor: meta["discrete"][factor] for factor in self.fino_disc}
+            self.meta_cont = {factor: meta["continuous"][factor] for factor in self.fino_cont}
+            self.cont_dim = {factor: meta["cont_dim"].get(factor, 1) for factor in self.fino_cont}
         mean, std = data["mean"], data["std"]
         self.global_views = int(train["global_views"])
         self.local_views = int(train["local_views"])
@@ -174,6 +184,12 @@ class TCGATileDataset(Dataset):
         patient_id = patient_id_from_relpath(rel)
         slide_key = int.from_bytes(hashlib.blake2b(slide_stem.encode(), digest_size=8).digest(), "big") & 0x7FFFFFFFFFFFFFFF
         patient_key = int.from_bytes(hashlib.blake2b(patient_id.encode(), digest_size=8).digest(), "big") & 0x7FFFFFFFFFFFFFFF
+        fino = {}
+        if self.fino:
+            fino["meta_disc"] = torch.tensor([self.meta_disc[factor].get(patient_id, -1) for factor in self.fino_disc], dtype=torch.int64)
+            for factor in self.fino_cont:
+                value = self.meta_cont[factor].get(patient_id, [float("nan")] * self.cont_dim[factor])
+                fino[f"mc_{factor}"] = torch.tensor(value if isinstance(value, list) else [value], dtype=torch.float32)
         # Augmentations are stochastic per view; reproducibility comes from worker seeds.
         global_views = torch.stack([self.global_aug(tile) for _ in range(self.global_views)])
         local_views = torch.stack([self.local_aug(tile) for _ in range(self.local_views)])
@@ -183,4 +199,5 @@ class TCGATileDataset(Dataset):
             "sample_idx": torch.tensor(int(idx), dtype=torch.int64),
             "slide_id": torch.tensor(slide_key, dtype=torch.int64),
             "patient_id": torch.tensor(patient_key, dtype=torch.int64),
+            **fino,
         }

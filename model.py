@@ -22,6 +22,7 @@ VIT_VARIANTS = {
     "dinov2_vitl14_reg": (1024, 24, 16, 37, 14, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitl14/dinov2_vitl14_reg4_pretrain.pth"),
     "dinov2_vitg14_reg": (1536, 40, 24, 37, 14, "swiglu", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitg14/dinov2_vitg14_reg4_pretrain.pth"),
 }
+VIT_VARIANTS["robust_norm_dinov2_vits14_reg"] = VIT_VARIANTS["dinov2_vits14_reg"]
 
 
 def probe_transforms():
@@ -45,6 +46,14 @@ class DropPath(nn.Module):
 class LayerScale(nn.Module):
     def __init__(self, dim): super().__init__(); self.gamma = nn.Parameter(torch.ones(dim))
     def forward(self, x): return x * self.gamma
+
+
+# Identity forward whose signed scale steers FINO gradients at the backbone boundary.
+class GradScale(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, scale): ctx.scale = scale; return x
+    @staticmethod
+    def backward(ctx, grad): return grad * ctx.scale, None
 
 
 # Attention with single qkv Linear + F.scaled_dot_product_attention (Flash-2 backend on H100 bf16).
@@ -114,6 +123,7 @@ class ViT(nn.Module):
         cfg = variant_cfg or VIT_VARIANTS[variant]
         dim, depth, heads, pretrain_grid, patch, ffn, pos_has_cls, self.pretrained_url = cfg[:8]
         mlp_ratio, registers = 4.0, cfg[8] if len(cfg) > 8 else 4
+        self.robust_norm = variant == "robust_norm_dinov2_vits14_reg" and variant_cfg is None
         self.patch_size, self.registers, self.embed_dim = patch, registers, dim
         self._pretrain_grid, self._pos_has_cls = pretrain_grid, pos_has_cls
         self.patch_embed = nn.Module()
@@ -125,6 +135,16 @@ class ViT(nn.Module):
         rates = [drop_path_rate * i / max(1, depth - 1) for i in range(depth)]
         self.blocks = nn.ModuleList(Block(dim, heads, mlp_ratio, p, ffn=ffn) for p in rates)
         self.norm = nn.LayerNorm(dim, eps=1e-6)
+        # Keep external baseline state dicts unchanged; ordinary Nanopath models checkpoint these statistics.
+        if self.robust_norm:
+            self.register_buffer("rn_fitted", torch.zeros((), dtype=torch.bool))
+            self.register_buffer("rn_mu", torch.zeros(2, dim))
+            self.register_buffer("rn_v", torch.zeros(2, 32, dim))
+            self.register_buffer("pf_fitted", torch.zeros((), dtype=torch.bool))
+            self.register_buffer("pf_mu", torch.zeros(5, dim))
+            self.register_buffer("pf_v", torch.zeros(5, 1, dim))
+        else:
+            self.rn_fitted = self.pf_fitted = False
 
     # Bicubic resample of the checkpoint patch-pos grid to the current (h, w) grid.
     def _interpolate_pos_embed(self, h, w):
@@ -142,7 +162,7 @@ class ViT(nn.Module):
         patch_pos = patch_pos.permute(0, 2, 3, 1).reshape(1, h * w, -1).to(self.pos_embed.dtype)
         return torch.cat([cls_pos, patch_pos], dim=1) if cls_pos is not None else patch_pos
 
-    # Build [cls, registers, patches] tokens; iBOT swaps the masked patch positions for mask_token.
+    # Build [cls, registers, patches]; masked objectives swap selected patches for mask_token.
     def _prepare_tokens(self, x, masks=None):
         B, _, H, W = x.shape
         h, w = H // self.patch_size, W // self.patch_size
@@ -156,9 +176,14 @@ class ViT(nn.Module):
             return torch.cat([x[:, :1], regs, x[:, 1:]], dim=1)
         return torch.cat([cls, regs, x + self._interpolate_pos_embed(h, w)], dim=1)
 
+    # Remove fitted scanner-response directions while retaining the original feature mean.
+    def _suppress(self, x, mean, directions):
+        centered = x.float() - mean
+        return (centered - (centered @ directions.T) @ directions + mean).to(x.dtype)
+
     # Return semantic token groups used by train.py and probe.py.
     # `checkpoint=True` re-runs each block under torch.utils.checkpoint to trade compute for memory;
-    # useful when the 1-GPU batch of 128 (2 globals + 8 locals) does not fit in 80 GB.
+    # useful when a configured 1-GPU batch does not fit in 80 GB.
     def forward(self, x, masks=None, checkpoint=False):
         x = self._prepare_tokens(x, masks)
         for blk in self.blocks:
@@ -167,26 +192,61 @@ class ViT(nn.Module):
             else:
                 x = blk(x)
         x = self.norm(x)
+        cls, patches = x[:, 0], x[:, 1 + self.registers :]
+        if not self.training and self.rn_fitted:
+            cls = self._suppress(cls, self.rn_mu[0], self.rn_v[0])
+            patch_mean = patches.mean(1)
+            patches = patches + (self._suppress(patch_mean, self.rn_mu[1], self.rn_v[1]) - patch_mean).unsqueeze(1)
         return {
-            "cls": x[:, 0],
+            "cls": cls,
             "registers": x[:, 1 : 1 + self.registers],
-            "patches": x[:, 1 + self.registers :],
+            "patches": patches,
         }
 
-    # Default probe contract: encode_image returns patches for segmentation
-    # and probe_features returns CLS for pooled probes. Recipes may override either method
-    # to define their test-time feature aggregation without changing the locked probe suite.
+    # Robust-norm's segmentation readout fuses the last four blocks, edge-guides a 32x32
+    # spatial grid, and leaves v2 probe.py to pool that grid to the native decoder size.
     def encode_image(self, x, checkpoint=False):
-        return self(x, checkpoint=checkpoint)["patches"]
+        if not self.robust_norm:
+            return self(x, checkpoint=checkpoint)["patches"]
+        batch, _, height, width = x.shape
+        h, w, grid = height // self.patch_size, width // self.patch_size, 32
+        guide = x.mean(1, keepdim=True)
+        guide = (guide - guide.amin((2, 3), keepdim=True)) / (guide.amax((2, 3), keepdim=True) - guide.amin((2, 3), keepdim=True) + 1e-6)
+        tokens, features = self._prepare_tokens(x), []
+        for i, block in enumerate(self.blocks):
+            tokens = torch.utils.checkpoint.checkpoint(block, tokens, use_reentrant=False) if checkpoint and self.training else block(tokens)
+            if i >= len(self.blocks) - 4:
+                features.append(self.norm(tokens)[:, 1 + self.registers :])
+        patches = torch.cat(features, -1)
+        up = F.interpolate(patches.transpose(1, 2).reshape(batch, patches.shape[-1], h, w).float(), size=(grid, grid), mode="bilinear", align_corners=False)
+        guide_lr = F.interpolate(guide, size=(h, w), mode="area")
+        guide_hr = F.interpolate(guide, size=(grid, grid), mode="area")
+        edge_weight = torch.exp(-((guide_hr - F.interpolate(guide_lr, size=(grid, grid), mode="nearest")).abs() ** 2) / 0.02)
+        blur = F.avg_pool2d(F.pad(up, (1, 1, 1, 1), mode="replicate"), 3, 1)
+        return (up + (1 - edge_weight) * (up - blur)).flatten(2).transpose(1, 2).to(patches.dtype)
 
+    # Pooled probes use five strided-depth CLS taps, each with its fitted rank-one suppression.
     def probe_features(self, x):
-        return self(x)["cls"]
+        if not self.robust_norm:
+            return self(x)["cls"]
+        tokens, features = self._prepare_tokens(x), []
+        for i, block in enumerate(self.blocks):
+            tokens = block(tokens)
+            if i in (2, 4, 6, 8, 11):
+                feature = self.norm(tokens)[:, 0]
+                j = len(features)
+                features.append(self._suppress(feature, self.pf_mu[j], self.pf_v[j]) if not self.training and self.pf_fitted else feature)
+        return torch.cat(features, dim=-1)
 
 
 # Strict-load the model's declared pretrained weights; incompatible layouts fail loudly.
 def load_pretrained(model):
     state = torch.hub.load_state_dict_from_url(model.pretrained_url, progress=False, map_location="cpu")
-    model.load_state_dict(state, strict=True)
+    if model.robust_norm:
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        assert not unexpected and all(key.startswith(("rn_", "pf_")) for key in missing), (missing, unexpected)
+    else:
+        model.load_state_dict(state, strict=True)
     return model
 
 
@@ -212,3 +272,20 @@ class DINOHead(nn.Module):
         x = self.mlp(x)
         x = F.normalize(x, dim=-1, p=2)
         return self.last_layer(x)
+
+
+# I-JEPA predicts EMA-teacher patch features from the student's block-masked tokens.
+class JEPAPredictor(nn.Module):
+    def __init__(self, dim, depth=4, width=0, heads=6):
+        super().__init__()
+        width = width or dim
+        self.proj_in = nn.Linear(dim, width) if width != dim else nn.Identity()
+        self.blocks = nn.ModuleList(Block(width, heads, 4.0, 0.0) for _ in range(depth))
+        self.norm = nn.LayerNorm(width, eps=1e-6)
+        self.proj = nn.Linear(width, dim, bias=True)
+
+    def forward(self, patch_tokens):
+        x = self.proj_in(patch_tokens)
+        for block in self.blocks:
+            x = block(x)
+        return self.proj(self.norm(x))
