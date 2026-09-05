@@ -12,32 +12,32 @@ This repository is intentionally made to be compatible with [autoresearch](https
 
 ## Quickstart
 
-The checked-in recipe and complete probe suite are tested on **Linux with one 80 GB H100 and 16 CPU cores**. For a fresh setup, use a filesystem with about **355 GB free** for the training data, evaluation data, and archive extraction. You need an NVIDIA driver compatible with the pinned CUDA 12.9 PyTorch build.
-
-Install [uv](https://docs.astral.sh/uv/) first, then run these commands on your GPU machine or inside an allocated GPU session:
+Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:
 
 ```bash
-git clone --branch robust-norm-v2 https://github.com/MedARC-AI/nanopath.git && cd nanopath
+git clone https://github.com/MedARC-AI/nanopath.git && cd nanopath
 uv sync && source .venv/bin/activate
-wandb login  # or: export WANDB_MODE=offline
+wandb login  # or: export WANDB_MODE=offline before launching noninteractive SLURM jobs
 
-# Download pretraining data, probe datasets, and DINOv2 initialization weights.
+# download pretraining & probe datasets & DINOv2 pretrained ckpt
 python prepare.py download=True
 
-# Short DINO+iBOT smoke training, then COMPLETE v2 probes (allow about 25 minutes).
-python train.py configs/smoke.yaml
+# smoke test the retained DINO+iBOT path; robust-norm remains the full main recipe below
+./submit/train_1gpu.sbatch configs/smoke.yaml
+# or directly on a GPU machine: python train.py configs/smoke.yaml
 
-# Train and evaluate robust-norm; interactive full runs offer Labless sign-in.
-python train.py configs/main.yaml
+# train and evaluate the current nanopath recipe
+# auto-submits to Labless if config passes submission requirements and you provide run name/notes & GitHub login
+RUN_DIR=$PWD/data/robust-norm/my-run
+./submit/train_1gpu.sbatch configs/main.yaml output_dir=$RUN_DIR
+# or directly on a GPU machine: python train.py configs/main.yaml output_dir=$RUN_DIR
 ```
 
-Outputs go to `project.output_dir` in the YAML. To keep a separate run, append `output_dir=/your/run/path` to the training command; a fresh launch replaces any existing output at that path. On MedARC, keep runs under `/data/$USER/nanopath/`.
+`pyproject.toml` pins `torch` / `torchvision` against the CUDA 12.9 wheel index. If your GPU/driver needs a different CUDA build, edit the `torch` and `torchvision` lines in `pyproject.toml` before `uv sync`.
 
-On our **MedARC SLURM cluster**, use `./submit/train_1gpu.sbatch configs/smoke.yaml` and `./submit/train_1gpu.sbatch configs/main.yaml` from the login node instead of the two training commands. On another SLURM cluster, first adapt the script's partition/account/QoS directives to your allocation.
+A successful model training prints periodic train lines, appends metrics to `metrics.jsonl`, and writes the final comparison artifact to `summary.json`. `configs/smoke.yaml` is simply meant to pretrain briefly and then run the fixed downstream probe suite to ensure everything works without errors.
 
-`pyproject.toml` pins `torch` / `torchvision` to CUDA 12.9 wheels. To select another CUDA build, update their version suffixes and matching uv source/index entries together before `uv sync`; see [uv's PyTorch guide](https://docs.astral.sh/uv/guides/integration/pytorch/). If an older cluster CUDA module causes an `nvJitLink` undefined-symbol error, unload that module or launch with `env -u LD_LIBRARY_PATH python train.py ...` so its libraries do not override the installed wheels.
-
-A successful run prints training progress, appends metrics to `metrics.jsonl`, and writes `summary.json` with the final six-family score. Smoke runs execute the full evaluation but are not eligible for Labless submission. W&B can run online or offline; configure it before submitting a noninteractive job.
+W&B can run online or offline, but set that up before submitting a noninteractive job: either run `wandb login` once, or export `WANDB_MODE=offline`.
 
 ## Leaderboard
 
@@ -103,7 +103,7 @@ RUN_DIR=$PWD/data/robust-norm/my-run
 
 The pipeline is:
 
-1. Run `./submit/train_1gpu.sbatch ...` or `python train.py ...` to start your training run. For interactive full runs, both entry points ask for a short `run_name`, an optional experiment note naming the unique change and why, and GitHub device sign-in before training or scheduling the GPU job. Leaving the run name blank or failing to sign in will lead to skipping labless submission.
+1. Run `./submit/train_1gpu.sbatch ...` or `python train.py ...` to start your training run. For full runs, the launcher asks for a short `run_name`, an optional experiment note naming the unique change and why, and GitHub device sign-in before scheduling the GPU job. Leaving the run name blank or failing to sign in will lead to skipping labless submission.
 2. Let `train.py` finish the final probe. The run directory will contain `summary.json`, `metrics.jsonl`, and the source snapshot written at launch under `labless_source/`. The submitter writes `labless_submission.json`, checks the run caps and locked benchmark surface, posts to `api.labless.dev`, and shows the run as `unvalidated` until maintainer validation.
 
 Manual submission is still available for direct `python train.py` runs or copied output directories:
@@ -238,7 +238,7 @@ Full main `nanopath` recipe:
 # or directly on a GPU machine: `python train.py configs/main.yaml`
 ```
 
-`submit/train_1gpu.sbatch` is a prompt-aware launcher when run directly: it collects Labless run name, notes, and GitHub device login before submitting itself to SLURM, then auto-submits eligible completed full runs. Calling `sbatch submit/train_1gpu.sbatch ...` bypasses that prompt and trains without auto-submit. `configs/main.yaml` is sized for an 80 GB H100 at `train.batch_size: 128`. On smaller cards you can set `train.activation_checkpointing: true` and lower `train.batch_size` for training. This does not reduce the fixed probe batch sizes; the complete suite is qualified on an 80 GB H100, so smaller-card evaluation is not guaranteed.
+`submit/train_1gpu.sbatch` is a prompt-aware launcher when run directly: it collects Labless run name, notes, and GitHub device login before submitting itself to SLURM, then auto-submits eligible completed full runs. Calling `sbatch submit/train_1gpu.sbatch ...` bypasses that prompt and trains without auto-submit. `configs/main.yaml` is sized for an 80 GB H100 at `train.batch_size: 128`. On smaller cards you can set `train.activation_checkpointing: true` and lower `train.batch_size` if you OOM.
 
 The checked-in `#SBATCH` lines are specific to our MedARC cluster. On another SLURM cluster, edit those header lines once to match your queue, or run `python train.py ...` directly on an allocated GPU.
 
