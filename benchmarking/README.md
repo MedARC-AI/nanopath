@@ -46,7 +46,7 @@ The complete fixed suite is mandatory. `prepare_probe_state()` rejects partial, 
 
 [The THUNDER manifest](thunder_v2.json) is the only classification and segmentation manifest used at runtime. Every dataset entry has exactly `root`, `train`, and `val`; there is no `test` key.
 
-The downloadable evaluation snapshot is [`medarc/nanopath-evals`](https://huggingface.co/datasets/medarc/nanopath-evals) pinned in `prepare.py` to revision `cc7e0fdabf622c3877321236dd3c31a0f3cabb15`. It is about 192 GiB and contains only the selected development assets. If you are on our MedARC cluster, you do not need to download this snapshot because contents are already under `/data`.
+The downloadable evaluation snapshot is [`medarc/nanopath-evals`](https://huggingface.co/datasets/medarc/nanopath-evals) pinned in `prepare.py` to revision `5c8f7848298fa55e09e0bcc58a90a8e9b1c8d426`. It is about 192 GiB and contains only the selected development assets. If you are on our MedARC cluster, you do not need to download this snapshot because contents are already under `/data`.
 
 We try to reduce overlap between our pretraining dataset (TCGA) and downstream data distributions:
 
