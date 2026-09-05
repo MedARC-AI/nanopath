@@ -1117,10 +1117,8 @@ def run_probe_job(request_path):
         subset_indices, wall = inline_pathorob(model, mean, std, device, patch_transform)
         rob_indices[dataset] = {
             "subsets": subset_indices,
-            "croma": float(sum(v["croma"] for v in subset_indices.values()) / len(subset_indices)),
-            "croma_ltm10": float(sum(v["croma_ltm10"] for v in subset_indices.values()) / len(subset_indices)),
-            "croma_f0": float(sum(v["croma_f0"] for v in subset_indices.values()) / len(subset_indices)),
-            "robustness": float(sum(v["robustness"] for v in subset_indices.values()) / len(subset_indices)),
+            **{key: sum(v[key] for v in subset_indices.values()) / len(subset_indices)
+               for key in ("croma", "croma_ltm10", "croma_f0", "robustness")},
             "wall_seconds": wall,
         }
         print(
@@ -1180,10 +1178,8 @@ def run_probe_job(request_path):
         for subset, subset_metrics in rob_indices[dataset]["subsets"].items():
             for key, value in subset_metrics.items():
                 metrics[f"probe_{dataset}_{subset}_{key}"] = value
-        metrics[f"probe_{dataset}_croma"] = rob_indices[dataset]["croma"]
-        metrics[f"probe_{dataset}_croma_ltm10"] = rob_indices[dataset]["croma_ltm10"]
-        metrics[f"probe_{dataset}_croma_f0"] = rob_indices[dataset]["croma_f0"]
-        metrics[f"probe_{dataset}_robustness"] = rob_indices[dataset]["robustness"]
+        for key in ("croma", "croma_ltm10", "croma_f0", "robustness"):
+            metrics[f"probe_{dataset}_{key}"] = rob_indices[dataset][key]
         per_dataset_score[dataset] = rob_indices[dataset]["robustness"]
         results[dataset] = rob_indices[dataset]
     for dataset, score in per_dataset_score.items():
@@ -1204,10 +1200,8 @@ def run_probe_job(request_path):
     metrics["seg_mean_jaccard"] = sum(metrics[f"probe_{d}_seg_val_jaccard"] for d in segmentation) / len(segmentation)
     metrics["auc_mean"] = sum(metrics[f"probe_{d}_val_auc"] for d in auc) / len(auc)
     metrics["survival_mean_cindex"] = sum(metrics[f"probe_{d}_val_cindex"] for d in survival) / len(survival)
-    metrics["croma_mean"] = sum(metrics[f"probe_{d}_croma"] for d in robustness) / len(robustness)
-    metrics["croma_ltm10_mean"] = sum(metrics[f"probe_{d}_croma_ltm10"] for d in robustness) / len(robustness)
-    metrics["croma_f0_mean"] = sum(metrics[f"probe_{d}_croma_f0"] for d in robustness) / len(robustness)
-    metrics["robustness_mean"] = sum(metrics[f"probe_{d}_robustness"] for d in robustness) / len(robustness)
+    for key in ("croma", "croma_ltm10", "croma_f0", "robustness"):
+        metrics[f"{key}_mean"] = sum(metrics[f"probe_{d}_{key}"] for d in robustness) / len(robustness)
 
     metrics["probe_protocol_version"] = PROBE_PROTOCOL_VERSION
     metrics["final_score"] = sum(weight * metrics[key] for key, weight in SCORE_WEIGHTS)
