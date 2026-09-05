@@ -97,6 +97,9 @@ The complete benchmark was run in independent clean processes on one
 | block-strided-cls nanopath | 1,188.6 s | test-time aggregation exercised |
 | robust-norm nanopath | 1,366.3 s | 49,554 MiB peak; aggregation exercised |
 
+The fresh `main-repro` CRoMa run completed the entire production probe suite in
+1,146.8 seconds (19:07) after 999,936 training tile presentations on one H100.
+
 The two independent representative pre-CRoMa scores differ by 0.000170, below
 the 0.001 determinism gate. These full-run timings predate the metric revision,
 but the expensive image decoding and encoder paths are unchanged; across the
@@ -234,9 +237,10 @@ features, and raw results are under
 
 ## Official-suite ordering fidelity
 
-The promotion study contains six nanopath checkpoints and seven
-principal baselines. Official results were read only after the benchmark,
-manifests, and scalar were frozen.
+The earlier promotion study contained six nanopath checkpoints and seven
+principal baselines. Its table below records the pre-CRoMa protocol: official
+results were read after that benchmark, its manifests, and its scalar were
+frozen. The current CRoMa comparisons follow in the expanded 20-model table.
 
 Pairwise concordance is the fraction of non-tied model pairs ordered the same
 way by nanopath and the official target. Cross-family concordance restricts
