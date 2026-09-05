@@ -45,7 +45,7 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
   <img src="https://api.labless.dev/api/nano-projects/nanopath-v2/plot.svg" alt="nanopath progress plot" width="1290">
 </a>
 
-`final_score` weights classification, segmentation, progression, mutation, survival, and quality-adjusted robustness at 25%, 15%, 25%, 15%, 10%, and 10%. These columns summarize a 20-dataset suite derived from [THUNDER](https://mics-lab.github.io/thunder/), [PathoBench](https://github.com/mahmoodlab/patho-bench), [LEOPARD](https://leopard.grand-challenge.org/), and [PathoROB](https://arxiv.org/abs/2507.17845), with modifications to keep single-GPU evaluation lightweight and use train/validation-only data. See [benchmarking/README.md](benchmarking/README.md) for the full protocol and provenance caveats.
+`final_score` weights classification, segmentation, progression, mutation, survival, and CRoMa robustness at 30%, 15%, 17.5%, 15%, 7.5%, and 15%. These columns summarize a 20-dataset suite derived from [THUNDER](https://mics-lab.github.io/thunder/), [PathoBench](https://github.com/mahmoodlab/patho-bench), [LEOPARD](https://leopard.grand-challenge.org/), [PathoROB](https://arxiv.org/abs/2507.17845), and [CRoMa](https://github.com/clemsgrs/croma), with modifications to keep single-GPU evaluation lightweight and use train/validation-only data. See [benchmarking/README.md](benchmarking/README.md) for the full protocol and provenance caveats.
 
 Nanopath models should be submitted to [Labless](https://labless.dev). `main` corresponds to this repository's main recipe. For promotion, [@PaulScotti](https://github.com/PaulScotti) retrains an unvalidated candidate three times with different randomly selected RNG seeds; its median run becomes the validated `leader` if it beats the incumbent by at least 0.004. `robust-norm-s9876` is the approved exception.
 
@@ -59,32 +59,32 @@ As you can see in the above correlation plots, our fast ~20 minute evaluation su
 
 The `main` branch of this `nanopath` codebase reflects the recipe that supports the below `lr-and-curation` nanopath run.
 
-| # | Description | final score | classification | segmentation | progression | mutation | survival | robustness quality | Contributors |
+| # | Description | final score | classification | segmentation | progression | mutation | survival | robustness | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | robust-norm | **0.6733** | 0.7507 | 0.6024 | 0.6136 | 0.5885 | 0.6010 | 0.9354 | @anishdulal |
-| 2 | jepa-fino | 0.6698 | 0.7384 | 0.6016 | 0.5903 | 0.6190 | 0.6210 | 0.9240 | @ml-and-ml |
-| 3 | I-JEPA contig patch | 0.6648 | 0.7219 | 0.5993 | 0.5931 | 0.6148 | 0.6172 | 0.9225 | @NimaAsh |
-| 4 | block-strided-cls | 0.6591 | 0.7477 | 0.6039 | 0.5390 | 0.6066 | 0.6335 | 0.9253 | @RyanKim17920 |
-| 5 | lr-and-curation | 0.6564 | 0.7048 | 0.5940 | 0.5948 | 0.6025 | 0.6199 | 0.9003 | @nevasini1 |
+| 1 | robust-norm | **0.6476** | 0.7507 | 0.6024 | 0.6136 | 0.5885 | 0.6010 | 0.6088 | @anishdulal |
+| 2 | jepa-fino | 0.6465 | 0.7384 | 0.6016 | 0.5903 | 0.6190 | 0.6210 | 0.6132 | @ml-and-ml |
+| 3 | I-JEPA contig patch | 0.6409 | 0.7219 | 0.5993 | 0.5931 | 0.6148 | 0.6172 | 0.6143 | @NimaAsh |
+| 4 | block-strided-cls | 0.6388 | 0.7477 | 0.6039 | 0.5390 | 0.6066 | 0.6335 | 0.6069 | @RyanKim17920 |
+| 5 | lr-and-curation | 0.6332 | 0.7048 | 0.5940 | 0.5948 | 0.6025 | 0.6199 | 0.6114 | @nevasini1 |
 
 ### Baselines
 
-| # | Name | Description | final score | classification | segmentation | progression | mutation | survival | robustness quality |
+| # | Name | Description | final score | classification | segmentation | progression | mutation | survival | robustness |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|
-| 1 | UNI-2-h | MahmoodLab UNI-2-h ViT-H/14 | **0.7271** | 0.8161 | 0.6323 | 0.7156 | 0.6408 | 0.6105 | 0.9221 |
-| 2 | GenBio-PathFM | GenBio-PathFM ViT-G/16 | 0.7259 | 0.8213 | 0.6100 | 0.7046 | 0.6232 | 0.6312 | 0.9628 |
-| 3 | H-optimus-0 | H-optimus-0 ViT-G/14-reg | 0.7156 | 0.8082 | 0.5916 | 0.6961 | 0.6485 | 0.6059 | 0.9290 |
-| 4 | Midnight-12K | Kaiko Midnight-12K ViT-G/14 | 0.7111 | 0.7761 | 0.6326 | 0.7080 | 0.6170 | 0.6100 | 0.9169 |
-| 5 | H0-mini | Bioptimus H0-mini ViT-B/14-reg | 0.7021 | 0.7956 | 0.6371 | 0.6586 | 0.6026 | 0.5945 | 0.9314 |
-| 6 | Virchow | Paige/Microsoft Virchow ViT-H/14 | 0.7016 | 0.7728 | 0.6326 | 0.6541 | 0.6291 | 0.6173 | 0.9388 |
-| 7 | GigaPath | Prov-GigaPath tile encoder ViT-G/16 | 0.6981 | 0.7948 | 0.6197 | 0.6813 | 0.6130 | 0.5802 | 0.8611 |
-| 8 | GigaPath-Flash | Prov-GigaPath-Flash tile encoder ViT-S/16 | 0.6748 | 0.7742 | 0.5569 | 0.6620 | 0.5796 | 0.6122 | 0.8407 |
-| 9 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.6626 | 0.6640 | 0.6306 | 0.6748 | 0.5829 | 0.6058 | 0.8534 |
-| 10 | Kaiko-S/16 | Kaiko pathology ViT-S/16 | 0.6571 | 0.7737 | 0.6060 | 0.5963 | 0.5539 | 0.5907 | 0.8151 |
-| 11 | DINOv2-G/14 | Meta DINOv2-G/14-reg | 0.6442 | 0.6804 | 0.5753 | 0.5928 | 0.6038 | 0.6288 | 0.8617 |
-| 12 | DINOv2-L/14 | Meta DINOv2-L/14-reg | 0.6437 | 0.6632 | 0.5667 | 0.6298 | 0.6005 | 0.6009 | 0.8530 |
-| 13 | DINOv2-B/14 | Meta DINOv2-B/14-reg | 0.6265 | 0.6500 | 0.5691 | 0.5753 | 0.6062 | 0.6015 | 0.8371 |
-| 14 | DINOv2-S/14 | Meta DINOv2-S/14-reg | 0.6198 | 0.6480 | 0.5665 | 0.5364 | 0.6202 | 0.6220 | 0.8353 |
+| 1 | GenBio-PathFM | GenBio-PathFM ViT-G/16 | **0.6999** | 0.8213 | 0.6100 | 0.7046 | 0.6232 | 0.6312 | 0.6525 |
+| 2 | UNI-2-h | MahmoodLab UNI-2-h ViT-H/14 | 0.6944 | 0.8161 | 0.6323 | 0.7156 | 0.6408 | 0.6105 | 0.5837 |
+| 3 | Midnight-12K | Kaiko Midnight-12K ViT-G/14 | 0.6937 | 0.7761 | 0.6326 | 0.7080 | 0.6170 | 0.6100 | 0.6918 |
+| 4 | H-optimus-0 | H-optimus-0 ViT-G/14-reg | 0.6833 | 0.8082 | 0.5916 | 0.6961 | 0.6485 | 0.6059 | 0.5838 |
+| 5 | H0-mini | Bioptimus H0-mini ViT-B/14-reg | 0.6809 | 0.7956 | 0.6371 | 0.6586 | 0.6026 | 0.5945 | 0.6429 |
+| 6 | Virchow | Paige/Microsoft Virchow ViT-H/14 | 0.6775 | 0.7728 | 0.6326 | 0.6541 | 0.6291 | 0.6173 | 0.6379 |
+| 7 | GigaPath | Prov-GigaPath tile encoder ViT-G/16 | 0.6685 | 0.7948 | 0.6197 | 0.6813 | 0.6130 | 0.5802 | 0.5492 |
+| 8 | GigaPath-Flash | Prov-GigaPath-Flash tile encoder ViT-S/16 | 0.6500 | 0.7742 | 0.5569 | 0.6620 | 0.5796 | 0.6122 | 0.5703 |
+| 9 | Kaiko-S/16 | Kaiko pathology ViT-S/16 | 0.6409 | 0.7737 | 0.6060 | 0.5963 | 0.5539 | 0.5907 | 0.5741 |
+| 10 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.6382 | 0.6640 | 0.6306 | 0.6748 | 0.5829 | 0.6058 | 0.6229 |
+| 11 | DINOv2-G/14 | Meta DINOv2-G/14-reg | 0.6149 | 0.6804 | 0.5753 | 0.5928 | 0.6038 | 0.6288 | 0.5534 |
+| 12 | DINOv2-L/14 | Meta DINOv2-L/14-reg | 0.6124 | 0.6632 | 0.5667 | 0.6298 | 0.6005 | 0.6009 | 0.5540 |
+| 13 | DINOv2-B/14 | Meta DINOv2-B/14-reg | 0.5988 | 0.6500 | 0.5691 | 0.5753 | 0.6062 | 0.6015 | 0.5449 |
+| 14 | DINOv2-S/14 | Meta DINOv2-S/14-reg | 0.5945 | 0.6480 | 0.5665 | 0.5364 | 0.6202 | 0.6220 | 0.5437 |
 
 Baseline rows are frozen reference checkpoints evaluated with the same probe suite. They help calibrate the plot, but pathology-specific baselines are not valid initialization points for nanopath leaderboard submissions. The reference scripts live in `baselines/`.
 

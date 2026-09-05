@@ -56,6 +56,24 @@ The head and `C` are fixed. There is no validation hyperparameter selection,
 matching PathoBench's raw-feature linear protocol more closely than selecting
 `C` on the same folds being reported.
 
+These are three folds of one partition, not three repetitions. A
+[training-seed audit](validation.md#progression-variance-audit-2026-09-05)
+found that repeated folds and leave-pair-out AUC increased training-seed
+variability for both examined recipes; V2 therefore retains its original estimator.
+A subsequent [cohort audit](validation.md#progression-cohort-audit-2026-09-05)
+tested VisioMel relapse, breast residual burden, HER2 response, and Valentino
+PFS under the then-current 25% progression weight. None consistently
+improved training-seed stability and official-suite ordering under the fast probe;
+these research cohorts are not part of V2.
+
+UCLA's slide IDs are not verified patient IDs. The
+[source study](https://pmc.ncbi.nlm.nih.gov/articles/PMC7611527/) reports 112
+H&E samples from 62 patients, whereas PathoBench assigns sample-level case IDs
+such as `S135`. The current manifest and splitter cannot establish patient
+separation between internal folds. A future patient-grouped protocol requires
+the source sample-to-patient mapping; additional partitions of the same slides
+do not repair this limitation. Official fold-0 test slides remain excluded.
+
 ## Survival
 
 LEOPARD has three checked-in event-balanced 116/58 case folds. CPTAC-PDA has
@@ -89,5 +107,5 @@ It does mean the final score is not completely domain-independent of CPTAC.
 Consequently, correlation with official CPTAC classification is treated as
 post-freeze external validation of transfer and ordering, not as an untouched
 estimate of generalization to an unseen institution or organ. CPTAC-PDA
-survival contributes half of the 10%-weighted survival family, or 5% of the
+survival contributes half of the 7.5%-weighted survival family, or 3.75% of the
 final scalar.

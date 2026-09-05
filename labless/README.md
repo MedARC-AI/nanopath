@@ -147,7 +147,7 @@ The payload intentionally makes the run inspectable. It includes:
 - verified GitHub login and notes
 - final metric and canonical family metrics:
   `classification_mean_f1`, `seg_mean_f1`, `slide_mean_auc`, `auc_mean`,
-  `survival_mean_cindex`, and `robustness_quality_mean`, plus diagnostic cells
+  `survival_mean_cindex`, and `robustness_mean`, plus CRoMa diagnostic cells
 - run family, recipe id, and tier (`baseline` for frozen reference scripts)
 - source snapshot id, optional git remote, commit, full changed source path list,
   changed review files, and a capped review-file snapshot for server-built diffs
@@ -158,7 +158,7 @@ The public API redacts local machine paths, hostnames, users, repo roots, and
 local artifact paths from submitted rows.
 
 The final score weights classification, segmentation, progression, mutation,
-survival, and quality-adjusted robustness at 25%, 15%, 25%, 15%, 10%, and 10%.
+survival, and CRoMa robustness at 30%, 15%, 17.5%, 15%, 7.5%, and 15%.
 Labless rejects scores that do not match those submitted components.
 
 Agents can crawl the public experiment ledger directly with the JSON API:
@@ -190,3 +190,12 @@ candidates three times with different randomly selected training seeds. The
 median run becomes validated leader if it beats the incumbent by at least
 0.004; `robust-norm-s9876` is the approved exception. Maintainers separately
 mark the run whose commit is on `main`. Failed runs are not accepted.
+
+Historical v2 runs without retained weights are marked as estimates. Their
+robustness is the original quality-adjusted value minus 0.3063356348369218, the
+mean difference measured on the six plotted nanopath checkpoints (SD 0.01637).
+The five predictive components are unchanged and the new six-family weights
+are applied. Estimated points are labeled with ≈ and cannot establish a leader.
+New submissions must provide measured `croma_mean` and satisfy
+`robustness_mean == (1 + croma_mean) / 2`; historical estimates are a maintainer
+migration exception. Original scores remain available in each run's metrics.

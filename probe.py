@@ -1,5 +1,5 @@
 # Inline downstream probes. Protocol v2 weights classification/segmentation/
-# progression/mutation/survival/robustness at 25/15/25/15/10/10 percent.
+# progression/mutation/survival/robustness at 30/15/17.5/15/7.5/15 percent.
 #
 # train.py can snapshot a probe checkpoint at each FLOP milestone to run
 # this file as a subprocess (`python probe.py req.json`), whereby training pauses,
@@ -32,6 +32,10 @@ Image.MAX_IMAGE_PIXELS = None  # Probe ROIs are trusted local pathology images, 
 
 BENCHMARKING_DIR = Path(__file__).resolve().parent / "benchmarking"
 PROBE_PROTOCOL_VERSION = 2
+SCORE_WEIGHTS = (
+    ("classification_mean_f1", 0.30), ("seg_mean_f1", 0.15), ("slide_mean_auc", 0.175),
+    ("auc_mean", 0.15), ("survival_mean_cindex", 0.075), ("robustness_mean", 0.15),
+)
 THUNDER_V2 = json.loads((BENCHMARKING_DIR / "thunder_v2.json").read_text())
 assert THUNDER_V2["protocol_version"] == PROBE_PROTOCOL_VERSION
 assert all(set(spec) == {"root", "train", "val"} for family in ("classification", "segmentation") for spec in THUNDER_V2[family].values())
@@ -88,7 +92,8 @@ SURVIVAL_TILES_PER_SLIDE_CAPS = {"leopard_bcr": 768, "cptac_pda_os": 0}  # 0 mea
 SURVIVAL_COXNET_ALPHA_FRACTIONS = (0.1, 0.2, 0.7)
 SURVIVAL_COXNET_L1_RATIO = 0.5
 SURVIVAL_COXNET_MAX_ITER = 100000
-PATHOROB_SUBSETS = {"camelyon": 11, "tolkach_esca": 46}
+PATHOROB_SUBSETS = ("camelyon", "tolkach_esca")
+CROMA_M = 5
 # Module-level so dataset adapters can read roots without threading cfg through every call.
 # Populated from cfg.probe.dataset_roots by prepare_probe_state() and run_probe_job().
 DATASET_ROOTS = {}
@@ -135,7 +140,7 @@ def prepare_probe_state(cfg, output_dir):
         path.mkdir(parents=True, exist_ok=True)
     groups = {request_key: [str(x) for x in cfg["probe"].get(cfg_key, [])] for request_key, (cfg_key, _) in TASK_FIELDS.items()}
     data = {
-        "version": 16,
+        "version": 17,
         "probe_protocol_version": PROBE_PROTOCOL_VERSION,
         "family": str(cfg["project"]["family"]),
         "count": int(cfg["probe"]["count"]),
@@ -145,7 +150,7 @@ def prepare_probe_state(cfg, output_dir):
     if paths["state_path"].exists():
         # Explicit resume can continue only if the probe family/datasets/count match the old state.
         previous = json.loads(paths["state_path"].read_text())
-        if previous["version"] != 16:
+        if previous["version"] != 17:
             raise ValueError(f"unsupported probe state version: {previous['version']}")
         if previous["family"] != data["family"]:
             raise ValueError(f"probe family changed from {previous['family']} to {data['family']}")
@@ -573,9 +578,41 @@ def inline_segmentation_f1(model, mean, std, dataset, device, transform):
     return result, time.monotonic() - started_at
 
 
-# PathoROB robustness index over held-out camelyon + tolkach_esca subsets. Its published
-# adapter is fixed to final CLS plus mean patch tokens, so it intentionally reads forward()
-# rather than the model-defined probe_features() used by the other pooled probes.
+# CRoMa all-row design, m=5: clemsgrs/croma@3f58d5e4bd9ecf74c34d0c76eb88d80cee9fb706.
+# Typed top-k replaces adaptive searches exactly; float64 avoids cancellation near cosine 1.
+def croma_score(embeddings, meta, device):
+    import numpy as np
+
+    geometry = torch.tensor(embeddings, dtype=torch.float64, device=device)
+    geometry /= torch.linalg.vector_norm(geometry, dim=1, keepdim=True)
+    slide, label, center = [
+        torch.from_numpy(np.unique(meta[key].to_numpy(dtype=str), return_inverse=True)[1]).to(device)
+        for key in ("slide_id", "biological_class", "medical_center")
+    ]
+    margins = []
+    for s in range(0, len(meta), KNN_CHUNK_SIZE):
+        e = min(s + KNN_CHUNK_SIZE, len(meta))
+        distance = (1 - geometry[s:e] @ geometry.T).clamp_(0, 2)
+        same_slide, same_label, same_center = [x[s:e, None] == x[None] for x in (slide, label, center)]
+        d_so = distance.masked_fill(~(same_label & ~same_center & ~same_slide), float("inf")).topk(CROMA_M, dim=1, largest=False).values.mean(1)
+        d_os = distance.masked_fill(~(~same_label & same_center & ~same_slide), float("inf")).topk(CROMA_M, dim=1, largest=False).values.mean(1)
+        margins.append((d_os - d_so) / (d_os + d_so))
+    sample_croma = torch.cat(margins).cpu().numpy()
+    assert np.isfinite(sample_croma).all(), "CRoMa requires five SO/OS neighbors and nonzero distance sums for every tile"
+    croma = float(np.median(sample_croma))
+    q10 = float(np.percentile(sample_croma, 10))
+    return {
+        "croma": croma,
+        "croma_q10": q10,
+        "croma_ltm10": float(sample_croma[sample_croma <= q10].mean()),
+        "croma_f0": float((sample_croma <= 0).mean()),
+        "croma_m": CROMA_M,
+        "robustness": (1 + croma) / 2,
+    }
+
+
+# CRoMa over held-out Camelyon + Tolkach ESCA. The adapter remains fixed to PathoROB's
+# final CLS plus mean patch tokens rather than the model-defined pooled probe features.
 def inline_pathorob(model, mean, std, device, transform):
     import io
     import numpy as np
@@ -592,7 +629,7 @@ def inline_pathorob(model, mean, std, device, transform):
         def __getitem__(self, i): return transform(Image.open(io.BytesIO(self.byts[i])).convert("RGB"))
 
     out = {}
-    for name, k_target in PATHOROB_SUBSETS.items():
+    for name in PATHOROB_SUBSETS:
         tbl = pa.concat_tables([pq.read_table(f) for f in sorted((DATASET_ROOTS["pathorob"] / name).glob("data/*.parquet"))])
         meta = tbl.select(["slide_id", "biological_class", "medical_center"]).to_pandas()
         if name == "tolkach_esca":
@@ -609,40 +646,7 @@ def inline_pathorob(model, mean, std, device, transform):
                     o = model((x - mean) / std)
                     feat = torch.cat([o["cls"], o["patches"].mean(dim=1)], dim=-1)
                 embs.append(feat.float().cpu().numpy())
-        embs = np.concatenate(embs).astype(np.float32)
-        embs /= np.maximum(np.linalg.norm(embs, axis=1, keepdims=True), 1e-12)
-        embs_t = torch.from_numpy(embs).to(device)
-        sl = meta.slide_id.to_numpy(dtype=object)
-        bi = meta.biological_class.to_numpy(dtype=object)
-        ce = meta.medical_center.to_numpy(dtype=object)
-        n = len(meta)
-        k = min(k_target + int(np.unique(sl, return_counts=True)[1].max()), n - 1)
-        biological_classes = np.asarray(sorted(np.unique(bi)), dtype=object)
-        biological_ids = np.searchsorted(biological_classes, bi)
-        biological_true, biological_pred = [], []
-        SO = OS = 0
-        for s in range(0, n, KNN_CHUNK_SIZE):
-            e = min(s + KNN_CHUNK_SIZE, n)
-            sim = embs_t[s:e] @ embs_t.T
-            sim[torch.arange(e - s, device=device), torch.arange(s, e, device=device)] = -float("inf")
-            topk = torch.topk(sim, k, dim=1).indices.cpu().numpy()
-            qi = np.arange(s, e)
-            bm = bi[topk] == bi[qi][:, None]
-            cm = ce[topk] == ce[qi][:, None]
-            ns = sl[topk] != sl[qi][:, None]
-            keep = ns & (np.cumsum(ns, axis=1) <= k_target)
-            SO += int(((bm & ~cm) & keep).sum())
-            OS += int(((~bm & cm) & keep).sum())
-            biological_true.extend(biological_ids[qi].tolist())
-            biological_pred.extend([int(np.bincount(row[mask], minlength=len(biological_classes)).argmax()) for row, mask in zip(biological_ids[topk], keep)])
-        from sklearn.metrics import balanced_accuracy_score
-        robustness_index = SO / (SO + OS)
-        biological_balanced_accuracy = float(balanced_accuracy_score(biological_true, biological_pred))
-        out[name] = {
-            "robustness_index": robustness_index,
-            "biological_balanced_accuracy": biological_balanced_accuracy,
-            "robustness_quality": (robustness_index + biological_balanced_accuracy) / 2,
-        }
+        out[name] = croma_score(np.concatenate(embs), meta, device)
     return out, time.monotonic() - started_at
 
 
@@ -1114,16 +1118,17 @@ def run_probe_job(request_path):
         subset_indices, wall = inline_pathorob(model, mean, std, device, patch_transform)
         rob_indices[dataset] = {
             "subsets": subset_indices,
-            "robustness_index": float(sum(v["robustness_index"] for v in subset_indices.values()) / len(subset_indices)),
-            "biological_balanced_accuracy": float(sum(v["biological_balanced_accuracy"] for v in subset_indices.values()) / len(subset_indices)),
-            "robustness_quality": float(sum(v["robustness_quality"] for v in subset_indices.values()) / len(subset_indices)),
+            "croma": float(sum(v["croma"] for v in subset_indices.values()) / len(subset_indices)),
+            "croma_ltm10": float(sum(v["croma_ltm10"] for v in subset_indices.values()) / len(subset_indices)),
+            "croma_f0": float(sum(v["croma_f0"] for v in subset_indices.values()) / len(subset_indices)),
+            "robustness": float(sum(v["robustness"] for v in subset_indices.values()) / len(subset_indices)),
             "wall_seconds": wall,
         }
         print(
             f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
-            f"inline_robustness_done: {dataset}  robustness={rob_indices[dataset]['robustness_index']:.4f}  "
-            f"biological_accuracy={rob_indices[dataset]['biological_balanced_accuracy']:.4f}  "
-            f"quality={rob_indices[dataset]['robustness_quality']:.4f}  wall={wall:.2f}s",
+            f"inline_robustness_done: {dataset}  robustness={rob_indices[dataset]['robustness']:.4f}  "
+            f"croma={rob_indices[dataset]['croma']:+.4f}  ltm10={rob_indices[dataset]['croma_ltm10']:+.4f}  "
+            f"f0={rob_indices[dataset]['croma_f0']:.4f}  wall={wall:.2f}s",
             flush=True,
         )
 
@@ -1176,10 +1181,11 @@ def run_probe_job(request_path):
         for subset, subset_metrics in rob_indices[dataset]["subsets"].items():
             for key, value in subset_metrics.items():
                 metrics[f"probe_{dataset}_{subset}_{key}"] = value
-        metrics[f"probe_{dataset}_robustness_index"] = rob_indices[dataset]["robustness_index"]
-        metrics[f"probe_{dataset}_biological_balanced_accuracy"] = rob_indices[dataset]["biological_balanced_accuracy"]
-        metrics[f"probe_{dataset}_robustness_quality"] = rob_indices[dataset]["robustness_quality"]
-        per_dataset_score[dataset] = rob_indices[dataset]["robustness_quality"]
+        metrics[f"probe_{dataset}_croma"] = rob_indices[dataset]["croma"]
+        metrics[f"probe_{dataset}_croma_ltm10"] = rob_indices[dataset]["croma_ltm10"]
+        metrics[f"probe_{dataset}_croma_f0"] = rob_indices[dataset]["croma_f0"]
+        metrics[f"probe_{dataset}_robustness"] = rob_indices[dataset]["robustness"]
+        per_dataset_score[dataset] = rob_indices[dataset]["robustness"]
         results[dataset] = rob_indices[dataset]
     for dataset, score in per_dataset_score.items():
         metrics[f"probe_{dataset}_score"] = score
@@ -1199,13 +1205,13 @@ def run_probe_job(request_path):
     metrics["seg_mean_jaccard"] = sum(metrics[f"probe_{d}_seg_val_jaccard"] for d in segmentation) / len(segmentation)
     metrics["auc_mean"] = sum(metrics[f"probe_{d}_val_auc"] for d in auc) / len(auc)
     metrics["survival_mean_cindex"] = sum(metrics[f"probe_{d}_val_cindex"] for d in survival) / len(survival)
-    metrics["robustness_mean"] = sum(metrics[f"probe_{d}_robustness_index"] for d in robustness) / len(robustness)
-    metrics["robustness_biological_balanced_accuracy_mean"] = sum(metrics[f"probe_{d}_biological_balanced_accuracy"] for d in robustness) / len(robustness)
-    metrics["robustness_quality_mean"] = sum(metrics[f"probe_{d}_robustness_quality"] for d in robustness) / len(robustness)
+    metrics["croma_mean"] = sum(metrics[f"probe_{d}_croma"] for d in robustness) / len(robustness)
+    metrics["croma_ltm10_mean"] = sum(metrics[f"probe_{d}_croma_ltm10"] for d in robustness) / len(robustness)
+    metrics["croma_f0_mean"] = sum(metrics[f"probe_{d}_croma_f0"] for d in robustness) / len(robustness)
+    metrics["robustness_mean"] = sum(metrics[f"probe_{d}_robustness"] for d in robustness) / len(robustness)
 
     metrics["probe_protocol_version"] = PROBE_PROTOCOL_VERSION
-    score_metrics = ("classification_mean_f1", "seg_mean_f1", "slide_mean_auc", "auc_mean", "survival_mean_cindex", "robustness_quality_mean")
-    metrics["final_score"] = sum(weight * metrics[key] for weight, key in zip((0.25, 0.15, 0.25, 0.15, 0.10, 0.10), score_metrics))
+    metrics["final_score"] = sum(weight * metrics[key] for key, weight in SCORE_WEIGHTS)
 
     print(
         f"{console_prefix()} ProbeWorker  [{request['train_step']}]  "
@@ -1214,7 +1220,7 @@ def run_probe_job(request_path):
         f"fewshot={metrics.get('fewshot_mean_f1')}  classification={metrics.get('classification_mean_f1')}  "
         f"slide={metrics.get('slide_mean_auc')}  seg={metrics.get('seg_mean_f1')}  "
         f"auc={metrics.get('auc_mean')}  survival={metrics.get('survival_mean_cindex')}  "
-        f"robustness_quality={metrics.get('robustness_quality_mean')}  "
+        f"robustness={metrics.get('robustness_mean')}  "
         f"wall: {time.monotonic() - probe_started_at:.2f}s",
         flush=True,
     )

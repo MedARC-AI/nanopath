@@ -382,7 +382,8 @@ def final_metrics(summary: dict[str, Any], rows: list[dict[str, Any]], primary: 
     direct_metrics = {
         "classification_mean_f1", "linear_mean_f1", "knn_mean_f1", "fewshot_mean_f1",
         "seg_mean_f1", "seg_mean_jaccard", "slide_mean_auc", "auc_mean",
-        "survival_mean_cindex", "robustness_mean", "robustness_quality_mean",
+        "survival_mean_cindex", "robustness_mean", "croma_mean", "croma_ltm10_mean",
+        "croma_f0_mean",
     }
     metrics: dict[str, float] = {}
     for key, value in summary.items():
