@@ -99,9 +99,13 @@ The complete benchmark was run in independent clean processes on one
 
 The fresh `main-repro` CRoMa run completed the entire production probe suite in
 1,146.8 seconds (19:07) after 999,936 training tile presentations on one H100.
+The requested `robust-norm-v2-repro` retraining completed 993,792 presentations
+and the full suite in 1,135.4 seconds (18:55). Their measured final scores are
+0.627725 and 0.646750, respectively; both replace their historical Labless
+evaluations and do not establish a new leader.
 
 The two independent representative pre-CRoMa scores differ by 0.000170, below
-the 0.001 determinism gate. These full-run timings predate the metric revision,
+the 0.001 determinism gate. The timings in the table predate the metric revision,
 but the expensive image decoding and encoder paths are unchanged; across the
 29 cached study encoders, float64 CRoMa took 0.87–3.34 seconds for Camelyon and
 0.81–1.84 seconds for Tolkach. Every listed run is below the 1,500-second release limit,
