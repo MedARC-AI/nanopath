@@ -40,7 +40,7 @@ from PIL import Image
 REPO_ROOT = Path(__file__).resolve().parent
 HF_TRAIN_REPO_ID = "medarc/nanopath"
 HF_EVAL_REPO_ID = "medarc/nanopath-evals"
-HF_EVAL_REVISION = "635a83330b0dc2917d7524644f11b04188a63e53"
+HF_EVAL_REVISION = "cc7e0fdabf622c3877321236dd3c31a0f3cabb15"
 FINO_META_URL = "https://raw.githubusercontent.com/MedARC-AI/nanopath/371533a9d7d670216859e369500a70f84abc3460/metadata/fino_meta.json"
 FINO_META_SHA256 = "45b49a11891c6889f2f240de5ffaecd5ded57f2146c151c73cb43ca3872a5d55"
 TILE_SIZE = 224
