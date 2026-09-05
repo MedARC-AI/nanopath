@@ -583,8 +583,7 @@ def inline_segmentation_f1(model, mean, std, dataset, device, transform):
 def croma_score(embeddings, meta, device):
     import numpy as np
 
-    geometry = torch.tensor(embeddings, dtype=torch.float64, device=device)
-    geometry /= torch.linalg.vector_norm(geometry, dim=1, keepdim=True)
+    geometry = F.normalize(torch.tensor(embeddings, dtype=torch.float64, device=device), dim=1)
     slide, label, center = [
         torch.from_numpy(np.unique(meta[key].to_numpy(dtype=str), return_inverse=True)[1]).to(device)
         for key in ("slide_id", "biological_class", "medical_center")
