@@ -20,6 +20,10 @@ Fresh training seeds are 3539, 7275, and 6435, sampled before launching either r
 
 `probe.py`, `benchmarking/`, and probe configuration retain the current CRoMa and 100-repeat UCLA protocol byte-for-byte. Historical submission scores are therefore not exact reproduction targets. Compare each three-seed median against the measured incumbent 0.6465074136 with the fixed 0.004 promotion margin and two-hour H100 training requirement.
 
+Full results (3539: 0.659681, 7275: 0.662299, 6435: 0.652835) give a median of **0.659681** at seed 3539, **+0.013173** above the measured incumbent. This clears the fixed 0.004 promotion margin. All three runs completed the unchanged 20-task evaluation and passed source, checkpoint, budget, and submission dry-run checks.
+
+The [maintainer report](/data/paul/nanopath/reproduction-20260908/REPORT.md) includes family/dataset scores, training diagnostics, exact source and checkpoint hashes, and the separate original-Pathway-checkpoint reference.
+
 ## Quickstart
 
 Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:
