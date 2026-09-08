@@ -375,6 +375,9 @@ def main():
         target = source_snapshot_dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target)
+        # Freeze effective CLI seed/output overrides so each submitted recipe replays its own run.
+        if path == Path(cfg["config_path"]):
+            target.write_text(yaml.safe_dump({key: value for key, value in cfg.items() if key != "config_path"}, sort_keys=False))
     wandb_meta = {"entity": wandb_run.entity, "project": "nanopath", "id": wandb_run.id, "name": wandb_name, "url": wandb_run.url,
                   "mode": getattr(wandb_run.settings, "mode", ""), "source_artifact": source_id,
                   "source_dir": str(source_snapshot_dir), "git": {"commit": git_commit, "remote": git_remote}}
