@@ -12,7 +12,7 @@ This repository is intentionally made to be compatible with [autoresearch](https
 
 ## GuruTurbo1.0
 
-Maintainer reproduction of [ScienceGuru’s frozen submission](https://labless.dev/runs/run_sub_bf33fffa9d), starting from `robust-norm-v2` at `418605b`.
+Maintainer reproduction of [ScienceGuru’s frozen submission](https://labless.dev/runs/run_sub_bf33fffa9d) by [@aajing](https://github.com/aajing), starting from `robust-norm-v2` at `418605b`.
 
 - `tissue_thresh 0.0 → 0.1`; only include tiles with at least 10% estimated tissue.
 - Standard JEPA → focal JEPA (`gamma=1`); weight harder-to-predict patches more.
@@ -74,7 +74,7 @@ The `main` branch uses the `lr-and-curation` recipe. Model links below select th
 
 | # | Description | final score | classification | segmentation | progression | mutation | survival | robustness | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | [GuruTurbo1.0](https://github.com/MedARC-AI/nanopath/tree/GuruTurbo1.0) | **0.6597** | 0.7518 | 0.6030 | 0.6365 | 0.6289 | 0.6301 | 0.6046 | @aajing |
+| 1 | [GuruTurbo1.0](https://github.com/MedARC-AI/nanopath/tree/GuruTurbo1.0) | **0.6597** | 0.7518 | 0.6030 | 0.6365 | 0.6289 | 0.6301 | 0.6046 | [@aajing](https://github.com/aajing) |
 | 2 | [pathway-tta](https://github.com/MedARC-AI/nanopath/tree/pathway-tta) | 0.6491 | 0.7557 | 0.6020 | 0.5993 | 0.6128 | 0.6242 | 0.5896 | @achi2023 |
 | 3 | [jepa-fino](https://github.com/MedARC-AI/nanopath/tree/jepa-fino-v2) | 0.6483 | 0.7384 | 0.6016 | 0.6010 | 0.6190 | 0.6210 | 0.6132 | @ml-and-ml |
 | 4 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm-v2) | 0.6465 | 0.7507 | 0.6024 | 0.6073 | 0.5885 | 0.6010 | 0.6088 | @anishdulal |
