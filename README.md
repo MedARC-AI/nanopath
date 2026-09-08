@@ -57,11 +57,11 @@ As you can see in the above correlation plots, our fast ~20 minute evaluation su
 
 ### nanopath models
 
-The `main` branch of `nanopath` codebase reflects the `lr-and-curation` nanopath recipe. Clicking the model name in table below will take you to a GitHub branch for the code used to train its Labless validated run.
+The `main` branch uses the `lr-and-curation` recipe. Model links below select the corresponding training recipe; use `--branch jepa-fino-v2` or `--branch robust-norm-v2` when cloning to start from either recipe with the current evaluation suite.
 
 | # | Description | final score | classification | segmentation | progression | mutation | survival | robustness | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | jepa-fino | **0.6483** | 0.7384 | 0.6016 | 0.6010 | 0.6190 | 0.6210 | 0.6132 | @ml-and-ml |
+| 1 | [jepa-fino](https://github.com/MedARC-AI/nanopath/tree/jepa-fino-v2) | **0.6483** | 0.7384 | 0.6016 | 0.6010 | 0.6190 | 0.6210 | 0.6132 | @ml-and-ml |
 | 2 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm-v2) | 0.6465 | 0.7507 | 0.6024 | 0.6073 | 0.5885 | 0.6010 | 0.6088 | @anishdulal |
 | 3 | I-JEPA contig patch | 0.6463 | 0.7219 | 0.5993 | 0.6238 | 0.6148 | 0.6172 | 0.6143 | @NimaAsh |
 | 4 | block-strided-cls | 0.6448 | 0.7477 | 0.6039 | 0.5738 | 0.6066 | 0.6335 | 0.6069 | @RyanKim17920 |
