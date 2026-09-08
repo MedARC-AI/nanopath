@@ -22,6 +22,8 @@ Fresh training seeds are 3539, 7275, and 6435, sampled before launching either r
 
 Full results (3539: 0.649686, 7275: 0.649070, 6435: 0.647337) give a median of **0.649070** at seed 7275, **+0.002562** above the measured incumbent. This falls below the fixed 0.004 promotion margin. All three runs completed the unchanged 20-task evaluation and passed source, checkpoint, budget, and submission dry-run checks.
 
+The retained discovery checkpoint scores **0.656835** under the current evaluator. Its 18 unchanged dataset scores exactly match the submitted record; the score revision comes entirely from 100-repeat progression and measured CRoMa. The fresh three-seed median remains 0.007765 lower than this reference, which is excluded from validation.
+
 The [maintainer report](/data/paul/nanopath/reproduction-20260908/REPORT.md) includes family/dataset scores, training diagnostics, exact source and checkpoint hashes, and the separate original-Pathway-checkpoint reference.
 
 ## Quickstart
