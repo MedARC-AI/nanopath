@@ -12,11 +12,13 @@ This repository is intentionally made to be compatible with [autoresearch](https
 
 ## pathway-tta
 
-Maintainer reproduction of [Pathway’s frozen submission](https://labless.dev/runs/run_sub_be11dc9877), starting from `robust-norm-v2` at `418605b`. Eight learned queries and two cross-attention layers regress cancer-centered `expr_path` from student CLS/patch tokens (Huber weight 0.1); the head is training-only. Drop path/KDE are 0.05; LR/WD/temperature/KDE follow sample progress while freeze/EMA retain FLOP progress. Pooled probes average identity and 180° views, with the existing dense readout and no color sidecar, matching the frozen source.
+Maintainer reproduction of [Pathway’s frozen submission](https://labless.dev/runs/run_sub_be11dc9877), starting from `robust-norm-v2` at `418605b`.
 
-Three training seeds scored 3539: 0.649686, 7275: 0.649070, 6435: 0.647337 on the unchanged current 20-task evaluator (CRoMa and 100-repeat UCLA). The median **0.649070** is **+0.002562** above robust-norm-s9876, below the 0.004 promotion margin. Split seed: 7777; each run uses 993792 optimizer + 6144 calibration tiles, within the 1M-tile/1e18-FLOP caps. Set `seed=...` and a distinct `output_dir=...` when repeating the recipe.
-
-The retained discovery checkpoint scores **0.656835** on the current evaluator, with all 18 unchanged dataset scores matching the submission exactly. This reference is excluded from the three-seed median.
+- No pathway objective → add a training-only head with eight queries and two cross-attention layers over student CLS/patch tokens; predict 256 pathway activities after subtracting each cancer type’s mean (`Huber weight=0.1`).
+- `drop_path_rate 0.1 → 0.05`; halve the maximum stochastic-depth rate.
+- `kde_loss_weight 0.1 → 0.05`; halve the KDE regularization weight.
+- LR decay, weight decay, teacher temperature and KDE ramp: fraction of FLOP budget → fraction of tile budget.
+- Pooled probe views: 1 → 2; average the original image and its 180° rotation.
 
 ## Quickstart
 
