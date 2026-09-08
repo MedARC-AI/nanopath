@@ -1,8 +1,8 @@
 project:
-  name: scienceguru-smoke
+  name: GuruTurbo1.0-smoke
   family: nanopath
   recipe_id: scienceguru-focal-act640-d4
-  output_dir: /data/$USER/nanopath/reproduction-20260908/scienceguru/smoke
+  output_dir: /data/$USER/nanopath/GuruTurbo1.0/smoke
   wandb_dir: /data/$USER/nanopath/wandb
 
 data:

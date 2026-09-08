@@ -275,7 +275,7 @@ def main():
     train_flops = 0
     output_dir = Path(cfg["project"]["output_dir"])
     wandb_dir = Path(cfg["project"]["wandb_dir"])
-    wandb_name = f"{cfg['project']['name']}-s{train_cfg['seed']}"
+    wandb_name = cfg["project"]["name"]
     if labless_autosubmit_file:
         wandb_name = json.loads(Path(labless_autosubmit_file).read_text()).get("run_name") or wandb_name
     slurm_job_id = os.environ.get("SLURM_JOB_ID")
@@ -375,9 +375,6 @@ def main():
         target = source_snapshot_dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target)
-        # Freeze effective CLI seed/output overrides so each submitted recipe replays its own run.
-        if path == Path(cfg["config_path"]):
-            target.write_text(yaml.safe_dump({key: value for key, value in cfg.items() if key != "config_path"}, sort_keys=False))
     wandb_meta = {"entity": wandb_run.entity, "project": "nanopath", "id": wandb_run.id, "name": wandb_name, "url": wandb_run.url,
                   "mode": getattr(wandb_run.settings, "mode", ""), "source_artifact": source_id,
                   "source_dir": str(source_snapshot_dir), "git": {"commit": git_commit, "remote": git_remote}}
@@ -764,9 +761,7 @@ def main():
         huesat = torch.empty(robust_norm_tiles, 2).uniform_(0, 1, generator=generator)
 
         @torch.no_grad()
-        def robust_features(images, capture_act=False):
-            acts = []
-            hook = teacher_backbone.blocks[-1].mlp.fc1.register_forward_hook(lambda module, args, out: acts.append(F.gelu(out[:, 0].float()))) if capture_act else None
+        def robust_features(images):
             with autocast:
                 tokens, taps = teacher_backbone._prepare_tokens((images.to(device) - mean) / std), []
                 for i, block in enumerate(teacher_backbone.blocks):
@@ -774,16 +769,15 @@ def main():
                     if i in (2, 4, 6, 8, 11):
                         taps.append(teacher_backbone.norm(tokens)[:, 0])
                 tokens = teacher_backbone.norm(tokens)
-            if hook is not None:
-                hook.remove()
-            features = torch.stack([tokens[:, 0], tokens[:, 1 + teacher_backbone.registers :].mean(1), *taps], 1).float().cpu()
-            return (features, acts[0].cpu()) if capture_act else features
+            return torch.stack([tokens[:, 0], tokens[:, 1 + teacher_backbone.registers :].mean(1), *taps], 1).float().cpu()
 
         bases, acts, deltas = [], [], []
         for start in range(0, robust_norm_tiles, batch_size):
             base = torch.stack([resize(Image.open(io.BytesIO(jpeg)).convert("RGB")) for jpeg in jpegs[start : start + batch_size]])
-            base_features, act = robust_features(base, capture_act=True)
-            acts.append(act)
+            # Capture ACT only on the base view, sharing the existing calibration forward.
+            hook = teacher_backbone.blocks[-1].mlp.fc1.register_forward_hook(lambda module, args, out: acts.append(F.gelu(out[:, 0].float()).cpu()))
+            base_features = robust_features(base)
+            hook.remove()
             views = (
                 base.clamp_min(1e-6) ** gamma[start : start + batch_size],
                 (base * gain[start : start + batch_size]).clamp(0, 1),
@@ -840,8 +834,6 @@ def main():
         "train_loop_wall_seconds": train_loop_wall_seconds,
         "stop_reason": stop_reason,
         "steps_completed": step,
-        "optimizer_tile_presentations": examples_seen,
-        "calibration_tile_presentations": robust_norm_tiles,
         "tile_presentations": examples_seen + robust_norm_tiles,
         "visible_patch_presentations": visible_patch_presentations,
         **final_unique_counts,

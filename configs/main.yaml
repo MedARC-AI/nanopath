@@ -1,8 +1,8 @@
 project:
-  name: scienceguru
+  name: GuruTurbo1.0
   family: nanopath
   recipe_id: scienceguru-focal-act640-d4
-  output_dir: /data/$USER/nanopath/reproduction-20260908/scienceguru/default
+  output_dir: /data/$USER/nanopath/GuruTurbo1.0/default
   wandb_dir: /data/$USER/nanopath/wandb
 
 data:

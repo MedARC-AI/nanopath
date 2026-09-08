@@ -10,19 +10,11 @@ This repository is intentionally made to be compatible with [autoresearch](https
 
 **Want to get involved? Join us in the [MedARC Discord](https://discord.gg/tVR4TWnRM9) (find us in #path-fm)!**
 
-## Maintainer reproduction — 2026-09-08
+## GuruTurbo1.0
 
-This worktree minimally reproduces [ScienceGuru’s frozen submission](https://labless.dev/runs/run_sub_bf33fffa9d) from `robust-norm-v2` at `418605b`. It adds gamma-1 focal JEPA, tissue threshold 0.1, native last-four-block segmentation with twelve color/stain channels, rank-64 typicality contraction, rank-640 final-MLP activation PCA, and D4 averaging. The pooled output preserves the submitted normalization and zero padding to 4096 dimensions. Validation losses run only at the end, matching the submitted interval of 10000.
+Maintainer reproduction of [ScienceGuru’s frozen submission](https://labless.dev/runs/run_sub_bf33fffa9d), starting from `robust-norm-v2` at `418605b`. Adds gamma-1 focal JEPA, tissue threshold 0.1, native last-four-block segmentation with 12 color/stain channels, rank-64 typicality contraction, rank-640 final-MLP PCA, and eight-view D4 averaging. Pooled features retain the submitted scale and zero padding to 4096 dimensions; validation losses run only at the end. Calibration shares robust-norm’s 6144 TCGA tiles, using float64 PCA/contraction.
 
-Calibration shares robust-norm’s 6144 TCGA tiles; PCA/contraction use float64 linear algebra for numerical stability. Training and all probe definitions otherwise come from the current branch.
-
-Fresh training seeds are 3539, 7275, and 6435, sampled before launching either recipe; the data split stays at 7777. Each full run performs 993792 optimizer tile presentations plus 6144 calibration presentations (999936 total), with the standard 1e18 training-FLOP cap. Metadata SHA-256 is `45b49a11891c6889f2f240de5ffaecd5ded57f2146c151c73cb43ca3872a5d55`.
-
-`probe.py`, `benchmarking/`, and probe configuration retain the current CRoMa and 100-repeat UCLA protocol byte-for-byte. Historical submission scores are therefore not exact reproduction targets. Compare each three-seed median against the measured incumbent 0.6465074136 with the fixed 0.004 promotion margin and two-hour H100 training requirement.
-
-Full results (3539: 0.659681, 7275: 0.662299, 6435: 0.652835) give a median of **0.659681** at seed 3539, **+0.013173** above the measured incumbent. This clears the fixed 0.004 promotion margin. All three runs completed the unchanged 20-task evaluation and passed source, checkpoint, budget, and submission dry-run checks.
-
-The [maintainer report](/data/paul/nanopath/reproduction-20260908/REPORT.md) includes family/dataset scores, training diagnostics, exact source and checkpoint hashes, and the separate original-Pathway-checkpoint reference.
+Three training seeds scored 3539: 0.659681, 7275: 0.662299, 6435: 0.652835 on the unchanged current 20-task evaluator (CRoMa and 100-repeat UCLA). The median **0.659681** is **+0.013173** above robust-norm-s9876, clearing the 0.004 promotion margin. Split seed: 7777; each run uses 993792 optimizer + 6144 calibration tiles, within the 1M-tile/1e18-FLOP caps. Set `seed=...` and a distinct `output_dir=...` when repeating the recipe.
 
 ## Quickstart
 
