@@ -276,7 +276,7 @@ def main():
     train_flops = 0
     output_dir = Path(cfg["project"]["output_dir"])
     wandb_dir = Path(cfg["project"]["wandb_dir"])
-    wandb_name = f"{cfg['project']['name']}-s{train_cfg['seed']}"
+    wandb_name = cfg["project"]["name"]
     if labless_autosubmit_file:
         wandb_name = json.loads(Path(labless_autosubmit_file).read_text()).get("run_name") or wandb_name
     slurm_job_id = os.environ.get("SLURM_JOB_ID")
@@ -376,9 +376,6 @@ def main():
         target = source_snapshot_dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target)
-        # Freeze effective CLI seed/output overrides so each submitted recipe replays its own run.
-        if path == Path(cfg["config_path"]):
-            target.write_text(yaml.safe_dump({key: value for key, value in cfg.items() if key != "config_path"}, sort_keys=False))
     wandb_meta = {"entity": wandb_run.entity, "project": "nanopath", "id": wandb_run.id, "name": wandb_name, "url": wandb_run.url,
                   "mode": getattr(wandb_run.settings, "mode", ""), "source_artifact": source_id,
                   "source_dir": str(source_snapshot_dir), "git": {"commit": git_commit, "remote": git_remote}}
@@ -820,8 +817,6 @@ def main():
         "train_loop_wall_seconds": train_loop_wall_seconds,
         "stop_reason": stop_reason,
         "steps_completed": step,
-        "optimizer_tile_presentations": examples_seen,
-        "calibration_tile_presentations": robust_norm_tiles,
         "tile_presentations": examples_seen + robust_norm_tiles,
         "visible_patch_presentations": visible_patch_presentations,
         **final_unique_counts,

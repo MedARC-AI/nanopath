@@ -2,7 +2,7 @@ project:
   name: pathway-tta-smoke
   family: nanopath
   recipe_id: pathway-tta-queries8
-  output_dir: /data/$USER/nanopath/reproduction-20260908/pathway/smoke
+  output_dir: /data/$USER/nanopath/pathway-tta/smoke
   wandb_dir: /data/$USER/nanopath/wandb
 
 data:

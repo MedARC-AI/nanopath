@@ -2,7 +2,7 @@ project:
   name: pathway-tta
   family: nanopath
   recipe_id: pathway-tta-queries8
-  output_dir: /data/$USER/nanopath/reproduction-20260908/pathway/default
+  output_dir: /data/$USER/nanopath/pathway-tta/default
   wandb_dir: /data/$USER/nanopath/wandb
 
 data:

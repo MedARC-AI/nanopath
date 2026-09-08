@@ -10,21 +10,13 @@ This repository is intentionally made to be compatible with [autoresearch](https
 
 **Want to get involved? Join us in the [MedARC Discord](https://discord.gg/tVR4TWnRM9) (find us in #path-fm)!**
 
-## Maintainer reproduction — 2026-09-08
+## pathway-tta
 
-This worktree minimally reproduces [Pathway’s frozen submission](https://labless.dev/runs/run_sub_be11dc9877) from `robust-norm-v2` at `418605b`. It adds an eight-query, two-layer cross-attention head trained with weight-0.1 Huber regression on cancer-centered `expr_path` metadata, lowers drop path/KDE to 0.05, and keys LR/WD/temperature/KDE to sample progress. Freeze and teacher EMA retain FLOP progress. The auxiliary head uses student CLS and patch tokens and is excluded from probe checkpoints.
+Maintainer reproduction of [Pathway’s frozen submission](https://labless.dev/runs/run_sub_be11dc9877), starting from `robust-norm-v2` at `418605b`. Eight learned queries and two cross-attention layers regress cancer-centered `expr_path` from student CLS/patch tokens (Huber weight 0.1); the head is training-only. Drop path/KDE are 0.05; LR/WD/temperature/KDE follow sample progress while freeze/EMA retain FLOP progress. Pooled probes average identity and 180° views, with the existing dense readout and no color sidecar, matching the frozen source.
 
-The submitted source and matching cluster snapshot use identity-plus-180° pooled-feature averaging and the existing robust-norm dense segmentation readout. They contain no segmentation color sidecar, despite the run note; the contributor’s recollection describes eight views. This reproduction follows the frozen source.
+Three training seeds scored 3539: 0.649686, 7275: 0.649070, 6435: 0.647337 on the unchanged current 20-task evaluator (CRoMa and 100-repeat UCLA). The median **0.649070** is **+0.002562** above robust-norm-s9876, below the 0.004 promotion margin. Split seed: 7777; each run uses 993792 optimizer + 6144 calibration tiles, within the 1M-tile/1e18-FLOP caps. Set `seed=...` and a distinct `output_dir=...` when repeating the recipe.
 
-Fresh training seeds are 3539, 7275, and 6435, sampled before launching either recipe; the data split stays at 7777. Each full run performs 993792 optimizer tile presentations plus 6144 calibration presentations (999936 total), with the standard 1e18 training-FLOP cap. Metadata SHA-256 is `45b49a11891c6889f2f240de5ffaecd5ded57f2146c151c73cb43ca3872a5d55`.
-
-`probe.py`, `benchmarking/`, and probe configuration retain the current CRoMa and 100-repeat UCLA protocol byte-for-byte. Historical submission scores are therefore not exact reproduction targets. Compare each three-seed median against the measured incumbent 0.6465074136 with the fixed 0.004 promotion margin and two-hour H100 training requirement.
-
-Full results (3539: 0.649686, 7275: 0.649070, 6435: 0.647337) give a median of **0.649070** at seed 7275, **+0.002562** above the measured incumbent. This falls below the fixed 0.004 promotion margin. All three runs completed the unchanged 20-task evaluation and passed source, checkpoint, budget, and submission dry-run checks.
-
-The retained discovery checkpoint scores **0.656835** under the current evaluator. Its 18 unchanged dataset scores exactly match the submitted record; the score revision comes entirely from 100-repeat progression and measured CRoMa. The fresh three-seed median remains 0.007765 lower than this reference, which is excluded from validation.
-
-The [maintainer report](/data/paul/nanopath/reproduction-20260908/REPORT.md) includes family/dataset scores, training diagnostics, exact source and checkpoint hashes, and the separate original-Pathway-checkpoint reference.
+The retained discovery checkpoint scores **0.656835** on the current evaluator, with all 18 unchanged dataset scores matching the submission exactly. This reference is excluded from the three-seed median.
 
 ## Quickstart
 
