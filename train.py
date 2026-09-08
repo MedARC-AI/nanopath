@@ -275,7 +275,7 @@ def main():
     train_flops = 0
     output_dir = Path(cfg["project"]["output_dir"])
     wandb_dir = Path(cfg["project"]["wandb_dir"])
-    wandb_name = cfg["project"]["name"]
+    wandb_name = f"{cfg['project']['name']}-s{train_cfg['seed']}"
     if labless_autosubmit_file:
         wandb_name = json.loads(Path(labless_autosubmit_file).read_text()).get("run_name") or wandb_name
     slurm_job_id = os.environ.get("SLURM_JOB_ID")
@@ -458,7 +458,10 @@ def main():
         global_loss = dino_ce(sg_cls, t_prob.flatten(0, 1)) * 2 / (2 * L + 2)
         patch_target = F.layer_norm(t["patches"].flatten(0, 1), (student_backbone.embed_dim,))[mask_idx]
         patch_prediction = student_predictor(sg["patches"]).flatten(0, 1)[mask_idx]
-        jepa_loss = F.smooth_l1_loss(patch_prediction, patch_target, reduction="none").mean(-1).mul(mask_w).sum() / max(1, b * 2)
+        # Detached, unit-mean focal weights emphasize hard masked patches (gamma=1).
+        error = F.smooth_l1_loss(patch_prediction, patch_target, reduction="none").mean(-1)
+        weight = error.detach().clamp_min(1e-6)
+        jepa_loss = (error * weight / weight.mean().clamp_min(1e-6)).mul(mask_w).sum() / max(1, b * 2)
         kde = dino_cfg["kde_loss_weight"] * k_scale * sum(kde_loss(x, dino_cfg["kde_concentration"]) for x in sg["cls"].chunk(train_cfg["global_views"]))
         meta_loss = sg["cls"].new_zeros(())
         if meta is not None:
@@ -758,7 +761,9 @@ def main():
         huesat = torch.empty(robust_norm_tiles, 2).uniform_(0, 1, generator=generator)
 
         @torch.no_grad()
-        def robust_features(images):
+        def robust_features(images, capture_act=False):
+            acts = []
+            hook = teacher_backbone.blocks[-1].mlp.fc1.register_forward_hook(lambda module, args, out: acts.append(F.gelu(out[:, 0].float()))) if capture_act else None
             with autocast:
                 tokens, taps = teacher_backbone._prepare_tokens((images.to(device) - mean) / std), []
                 for i, block in enumerate(teacher_backbone.blocks):
@@ -766,12 +771,16 @@ def main():
                     if i in (2, 4, 6, 8, 11):
                         taps.append(teacher_backbone.norm(tokens)[:, 0])
                 tokens = teacher_backbone.norm(tokens)
-            return torch.stack([tokens[:, 0], tokens[:, 1 + teacher_backbone.registers :].mean(1), *taps], 1).float().cpu()
+            if hook is not None:
+                hook.remove()
+            features = torch.stack([tokens[:, 0], tokens[:, 1 + teacher_backbone.registers :].mean(1), *taps], 1).float().cpu()
+            return (features, acts[0].cpu()) if capture_act else features
 
-        bases, deltas = [], []
+        bases, acts, deltas = [], [], []
         for start in range(0, robust_norm_tiles, batch_size):
             base = torch.stack([resize(Image.open(io.BytesIO(jpeg)).convert("RGB")) for jpeg in jpegs[start : start + batch_size]])
-            base_features = robust_features(base)
+            base_features, act = robust_features(base, capture_act=True)
+            acts.append(act)
             views = (
                 base.clamp_min(1e-6) ** gamma[start : start + batch_size],
                 (base * gain[start : start + batch_size]).clamp(0, 1),
@@ -786,6 +795,26 @@ def main():
             model.pf_mu.copy_(base_features.mean(0)[2:]); model.pf_v.copy_(directions[2:, :1])
             model.rn_fitted.fill_(True); model.pf_fitted.fill_(True)
         print(f"{console_prefix()} RobustNorm  [{step}]  fitted rank 32 + per-tap rank 1 from {len(jpegs)} tiles in {time.monotonic() - started:.0f}s", flush=True)
+        # Fit rank-64 typicality on raw taps, then measure the gate after nuisance suppression.
+        taps = base_features[:, 2:].flatten(1).double().to(device)
+        ct_mu = taps.mean(0)
+        _, singular, vectors = torch.linalg.svd(taps - ct_mu, full_matrices=False)
+        ct_R, ct_lam = vectors[:64], singular[:64].square() / (len(taps) - 1) + 1e-6
+        projected = torch.cat([teacher_backbone._suppress(base_features[:, j + 2].to(device), teacher_backbone.pf_mu[j], teacher_backbone.pf_v[j]) for j in range(5)], -1).double()
+        typicality = -torch.sqrt((((projected - ct_mu) @ ct_R.T).square() / ct_lam).sum(-1).clamp_min(0) + 1e-12)
+        # PCA shares the same calibration tiles/forwards; fp64 covariance avoids TF32 rounding.
+        activation = torch.cat(acts).double().to(device)
+        act_mu = activation.mean(0)
+        centered = activation - act_mu
+        eigenvalues, eigenvectors = torch.linalg.eigh(centered.T @ centered / (len(centered) - 1))
+        act_R = eigenvectors[:, -640:].flip(1).T
+        explained = float(eigenvalues[-640:].clamp_min(0).sum() / eigenvalues.clamp_min(0).sum())
+        for model in (student_backbone, teacher_backbone):
+            model.ct_mu.copy_(ct_mu); model.ct_R.copy_(ct_R); model.ct_lam.copy_(ct_lam)
+            model.ct_ms.copy_(torch.stack([typicality.mean(), typicality.std() + 1e-8]))
+            model.act_mu.copy_(act_mu); model.act_R.copy_(act_R)
+        wandb_run.log({"calibration/act_pca_explained_variance": explained}, step=step)
+        print(f"{console_prefix()} ACT-PCA  rank=640 explained_variance={explained:.6f}; contraction rank=64 lower_bound=0.5", flush=True)
         # Persist the fitted buffers even if this step already had a periodic save.
         if save_checkpoints:
             save_latest_checkpoint(step)
@@ -808,12 +837,14 @@ def main():
         "train_loop_wall_seconds": train_loop_wall_seconds,
         "stop_reason": stop_reason,
         "steps_completed": step,
-        "tile_presentations": examples_seen,
+        "optimizer_tile_presentations": examples_seen,
+        "calibration_tile_presentations": robust_norm_tiles,
+        "tile_presentations": examples_seen + robust_norm_tiles,
         "visible_patch_presentations": visible_patch_presentations,
         **final_unique_counts,
         "train_flops": train_flops,
         "flop_fraction": min(1.0, float(train_flops) / float(max_train_flops)),
-        "sample_fraction": min(1.0, float(examples_seen) / float(max_train_samples)),
+        "sample_fraction": min(1.0, (examples_seen + robust_norm_tiles) / max_train_samples),
         # Average throughput over the train loop; wall time is diagnostic, not an eligibility cap.
         "flops_per_sec": train_flops / max(1.0, train_loop_wall_seconds),
         "visible_patches_per_sec": visible_patch_presentations / max(1.0, train_loop_wall_seconds),

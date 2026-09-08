@@ -1,8 +1,8 @@
 project:
-  name: robust-norm-smoke
+  name: scienceguru-smoke
   family: nanopath
-  recipe_id: dinov2-vits14-reg-robust-norm
-  output_dir: /data/$USER/nanopath/robust-norm/smoke
+  recipe_id: scienceguru-focal-act640-d4
+  output_dir: /data/$USER/nanopath/reproduction-20260908/scienceguru/smoke
   wandb_dir: /data/$USER/nanopath/wandb
 
 data:
@@ -18,7 +18,7 @@ data:
   color_jitter: 0.3
   color_jitter_saturation: 0.3
   hed_jitter: 0.07
-  tissue_thresh: 0.0
+  tissue_thresh: 0.1
 
 model:
   type: robust_norm_dinov2_vits14_reg

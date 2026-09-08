@@ -143,6 +143,13 @@ class ViT(nn.Module):
             self.register_buffer("pf_fitted", torch.zeros((), dtype=torch.bool))
             self.register_buffer("pf_mu", torch.zeros(5, dim))
             self.register_buffer("pf_v", torch.zeros(5, 1, dim))
+            # TCGA-fitted contraction and final-MLP PCA; inference never fits probe data.
+            self.register_buffer("ct_mu", torch.zeros(5 * dim))
+            self.register_buffer("ct_R", torch.zeros(64, 5 * dim))
+            self.register_buffer("ct_lam", torch.ones(64))
+            self.register_buffer("ct_ms", torch.tensor([0.0, 1.0]))
+            self.register_buffer("act_mu", torch.zeros(4 * dim))
+            self.register_buffer("act_R", torch.zeros(640, 4 * dim))
         else:
             self.rn_fitted = self.pf_fitted = False
 
@@ -203,32 +210,38 @@ class ViT(nn.Module):
             "patches": patches,
         }
 
-    # Robust-norm's segmentation readout fuses the last four blocks, edge-guides a 32x32
-    # spatial grid, and leaves v2 probe.py to pool that grid to the native decoder size.
+    # ScienceGuru uses the native last-four-block grid plus 12 deterministic color channels.
     def encode_image(self, x, checkpoint=False):
         if not self.robust_norm:
             return self(x, checkpoint=checkpoint)["patches"]
-        batch, _, height, width = x.shape
-        h, w, grid = height // self.patch_size, width // self.patch_size, 32
-        guide = x.mean(1, keepdim=True)
-        guide = (guide - guide.amin((2, 3), keepdim=True)) / (guide.amax((2, 3), keepdim=True) - guide.amin((2, 3), keepdim=True) + 1e-6)
         tokens, features = self._prepare_tokens(x), []
         for i, block in enumerate(self.blocks):
             tokens = torch.utils.checkpoint.checkpoint(block, tokens, use_reentrant=False) if checkpoint and self.training else block(tokens)
             if i >= len(self.blocks) - 4:
                 features.append(self.norm(tokens)[:, 1 + self.registers :])
         patches = torch.cat(features, -1)
-        up = F.interpolate(patches.transpose(1, 2).reshape(batch, patches.shape[-1], h, w).float(), size=(grid, grid), mode="bilinear", align_corners=False)
-        guide_lr = F.interpolate(guide, size=(h, w), mode="area")
-        guide_hr = F.interpolate(guide, size=(grid, grid), mode="area")
-        edge_weight = torch.exp(-((guide_hr - F.interpolate(guide_lr, size=(grid, grid), mode="nearest")).abs() ** 2) / 0.02)
-        blur = F.avg_pool2d(F.pad(up, (1, 1, 1, 1), mode="replicate"), 3, 1)
-        return (up + (1 - edge_weight) * (up - blur)).flatten(2).transpose(1, 2).to(patches.dtype)
+        with torch.autocast(device_type=x.device.type, enabled=False):
+            rgb = (x.float() * x.new_tensor([0.229, 0.224, 0.225])[None, :, None, None] + x.new_tensor([0.485, 0.456, 0.406])[None, :, None, None]).clamp(0, 1)
+            od = -rgb.clamp_min(1 / 255).log()
+            basis = torch.tensor([[0.650, 0.704, 0.286], [0.072, 0.990, 0.105], [0.268, 0.570, 0.776]], device=x.device)
+            hed = (od.permute(0, 2, 3, 1) @ torch.linalg.inv(basis)).permute(0, 3, 1, 2)
+            saturation = (rgb.amax(1, keepdim=True) - rgb.amin(1, keepdim=True)) / rgb.amax(1, keepdim=True).clamp_min(1 / 255)
+            pixels = torch.cat([rgb, od.mean(1, keepdim=True), hed, saturation], 1).unfold(2, self.patch_size, self.patch_size).unfold(3, self.patch_size, self.patch_size)
+            mean = pixels.mean((-2, -1)).flatten(2).transpose(1, 2)
+            std = pixels[:, :4].std((-2, -1), correction=0).flatten(2).transpose(1, 2)
+            color = torch.cat([2 * mean[..., :3] - 1, 4 * std[..., :3] - 1, (mean[..., 3:4] - 0.5).tanh(), std[..., 3:4].tanh(), mean[..., 4:7].tanh(), 2 * mean[..., 7:] - 1], -1)
+        return torch.cat([patches, color.to(patches.dtype)], -1)
 
     # Pooled probes use five strided-depth CLS taps, each with its fitted rank-one suppression.
     def probe_features(self, x):
         if not self.robust_norm:
             return self(x)["cls"]
+        # Average each complete calibrated readout over the eight D4 views.
+        return sum(self._probe_features_once(torch.rot90(x, k, (2, 3)).flip(3) if flip else torch.rot90(x, k, (2, 3))) for k in range(4) for flip in (False, True)) / 8
+
+    def _probe_features_once(self, x):
+        acts = []
+        hook = self.blocks[-1].mlp.fc1.register_forward_hook(lambda module, args, out: acts.append(F.gelu(out[:, 0].float())))
         tokens, features = self._prepare_tokens(x), []
         for i, block in enumerate(self.blocks):
             tokens = block(tokens)
@@ -236,7 +249,15 @@ class ViT(nn.Module):
                 feature = self.norm(tokens)[:, 0]
                 j = len(features)
                 features.append(self._suppress(feature, self.pf_mu[j], self.pf_v[j]) if not self.training and self.pf_fitted else feature)
-        return torch.cat(features, dim=-1)
+        hook.remove()
+        out = torch.cat(features, dim=-1)
+        centered = out.float() - self.ct_mu
+        typicality = -torch.sqrt(((centered @ self.ct_R.T).square() / self.ct_lam).sum(-1).clamp_min(0) + 1e-12)
+        weight = 0.5 + 0.5 * torch.sigmoid(((typicality - self.ct_ms[0]) / self.ct_ms[1]).clamp(-30, 30))
+        out = (self.ct_mu + weight[:, None] * centered).to(out.dtype)
+        act = ((acts[0] - self.act_mu) @ self.act_R.T).to(out.dtype)
+        # Preserve the submitted scale and zero suffix: they affect fixed linear-head initialization.
+        return F.pad(F.normalize(torch.cat([out, act], -1).float(), dim=-1) * 2048**0.5, (0, 1536))
 
 
 # Strict-load the model's declared pretrained weights; incompatible layouts fail loudly.
@@ -244,7 +265,7 @@ def load_pretrained(model):
     state = torch.hub.load_state_dict_from_url(model.pretrained_url, progress=False, map_location="cpu")
     if model.robust_norm:
         missing, unexpected = model.load_state_dict(state, strict=False)
-        assert not unexpected and all(key.startswith(("rn_", "pf_")) for key in missing), (missing, unexpected)
+        assert not unexpected and all(key.startswith(("rn_", "pf_", "ct_", "act_")) for key in missing), (missing, unexpected)
     else:
         model.load_state_dict(state, strict=True)
     return model
