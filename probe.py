@@ -140,7 +140,7 @@ def prepare_probe_state(cfg, output_dir):
         path.mkdir(parents=True, exist_ok=True)
     groups = {request_key: [str(x) for x in cfg["probe"].get(cfg_key, [])] for request_key, (cfg_key, _) in TASK_FIELDS.items()}
     data = {
-        "version": 17,
+        "version": 18,
         "probe_protocol_version": PROBE_PROTOCOL_VERSION,
         "family": str(cfg["project"]["family"]),
         "count": int(cfg["probe"]["count"]),
@@ -148,10 +148,10 @@ def prepare_probe_state(cfg, output_dir):
         **groups,
     }
     if paths["state_path"].exists():
-        # Explicit resume can continue only if the probe family/datasets/count match the old state.
+        # Explicit resume requires compatible probe state, family, datasets and count.
         previous = json.loads(paths["state_path"].read_text())
-        if previous["version"] != 17:
-            raise ValueError(f"unsupported probe state version: {previous['version']}")
+        if previous["version"] != data["version"]:
+            raise ValueError("cached probes use a different protocol; preserve the checkpoint and have a maintainer re-evaluate it")
         if previous["family"] != data["family"]:
             raise ValueError(f"probe family changed from {previous['family']} to {data['family']}")
         for request_key in TASK_FIELDS:

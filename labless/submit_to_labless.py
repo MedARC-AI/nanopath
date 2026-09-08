@@ -363,6 +363,8 @@ def validate_output(output_dir: Path, summary_path: Path, metrics_path: Path, su
         protocol = next((number(row.get("probe_protocol_version")) for row in reversed(rows) if number(row.get("probe_protocol_version")) is not None), None)
     if protocol != PROBE_PROTOCOL_VERSION:
         errors.append(f"probe_protocol_version must be {PROBE_PROTOCOL_VERSION}, got {protocol}")
+    if final_metrics(summary, rows, metric_value).get("ucla_lung_repeats") != 100 or number(summary.get("final_probe_ucla_lung_repeats")) != 100:
+        errors.append("100-repeat UCLA progression is required in metrics and summary; keep the checkpoint and labless_source for maintainer re-evaluation with current nanopath. Pulling alone does not update saved scores.")
     return errors
 
 
@@ -394,6 +396,8 @@ def final_metrics(summary: dict[str, Any], rows: list[dict[str, Any]], primary: 
                 metrics["probe_protocol_version" if raw == "protocol_version" else raw] = parsed
     for row in rows:
         if row.get("event") == "probe" or row.get("final"):
+            if "slide_mean_auc" in row or "probe_ucla_lung_val_auc" in row:
+                metrics.pop("ucla_lung_repeats", None)  # The repeat count belongs to this evaluation only.
             for key, value in row.items():
                 parsed = number(value)
                 if parsed is not None and (key == PRIMARY_METRIC or key.startswith("probe_") or key in direct_metrics):

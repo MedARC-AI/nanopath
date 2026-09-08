@@ -267,6 +267,8 @@ def main():
     wandb_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = output_dir / "metrics.jsonl"
     summary_path = output_dir / "summary.json"
+    # Validate cached probes before resume can replace the saved source snapshot.
+    probe_state = prepare_probe_state(cfg, output_dir) if probe_enabled(cfg) else None
     wandb_meta = None
     if resume_path is not None:
         print(f"{console_prefix()} Resume  loading checkpoint: {resume_path}", flush=True)
@@ -354,7 +356,6 @@ def main():
                   "source_dir": str(source_snapshot_dir), "git": {"commit": git_commit, "remote": git_remote}}
     train_ds = TCGATileDataset(cfg, is_train=True)
     val_ds = TCGATileDataset(cfg, is_train=False)
-    probe_state = prepare_probe_state(cfg, output_dir) if probe_enabled(cfg) else None
 
     # Train shuffles + drops partials; the loop never starts a batch that would exceed
     # max_train_samples, so every optimizer step keeps the configured batch size.
