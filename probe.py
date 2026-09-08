@@ -970,17 +970,20 @@ def classification_head_metrics(train_embs, train_labels, val_embs, val_labels):
     }
 
 
+# Average held-out fold AUCs across fixed split repetitions to reduce partition sensitivity.
 def slide_linear_auc_metrics(embs, labels):
     import numpy as np
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import roc_auc_score
+    from sklearn.model_selection import RepeatedStratifiedKFold
 
+    cv = RepeatedStratifiedKFold(n_splits=REPEATED_FOLDS, n_repeats=100, random_state=SEG_SPLIT_SEED)
     folds = []
-    for tr, va in stratified_folds(labels):
+    for tr, va in cv.split(embs, labels):
         head = LogisticRegression(C=PATHOBENCH_LR_C, class_weight="balanced", max_iter=SURGEN_LR_MAX_ITER, random_state=0).fit(embs[tr], labels[tr])
         probs = head.predict_proba(embs[va])
         folds.append(float(roc_auc_score(labels[va], probs[:, 1] if probs.shape[1] == 2 else probs, multi_class="ovr", average="macro")))
-    return {"val_auc": float(np.mean(folds)), "c": PATHOBENCH_LR_C, "fold_scores": folds}
+    return {"val_auc": float(np.mean(folds)), "c": PATHOBENCH_LR_C, "fold_scores": folds, "repeats": cv.n_repeats}
 
 
 # Worker entry point launched by queue_probe_job(); owns model loading and probe aggregation.
@@ -1147,6 +1150,7 @@ def run_probe_job(request_path):
     for dataset in slide:
         metrics[f"probe_{dataset}_val_auc"] = slide_metrics[dataset]["val_auc"]
         metrics[f"probe_{dataset}_c"] = slide_metrics[dataset]["c"]
+        metrics[f"probe_{dataset}_repeats"] = slide_metrics[dataset]["repeats"]
         per_dataset_score[dataset] = slide_metrics[dataset]["val_auc"]
         fold_scores[dataset] = slide_metrics[dataset]["fold_scores"]
         results[dataset] = slide_metrics[dataset]

@@ -43,28 +43,23 @@ model or end-to-end finetuning is used.
 
 ## Progression and mutation
 
-UCLA and SurGen each use three `StratifiedKFold` splits with shuffle seed 1337
-over the complete development pool. On every fold:
+UCLA uses 100 repetitions of three stratified folds over the complete
+90-slide development pool, with `RepeatedStratifiedKFold(n_splits=3,
+n_repeats=100, random_state=1337)`. SurGen uses three `StratifiedKFold`
+splits with shuffle seed 1337. On every fold:
 
-- fit raw, unstandardized pooled features with
-  `LogisticRegression(C=0.5, class_weight="balanced", random_state=0,
-  max_iter=5000)`;
+- fit raw pooled features with `LogisticRegression(C=0.5,
+  class_weight="balanced", random_state=0, max_iter=5000)`;
 - report macro one-vs-rest validation AUC;
-- average the three fold scores.
+- average all held-out fold AUCs: 300 for UCLA, three for SurGen.
 
-The head and `C` are fixed. There is no validation hyperparameter selection,
-matching PathoBench's raw-feature linear protocol more closely than selecting
-`C` on the same folds being reported.
-
-These are three folds of one partition, not three repetitions. A
-[training-seed audit](validation.md#progression-variance-audit-2026-09-05)
-found that repeated folds and leave-pair-out AUC increased training-seed
-variability for both examined recipes; V2 therefore retains its original estimator.
-A subsequent [cohort audit](validation.md#progression-cohort-audit-2026-09-05)
-tested VisioMel relapse, breast residual burden, HER2 response, and Valentino
-PFS under the then-current 25% progression weight. None consistently
-improved training-seed stability and official-suite ordering under the fast probe;
-these research cohorts are not part of V2.
+Averaging over partitions reduces sensitivity to a particular split. Each
+slide is held out once per repetition; scores from different fitted heads
+are not pooled into one AUC. The head and regularization are fixed, with no
+validation hyperparameter selection. Results and metrics record the UCLA
+repeat count. Repeated folds reuse the same slides, so fold SD is not a
+patient-level confidence interval or an estimate of training-seed SD.
+See [validation](validation.md#progression-stability) for measured stability.
 
 UCLA's slide IDs are not verified patient IDs. The
 [source study](https://pmc.ncbi.nlm.nih.gov/articles/PMC7611527/) reports 112

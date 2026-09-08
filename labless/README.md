@@ -90,8 +90,8 @@ python baselines/dinov2_small_baseline.py configs/main.yaml
 ```
 
 The submit script detects `summary.family == "baseline"` and marks the run as
-`tier=baseline`. Labless uses UNI-2-h and Virchow as pathology references;
-DINOv2 giant, large, and small provide natural-image references. Other baselines,
+`tier=baseline`. Labless uses GenBio-PathFM and Virchow as pathology references;
+DINOv2 giant and small provide natural-image references. Other baselines,
 including GigaPath, can stay in the repo README without becoming Labless
 reference rows. The nanopath leaderboard still ranks validated completed full
 runs by score.
@@ -160,6 +160,8 @@ local artifact paths from submitted rows.
 The final score weights classification, segmentation, progression, mutation,
 survival, and CRoMa robustness at 30%, 15%, 17.5%, 15%, 7.5%, and 15%.
 Labless rejects scores that do not match those submitted components.
+UCLA progression averages 100 stratified three-fold repetitions; submissions
+must include `ucla_lung_repeats=100` in their metrics.
 
 Agents can crawl the public experiment ledger directly with the JSON API:
 

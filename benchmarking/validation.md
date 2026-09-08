@@ -11,15 +11,9 @@ The first is an implementation-parity check. The second is post-freeze evidence
 about proxy fidelity, not permission to tune weights or datasets against test
 outcomes.
 
-The benchmark components and manifests were frozen at commit
-`c21c9d8e1b824018badbf2a88b7693491f4daa4d` before the final official-result
-audit. The current 30/15/17.5/15/7.5/15 weights are a scoring-policy choice;
-stored predictive results were rescored arithmetically and robustness was
-recomputed from the same frozen embeddings with CRoMa. The selected THUNDER
-manifest SHA-256 is
-`fc9a92587f78078c1d3c880f95a795ff229affb61c67de1a7886221dc99a0b8b`. Later
-release commits changed packaging, baseline launchers, comments, and
-documentation without changing the manifest or predictive component protocols.
+The selected THUNDER manifest SHA-256 is
+`fc9a92587f78078c1d3c880f95a795ff229affb61c67de1a7886221dc99a0b8b`.
+The 30/15/17.5/15/7.5/15 weights are a fixed scoring-policy choice.
 
 ## Leakage and manifest audit
 
@@ -114,130 +108,36 @@ pooling. Runtime depends on image-cache warmth, backbone size, feature width,
 and CPU decode throughput; the limit is a release qualification on the target
 H100, not a promise for arbitrary hardware.
 
-## Training-seed audit and promotion margin
+## Training-seed validation
 
-Two nanopath recipes were independently trained at seeds 17, 29, and 43 while
-the data split and probe randomness stayed fixed. These are audit seeds, not a
-fixed promotion panel:
+A maintainer reruns promising candidates with three different randomly
+selected training seeds. The median run must beat the incumbent by at least
+**0.004** to become the validated leader. The discovery run is excluded;
+`robust-norm-s9876` is the approved exception. This is a fixed promotion
+policy, not a margin recalculated from each candidate's measured variance.
 
-| Recipe | Seed 17 | Seed 29 | Seed 43 | Mean | Sample SD |
-|---|---:|---:|---:|---:|---:|
-| Main DINOv2/KDE | 0.619722 | 0.620240 | 0.615958 | 0.618640 | 0.002337 |
-| robust-norm | 0.645294 | 0.645239 | 0.646023 | 0.645518 | 0.000438 |
+### Progression stability
 
-CRoMa's weighted three-seed range is 0.000593 for main and 0.001206 for
-robust-norm; the complete revised score ranges are 0.004282 and 0.000784.
-The pooled within-recipe run SD is 0.001681. The **0.004** promotion margin is a
-fixed conservative policy and is not recomputed per candidate. A maintainer
-reruns a candidate with three different randomly selected seeds; the median run
-must clear the margin. The discovery run is excluded. No official evaluation
-result was used in this calibration.
+Across six three-seed groups (18 completed checkpoints), UCLA's pooled
+within-group sample SD is 0.011269. The groups cover related main,
+robust-norm and drop-local recipes on the same 90-slide cohort.
+Observed within-group AUC ranges are 0.015750–0.025879, contributing
+0.002756–0.004529 to the weighted score. Repeated splits do not eliminate
+training-seed variability or the need for independent training runs.
 
-### Progression variance audit (2026-09-05)
+Seven 1,000-repeat checks yield weighted SD 0.00030–0.00050 across disjoint
+100-repeat blocks. One hundred complete-protocol label permutations each
+for main and UNI2-h average 0.48908 and 0.49258 AUC. The 300-fit head takes
+about 3 seconds for main and at most 27 seconds across the 20 reference
+encoders on one CPU thread. Frozen-input head and aggregation checks cover
+41 distinct encoders, including training seeds and random controls.
 
-The same six completed checkpoints above were re-embedded using their saved
-model implementations. UCLA's 90-slide manifest (35/55 labels), all 26,714
-tiles, raw mean pooling, and balanced logistic head (`C=0.5`) stayed fixed.
-Re-extraction reproduced all six released progression AUCs within 1e-15.
-Only the AUC estimator changed; no official test image, label, or score entered
-the comparison. The manifest also exactly matched PathoBench's fold-0 training
-IDs and labels at revision `60fde3a9138b2fb27a163ed6f3e2cf0ef7e8f387`.
-
-| Recipe / training seed | V2: 3 folds | 20 × 3 folds | 20 × 5 folds | Leave-pair-out |
-|---|---:|---:|---:|---:|
-| Main / 17 | 0.520305 | 0.572976 | 0.573571 | 0.569091 |
-| Main / 29 | 0.524935 | 0.575204 | 0.569286 | 0.571688 |
-| Main / 43 | 0.515676 | 0.555293 | 0.546558 | 0.540000 |
-| robust-norm / 17 | 0.586922 | 0.600416 | 0.595130 | 0.581558 |
-| robust-norm / 29 | 0.583784 | 0.598404 | 0.595000 | 0.577922 |
-| robust-norm / 43 | 0.582241 | 0.617034 | 0.614740 | 0.592987 |
-| **Main sample SD** | **0.004630** | **0.010909** | **0.014518** | **0.017593** |
-| **robust-norm sample SD** | **0.002386** | **0.010225** | **0.011360** | **0.007861** |
-
-Repeated folds used `RepeatedStratifiedKFold(random_state=1337)`; AUCs were
-averaged within folds, never pooled across separately fitted heads. Each
-leave-pair-out head excluded one positive and one negative slide, then ranked
-that pair; the score averaged all 1,925 comparisons, with ties worth 0.5.
-The first 20 repetitions were specified before results. Extending to 200
-repetitions did not reverse either recipe's variance increase. Seeds 59/71
-were also inspected but excluded: main stopped at step 5,000 and robust-norm
-at step 3,000, short of their completed-run budgets.
-
-**None of these replacements qualifies as a training-seed variance fix.**
-At the study's then-current 25% progression weight, main's 0.009259 AUC range
-contributed 0.002315 to `final_score`; 20 × 3 folds increased it to 0.004978. More folds reduce
-sensitivity to a chosen partition, but do not create independent patients or
-necessarily reduce sensitivity to backbone training. Three training seeds per
-recipe are discovery evidence, not a precise population variance estimate.
-Fold SD is neither training-seed SD nor a confidence interval.
-
-Three freshly randomized DINOv2-S backbones still scored 0.6304–0.6345 under
-leave-pair-out, above the pretrained DINOv2-S score of 0.5338. Changing the
-estimator therefore did not resolve the random-feature limitation either.
-GPU work used at most four independent single-GPU jobs; head comparisons ran
-on CPU. Local scripts, cached features, raw fold/pair results, and provenance
-checks are under `/data/paul/nanopath/progression-study-20260905/`.
-
-The progression estimator and promotion rule remain unchanged. Independent development
-patients and UCLA patient grouping remain priorities (see
-[slide_probes.md](slide_probes.md)); the cohort study below evaluates four
-concrete additions under the then-current progression category's 25% weight.
-
-### Progression cohort audit (2026-09-05)
-
-Four PathoBench fold-0 training cohorts were evaluated on the exact 20 frozen
-encoders and official targets used by `threepanel-v2.png`, plus the six completed
-training-seed replicates above and three random DINOv2-S controls. The primary
-protocol uses at most 128 deterministic, source-spaced tiles per slide, frozen
-mean pooling, and the existing three-fold head. Classification uses balanced
-raw-feature logistic regression (`C=0.5`); Valentino PFS uses the existing
-censoring-aware Cox head. Caps 64/256 are sensitivities, not tuned against the
-official scores. Each addition shares the then-current 25% progression weight
-equally with UCLA: `new_final = old_final + 0.125 * (new_component - UCLA_AUC)`.
-
-| Progression component | THUNDER Kendall τ | HEST Kendall τ | CPTAC Kendall τ |
-|---|---:|---:|---:|
-| Current UCLA | 0.789 | 0.821 | 0.716 |
-| UCLA + VisioMel relapse, 1,073 patients | 0.779 | 0.789 | 0.663 |
-| UCLA + breast residual burden, 128 patients | 0.821 | 0.789 | 0.642 |
-| UCLA + HER2 response, 68 patients | 0.663 | 0.653 | 0.568 |
-| UCLA + Valentino PFS, 136 patients | 0.842 | 0.768 | 0.663 |
-| VisioMel replaces UCLA, sensitivity | 0.663 | 0.716 | 0.589 |
-
-**None qualifies as a reliable addition under this fast protocol.** VisioMel
-reduces main's progression contribution SD from 0.001157 to 0.000463, but raises
-robust-norm's from 0.000596 to 0.001468. Its Nanopath-only Kendall values remain
-unchanged; concordant Nanopath-versus-reference pairs fall from 75/78/74 to
-75/74/70 out of 84. Its 256-tile sensitivity retains the same three correlations
-and reduces both recipes' contribution SD by only about 3%. The smaller cohorts
-all increase main's progression variation. These are three-seed observations,
-not precise population variance estimates. VisioMel's paired model-bootstrap
-intervals for Kendall changes include zero; this is insufficient evidence for
-adoption, not a statistically decisive proof of harm.
-
-VisioMel's selected 1,073 patients (169 positive) match two identical archived
-2023 challenge-training label files and exclude all 541 original test IDs as
-well as PathoBench fold-0 test IDs. Repeated PathoBench partitions reuse patients;
-this reserves fold-0 tests, not the union of every repeated test partition.
-Eighteen positive cases have released relapse times beyond 60 months, so the
-released binary labels are retained without claiming an adjudicated strict
-five-year endpoint. One nearly achromatic image required a documented tissue-mask
-threshold correction; all patients remain included. Random encoders score
-0.713–0.718 and simple colour/tissue features score 0.678 on VisioMel.
-
-The unmodified production slide probe adds 95–101 seconds on the main and
-robust-norm readouts using an 11.67 GB prepared cache. Recurring cost is feasible;
-one-time source preparation transferred approximately 1.32 TB. Since the candidate
-failed the ordering/stability comparison, no new full-suite timing run was needed.
-Existing official aggregate scores were reused for this retrospective analysis;
-no official test image or label entered the new probes. Choosing a new protocol
-using these aggregates would still require independent validation, versioning,
-and promotion-margin recalibration. The current V2 score remains unchanged.
-
-The full report, per-model CSV, figures, scripts, source/split audits, cached
-features, and raw results are under
-`/data/paul/nanopath/progression-cohorts-20260905/` (`report.md`, `analysis.json`,
-`model-results.csv`). GPU work used at most four independent single-GPU jobs.
+All 26,714 UCLA tiles are used. Per-slide counts range from 12 to 1,453
+(median 240.5); sixteen slides have fewer than 64 tiles. In one training
+triplet, held-out probability SD averages 0.0345 below 64 tiles and 0.0338
+otherwise. This does not establish tissue coverage as the dominant source
+of instability, nor exclude a coverage problem. The missing patient mapping
+and high random-feature AUC remain limitations of this cohort.
 
 ## Official-suite ordering fidelity
 
@@ -258,7 +158,7 @@ measure rank agreement. None alone is treated as sufficient.
 | Classification / THUNDER classification | 0.987 | 0.995 | 0.987 | 1.000 |
 | Segmentation / matched 3-task THUNDER segmentation | 0.743 | 0.637 | 0.782 | 0.857 |
 | Segmentation / pinned full 4-task THUNDER segmentation | 0.668 | 0.558 | 0.753 | 0.833 |
-| Final score / existing official composite, 12 models | 0.902 | 0.888 | 0.864 | 0.914 |
+| Final score / existing official composite, 12 models | 0.876 | 0.860 | 0.848 | 0.886 |
 
 Classification preserves all 15 pairwise orderings among the six nanopath
 checkpoints. Matched-task segmentation preserves 11 of 15 nanopath-only pairs;
@@ -279,9 +179,9 @@ GigaPath-Flash:
 |---|---:|---:|
 | Classification / THUNDER | 0.988 | 0.958 |
 | Segmentation / THUNDER | 0.870 | 0.741 |
-| Final score / THUNDER classification + segmentation | 0.927 | 0.800 |
-| Final score / HEST | 0.929 | 0.789 |
-| Final score / CPTAC classification | 0.814 | 0.684 |
+| Final score / THUNDER classification + segmentation | 0.923 | 0.758 |
+| Final score / HEST | 0.896 | 0.768 |
+| Final score / CPTAC classification | 0.797 | 0.684 |
 
 The exact comparison input is
 [proxy-fidelity data](proxy_fidelity_v2.csv). Final scores use the assembled
@@ -293,7 +193,7 @@ uses complete same-checkpoint results for all 20 models.
 The benchmark was also run with independently randomized DINOv2-S backbones. This
 checks that heads do not obtain implausibly strong scores from class balance,
 spatial priors, slide leakage, or validation selection alone. The null audit
-uses the exact production manifests, transforms, heads, folds, and scalar; only
+uses the production manifests, transforms, heads, folds, and scalar; only
 the backbone initialization changes. All ten seeds were rescored with CRoMa;
 the original component results and revised scores are retained in
 [the random-feature audit](random_dinov2_s_v2.csv). The existing
@@ -302,23 +202,23 @@ is the runner, so the benchmark does not carry a second stale null script.
 
 | Component | Null mean | Sample SD | Min–max |
 |---|---:|---:|---:|
-| Final score | 0.4731 | 0.0028 | 0.4682–0.4764 |
+| Final score | 0.4669 | 0.0021 | 0.4631–0.4701 |
 | Classification | 0.3706 | 0.0026 | 0.3661–0.3739 |
 | Segmentation | 0.5128 | 0.0047 | 0.5067–0.5202 |
-| Progression | 0.6684 | 0.0085 | 0.6576–0.6841 |
+| Progression | 0.6330 | 0.0024 | 0.6285–0.6361 |
 | Mutation | 0.5502 | 0.0038 | 0.5437–0.5558 |
 | Survival | 0.5985 | 0.0076 | 0.5842–0.6100 |
 | CRoMa robustness | 0.2706 | 0.0071 | 0.2569–0.2795 |
 
 All trained or pretrained reference final scores in
-[the proxy-fidelity data](proxy_fidelity_v2.csv) exceed the largest rescored random
-final score by at least 0.118. Classification, mutation, and robustness provide
+[the comparison data](proxy_fidelity_v2.csv) exceed the largest random
+final score by at least 0.122. Classification, mutation, and robustness provide
 clear separation. The segmentation null is numerically high because
 background and spatial priors earn F1. Every listed trained reference is at
 least 0.036 above the random maximum.
 
 Progression does **not** pass a clean random-feature interpretation: randomized
-features average 0.668 AUC and outperform multiple trained references. Survival
+features average 0.633 AUC and outperform multiple trained references. Survival
 also has weak separation, with a random mean of 0.598 and maximum of 0.610.
 Those components may measure cohort/image shortcuts or useful random nonlinear
 features as much as learned representation quality. They remain parts of the
