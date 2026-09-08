@@ -16,7 +16,6 @@ Maintainer reproduction of [ScienceGuru’s frozen submission](https://labless.d
 
 - `tissue_thresh 0.0 → 0.1`; only include tiles with at least 10% estimated tissue.
 - Standard JEPA → focal JEPA (`gamma=1`); weight harder-to-predict patches more.
-- `eval_every 200 → 10000`; check training validation losses only at the end of these runs.
 - 1,920 CLS features → 1,920 CLS + 640 PCA-compressed MLP features.
 - Robust normalization → robust normalization + rank-64 outlier contraction; pull unusual features toward the calibration mean.
 - Pooled output: 1,920 → 4,096 dimensions; normalize the 2,560 features to length √2048, then append 1,536 zeros.
