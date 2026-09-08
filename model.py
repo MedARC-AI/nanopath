@@ -229,6 +229,10 @@ class ViT(nn.Module):
     def probe_features(self, x):
         if not self.robust_norm:
             return self(x)["cls"]
+        # The submitted Pathway source averages identity and 180-degree views.
+        return (self._probe_features_once(x) + self._probe_features_once(x.rot90(2, (2, 3)))) / 2
+
+    def _probe_features_once(self, x):
         tokens, features = self._prepare_tokens(x), []
         for i, block in enumerate(self.blocks):
             tokens = block(tokens)
@@ -289,3 +293,26 @@ class JEPAPredictor(nn.Module):
         for block in self.blocks:
             x = block(x)
         return self.proj(self.norm(x))
+
+
+# Eight learned queries attend to student CLS/patch tokens to regress pathway activity.
+# Kept outside the backbone so the auxiliary head never enters probe checkpoints.
+class PathwayHead(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.queries = nn.Parameter(torch.empty(1, 8, dim))
+        nn.init.trunc_normal_(self.queries, std=0.02)
+        self.layers = nn.ModuleList(nn.ModuleDict({
+            "query_norm": nn.LayerNorm(dim, eps=1e-6), "context_norm": nn.LayerNorm(dim, eps=1e-6),
+            "attention": nn.MultiheadAttention(dim, 6, batch_first=True), "mlp_norm": nn.LayerNorm(dim, eps=1e-6),
+            "mlp": nn.Sequential(nn.Linear(dim, 4 * dim), nn.GELU(), nn.Linear(4 * dim, dim)),
+        }) for _ in range(2))
+        self.norm, self.head = nn.LayerNorm(dim, eps=1e-6), nn.Linear(dim, 256)
+
+    def forward(self, context):
+        queries = self.queries.expand(len(context), -1, -1)
+        for layer in self.layers:
+            keys = layer["context_norm"](context)
+            queries = queries + layer["attention"](layer["query_norm"](queries), keys, keys, need_weights=False)[0]
+            queries = queries + layer["mlp"](layer["mlp_norm"](queries))
+        return self.head(self.norm(queries).mean(1))

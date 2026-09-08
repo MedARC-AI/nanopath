@@ -35,7 +35,7 @@ from torchvision import transforms
 from torchvision.transforms import functional as TF
 
 from dataloader import TCGATileDataset, TILE_SIZE
-from model import DINOHead, GradScale, JEPAPredictor, ViT, load_pretrained
+from model import DINOHead, GradScale, JEPAPredictor, PathwayHead, ViT, load_pretrained
 from probe import (
     completed_probe_summary,
     collect_probe_results,
@@ -258,6 +258,7 @@ def main():
         factor: nn.Sequential(nn.Linear(student_backbone.embed_dim, 512), nn.GELU(), nn.Linear(512, 256), nn.GELU(), nn.Linear(256, fino_meta["cont_dim"].get(factor, 1))).to(device)
         for factor, _ in fino_cont
     }
+    predictors["pathway"] = PathwayHead(student_backbone.embed_dim).to(device)
     # AdamW param groups carry per-parameter LR/WD multipliers (LWD + patch_embed + biases-no-WD).
     param_groups = build_param_groups(student_backbone, student_dino_head, student_predictor, dino_cfg["layerwise_decay"], dino_cfg["patch_embed_lr_mult"])
     if predictors:
@@ -275,7 +276,7 @@ def main():
     train_flops = 0
     output_dir = Path(cfg["project"]["output_dir"])
     wandb_dir = Path(cfg["project"]["wandb_dir"])
-    wandb_name = cfg["project"]["name"]
+    wandb_name = f"{cfg['project']['name']}-s{train_cfg['seed']}"
     if labless_autosubmit_file:
         wandb_name = json.loads(Path(labless_autosubmit_file).read_text()).get("run_name") or wandb_name
     slurm_job_id = os.environ.get("SLURM_JOB_ID")
@@ -445,7 +446,7 @@ def main():
         }
 
     # Compute DINO, JEPA, KDE, and optional FINO; validation omits FINO.
-    def compute_losses(gf, lf, b, masks, mask_idx, mask_w, t_temp, k_scale, ckpt=False, meta=None):
+    def compute_losses(gf, lf, b, masks, mask_idx, mask_w, t_temp, k_scale, ckpt=False, meta=None, pathway_target=None):
         with torch.no_grad():
             t = teacher_backbone(gf)
             t_cls = teacher_dino_head(t["cls"]).chunk(train_cfg["global_views"])
@@ -490,7 +491,14 @@ def main():
                         terms.append(0.03 * F.mse_loss(prediction, values[keep]))
                 for term in terms:
                     meta_loss = meta_loss + term
-        return local_loss + global_loss, jepa_loss, kde, meta_loss
+        # Average global-view predictions before Huber regression; missing metadata contributes zero.
+        pathway_loss = sg["cls"].new_zeros(())
+        if pathway_target is not None:
+            context = torch.cat([sg["cls"][:, None], sg["patches"]], 1)
+            prediction = predictors["pathway"](context).view(train_cfg["global_views"], b, -1).mean(0)
+            keep = ~torch.isnan(pathway_target).any(1)
+            pathway_loss = dino_cfg["pathway_loss_weight"] * F.smooth_l1_loss(prediction[keep], pathway_target[keep], reduction="sum") / (keep.sum().clamp_min(1) * 256)
+        return local_loss + global_loss, jepa_loss, kde, meta_loss, pathway_loss
 
     # Held-out validation pass: same DINO + JEPA + KDE losses on `val_batches` of the val split.
     # Schedule terms (teacher_temp, kde_scale) drift over training, so read val curves as same-step
@@ -511,7 +519,7 @@ def main():
             with torch.no_grad(), autocast:
                 gf, lf = vg.transpose(0, 1).flatten(0, 1), vl.transpose(0, 1).flatten(0, 1)
                 masks, mask_idx, mask_w = make_block_mask(b * train_cfg["global_views"], global_grid, device, int(dino_cfg["jepa_blocks"]), float(dino_cfg["jepa_block_scale"]))
-                dino_l, jepa_l, kde_v, _ = compute_losses(gf, lf, b, masks, mask_idx, mask_w, eval_teacher_temp, eval_kde_scale)
+                dino_l, jepa_l, kde_v, _, _ = compute_losses(gf, lf, b, masks, mask_idx, mask_w, eval_teacher_temp, eval_kde_scale)
             sums += torch.tensor([float(dino_l), float(jepa_l), float(kde_v), float(dino_l + jepa_l + kde_v)], device=device)
             n_batches += 1
         random.setstate(py_rng)
@@ -583,22 +591,23 @@ def main():
                 pending_ids[key].update(int(x) for x in batch[batch_key].tolist())
             global_views, local_views = [batch[key].to(device, non_blocking=True) for key in ("global_views", "local_views")]
             visible_now = batch_size * (train_cfg["global_views"] * global_patches + train_cfg["local_views"] * local_patches)
-            # LR warmup uses the 1M-tile sample cap; decay/WD/teacher/freeze/KDE stay on the public FLOP budget.
+            # Pathway keys LR, WD, temperature and KDE to samples; freeze/EMA retain FLOP progress.
             frac = min(1.0, train_flops / max_train_flops)
+            sample_fraction = examples_seen / max_train_samples
             warmup = min(1.0, examples_seen / max(1, warmup_train_samples))
             if warmup < 1.0:
                 lr = dino_cfg["lr"] * warmup
             else:
-                lr = cosine_schedule(dino_cfg["lr"], dino_cfg["lr_min"], (frac - dino_cfg["warmup_fraction"]) / max(1e-9, 1 - dino_cfg["warmup_fraction"]))
-            wd = cosine_schedule(0.04, 0.2, frac)
-            teacher_temp = 0.04 + min(1.0, frac / 0.2727) * (0.07 - 0.04)
+                lr = cosine_schedule(dino_cfg["lr"], dino_cfg["lr_min"], (sample_fraction - dino_cfg["warmup_fraction"]) / max(1e-9, 1 - dino_cfg["warmup_fraction"]))
+            wd = cosine_schedule(0.04, 0.2, sample_fraction)
+            teacher_temp = 0.04 + min(1.0, sample_fraction / 0.2727) * (0.07 - 0.04)
             last_layer_lr = 0.0 if frac < dino_cfg["freeze_last_layer_fraction"] else lr
             for group in opt.param_groups:
                 base_lr = last_layer_lr if group["last_layer"] else lr
                 group["lr"] = base_lr * group["lr_mult"]
                 group["weight_decay"] = wd * group["wd_mult"]
             masks, mask_idx, mask_w = make_block_mask(batch_size * train_cfg["global_views"], global_grid, device, int(dino_cfg["jepa_blocks"]), float(dino_cfg["jepa_block_scale"]))
-            kde_scale = min(1.0, max(0.0, (frac - 0.1) / 0.4))
+            kde_scale = min(1.0, max(0.0, (sample_fraction - 0.1) / 0.4))
             # Wrap forward + backward + opt.step in FlopCounterMode on the first step only;
             # subsequent steps reuse measured_flops_per_step (fixed shapes => fixed cost).
             flop_ctx = FlopCounterMode(display=False) if measured_flops_per_step is None else contextlib.nullcontext()
@@ -608,15 +617,14 @@ def main():
                     # so [crop0_img0, crop0_img1, ..., crop1_img0, ...] for clean teacher/student alignment.
                     gf = global_views.transpose(0, 1).flatten(0, 1)
                     lf = local_views.transpose(0, 1).flatten(0, 1)
-                    sample_fraction = examples_seen / max_train_samples
                     gamma = fino_cfg["gamma_max"] * (2 / (1 + math.exp(-10 * sample_fraction)) - 1) if fino_cfg else 0.0
                     meta = ((gamma, batch["meta_disc"].to(device, non_blocking=True),
                              {factor: batch[f"mc_{factor}"].to(device, non_blocking=True) for factor, _ in fino_cont}) if fino_cfg else None)
-                    dino_loss_value, jepa_loss, kde, meta_loss = compute_losses(
+                    dino_loss_value, jepa_loss, kde, meta_loss, pathway_loss = compute_losses(
                         gf, lf, batch_size, masks, mask_idx, mask_w, teacher_temp, kde_scale,
-                        ckpt=activation_checkpointing, meta=meta,
+                        ckpt=activation_checkpointing, meta=meta, pathway_target=batch["pathway_target"].to(device, non_blocking=True),
                     )
-                    total_loss = dino_loss_value + jepa_loss + kde + meta_loss
+                    total_loss = dino_loss_value + jepa_loss + kde + meta_loss + pathway_loss
                 opt.zero_grad(set_to_none=True)
                 total_loss.backward()
                 grad_norm = nn.utils.clip_grad_norm_(
@@ -638,6 +646,7 @@ def main():
             train_flops += step_train_flops
             if should_log:
                 reduced = {
+                    "pathway": float(pathway_loss.detach()),
                     "dino": float(dino_loss_value.detach()),
                     "jepa": float(jepa_loss.detach()),
                     "kde": float(kde.detach()),
@@ -808,12 +817,14 @@ def main():
         "train_loop_wall_seconds": train_loop_wall_seconds,
         "stop_reason": stop_reason,
         "steps_completed": step,
-        "tile_presentations": examples_seen,
+        "optimizer_tile_presentations": examples_seen,
+        "calibration_tile_presentations": robust_norm_tiles,
+        "tile_presentations": examples_seen + robust_norm_tiles,
         "visible_patch_presentations": visible_patch_presentations,
         **final_unique_counts,
         "train_flops": train_flops,
         "flop_fraction": min(1.0, float(train_flops) / float(max_train_flops)),
-        "sample_fraction": min(1.0, float(examples_seen) / float(max_train_samples)),
+        "sample_fraction": min(1.0, (examples_seen + robust_norm_tiles) / max_train_samples),
         # Average throughput over the train loop; wall time is diagnostic, not an eligibility cap.
         "flops_per_sec": train_flops / max(1.0, train_loop_wall_seconds),
         "visible_patches_per_sec": visible_patch_presentations / max(1.0, train_loop_wall_seconds),

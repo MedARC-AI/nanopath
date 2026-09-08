@@ -132,6 +132,12 @@ class TCGATileDataset(Dataset):
             self.meta_disc = {factor: meta["discrete"][factor] for factor in self.fino_disc}
             self.meta_cont = {factor: meta["continuous"][factor] for factor in self.fino_cont}
             self.cont_dim = {factor: meta["cont_dim"].get(factor, 1) for factor in self.fino_cont}
+            # Subtract each cancer type's mean pathway activity, retaining within-cancer variation.
+            patients, values = zip(*meta["continuous"]["expr_path"].items())
+            values = np.asarray(values, dtype=np.float64)
+            groups = np.asarray([meta["discrete"]["cancer"][patient] for patient in patients])
+            means = {group: values[groups == group].mean(0).astype(np.float32) for group in np.unique(groups)}
+            self.pathways = {patient: value.astype(np.float32) - means[group] for patient, value, group in zip(patients, values, groups)}
         mean, std = data["mean"], data["std"]
         self.global_views = int(train["global_views"])
         self.local_views = int(train["local_views"])
@@ -186,6 +192,7 @@ class TCGATileDataset(Dataset):
         patient_key = int.from_bytes(hashlib.blake2b(patient_id.encode(), digest_size=8).digest(), "big") & 0x7FFFFFFFFFFFFFFF
         fino = {}
         if self.fino:
+            fino["pathway_target"] = torch.tensor(self.pathways.get(patient_id, np.full(256, np.nan)), dtype=torch.float32)
             fino["meta_disc"] = torch.tensor([self.meta_disc[factor].get(patient_id, -1) for factor in self.fino_disc], dtype=torch.int64)
             for factor in self.fino_cont:
                 value = self.meta_cont[factor].get(patient_id, [float("nan")] * self.cont_dim[factor])

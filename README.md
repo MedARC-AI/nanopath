@@ -10,6 +10,16 @@ This repository is intentionally made to be compatible with [autoresearch](https
 
 **Want to get involved? Join us in the [MedARC Discord](https://discord.gg/tVR4TWnRM9) (find us in #path-fm)!**
 
+## Maintainer reproduction — 2026-09-08
+
+This worktree minimally reproduces [Pathway’s frozen submission](https://labless.dev/runs/run_sub_be11dc9877) from `robust-norm-v2` at `418605b`. It adds an eight-query, two-layer cross-attention head trained with weight-0.1 Huber regression on cancer-centered `expr_path` metadata, lowers drop path/KDE to 0.05, and keys LR/WD/temperature/KDE to sample progress. Freeze and teacher EMA retain FLOP progress. The auxiliary head uses student CLS and patch tokens and is excluded from probe checkpoints.
+
+The submitted source and matching cluster snapshot use identity-plus-180° pooled-feature averaging and the existing robust-norm dense segmentation readout. They contain no segmentation color sidecar, despite the run note; the contributor’s recollection describes eight views. This reproduction follows the frozen source.
+
+Fresh training seeds are 3539, 7275, and 6435, sampled before launching either recipe; the data split stays at 7777. Each full run performs 993792 optimizer tile presentations plus 6144 calibration presentations (999936 total), with the standard 1e18 training-FLOP cap. Metadata SHA-256 is `45b49a11891c6889f2f240de5ffaecd5ded57f2146c151c73cb43ca3872a5d55`.
+
+`probe.py`, `benchmarking/`, and probe configuration retain the current CRoMa and 100-repeat UCLA protocol byte-for-byte. Historical submission scores are therefore not exact reproduction targets. Compare each three-seed median against the measured incumbent 0.6465074136 with the fixed 0.004 promotion margin and two-hour H100 training requirement.
+
 ## Quickstart
 
 Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:

@@ -1,8 +1,8 @@
 project:
-  name: robust-norm
+  name: pathway-tta
   family: nanopath
-  recipe_id: dinov2-vits14-reg-robust-norm
-  output_dir: /data/$USER/nanopath/robust-norm/default
+  recipe_id: pathway-tta-queries8
+  output_dir: /data/$USER/nanopath/reproduction-20260908/pathway/default
   wandb_dir: /data/$USER/nanopath/wandb
 
 data:
@@ -52,11 +52,12 @@ dino:
   freeze_last_layer_fraction: 0.0091
   layerwise_decay: 0.7
   patch_embed_lr_mult: 0.2
-  drop_path_rate: 0.1
+  drop_path_rate: 0.05
   head_hidden_dim: 2048
   head_bottleneck_dim: 384
   clip_grad: 3.0
-  kde_loss_weight: 0.1
+  kde_loss_weight: 0.05
+  pathway_loss_weight: 0.1
   kde_concentration: 10.0
   # Contiguous block masking and the predictor for I-JEPA patch regression.
   jepa_pred_depth: 4
