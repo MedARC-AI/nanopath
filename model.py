@@ -6,7 +6,7 @@
 # a strict load.
 #
 # DINOHead is the small MLP + weight-normed classifier used by train.py for the
-# DINO CLS / iBOT patch self-distillation losses. It is intentionally trivial
+# DINO CLS self-distillation loss. It is intentionally trivial
 # (~15 lines) so we have zero runtime dependency on the dinov2 codebase.
 
 import torch
@@ -45,6 +45,14 @@ class DropPath(nn.Module):
 class LayerScale(nn.Module):
     def __init__(self, dim): super().__init__(); self.gamma = nn.Parameter(torch.ones(dim))
     def forward(self, x): return x * self.gamma
+
+
+# Identity forward whose signed scale steers FINO gradients at the backbone boundary.
+class GradScale(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, scale): ctx.scale = scale; return x
+    @staticmethod
+    def backward(ctx, grad): return grad * ctx.scale, None
 
 
 # Attention with single qkv Linear + F.scaled_dot_product_attention (Flash-2 backend on H100 bf16).
@@ -212,3 +220,20 @@ class DINOHead(nn.Module):
         x = self.mlp(x)
         x = F.normalize(x, dim=-1, p=2)
         return self.last_layer(x)
+
+
+# I-JEPA predicts EMA-teacher patch features from the student's block-masked tokens.
+class JEPAPredictor(nn.Module):
+    def __init__(self, dim, depth=4, width=0, heads=6):
+        super().__init__()
+        width = width or dim
+        self.proj_in = nn.Linear(dim, width) if width != dim else nn.Identity()
+        self.blocks = nn.ModuleList(Block(width, heads, 4.0, 0.0) for _ in range(depth))
+        self.norm = nn.LayerNorm(width, eps=1e-6)
+        self.proj = nn.Linear(width, dim, bias=True)
+
+    def forward(self, patch_tokens):
+        x = self.proj_in(patch_tokens)
+        for block in self.blocks:
+            x = block(x)
+        return self.proj(self.norm(x))
