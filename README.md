@@ -12,9 +12,17 @@ This repository is intentionally made to be compatible with [autoresearch](https
 
 ## GuruTurbo1.0
 
-Maintainer reproduction of [ScienceGuru’s frozen submission](https://labless.dev/runs/run_sub_bf33fffa9d), starting from `robust-norm-v2` at `418605b`. Adds gamma-1 focal JEPA, tissue threshold 0.1, native last-four-block segmentation with 12 color/stain channels, rank-64 typicality contraction, rank-640 final-MLP PCA, and eight-view D4 averaging. Pooled features retain the submitted scale and zero padding to 4096 dimensions; validation losses run only at the end. Calibration shares robust-norm’s 6144 TCGA tiles, using float64 PCA/contraction.
+Maintainer reproduction of [ScienceGuru’s frozen submission](https://labless.dev/runs/run_sub_bf33fffa9d), starting from `robust-norm-v2` at `418605b`.
 
-Three training seeds scored 3539: 0.659681, 7275: 0.662299, 6435: 0.652835 on the unchanged current 20-task evaluator (CRoMa and 100-repeat UCLA). The median **0.659681** is **+0.013173** above robust-norm-s9876, clearing the 0.004 promotion margin. Split seed: 7777; each run uses 993792 optimizer + 6144 calibration tiles, within the 1M-tile/1e18-FLOP caps. Set `seed=...` and a distinct `output_dir=...` when repeating the recipe.
+- `tissue_thresh 0.0 → 0.1`; only include tiles with at least 10% estimated tissue.
+- Standard JEPA → focal JEPA (`gamma=1`); weight harder-to-predict patches more.
+- `eval_every 200 → 10000`; check training validation losses only at the end of these runs.
+- 1,920 CLS features → 1,920 CLS + 640 PCA-compressed MLP features.
+- Robust normalization → robust normalization + rank-64 outlier contraction; pull unusual features toward the calibration mean.
+- Pooled output: 1,920 → 4,096 dimensions; normalize the 2,560 features to length √2048, then append 1,536 zeros.
+- Probe views: 1 → 8; average four rotations, each with and without reflection.
+- Segmentation: upsample/sharpen/pool → directly use the native 16×16 feature grid.
+- Segmentation features: 1,536 → 1,548; append 12 color/stain measurements.
 
 ## Quickstart
 
