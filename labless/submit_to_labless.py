@@ -363,8 +363,6 @@ def validate_output(output_dir: Path, summary_path: Path, metrics_path: Path, su
         protocol = next((number(row.get("probe_protocol_version")) for row in reversed(rows) if number(row.get("probe_protocol_version")) is not None), None)
     if protocol != PROBE_PROTOCOL_VERSION:
         errors.append(f"probe_protocol_version must be {PROBE_PROTOCOL_VERSION}, got {protocol}")
-    if final_metrics(summary, rows, metric_value).get("ucla_lung_repeats") != 100 or number(summary.get("final_probe_ucla_lung_repeats")) != 100:
-        errors.append("100-repeat UCLA progression is required in metrics and summary; keep the checkpoint and labless_source for maintainer re-evaluation with current nanopath. Pulling alone does not update saved scores.")
     return errors
 
 

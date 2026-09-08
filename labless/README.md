@@ -160,14 +160,6 @@ local artifact paths from submitted rows.
 The final score weights classification, segmentation, progression, mutation,
 survival, and CRoMa robustness at 30%, 15%, 17.5%, 15%, 7.5%, and 15%.
 Labless rejects scores that do not match those submitted components.
-UCLA progression averages 100 stratified three-fold repetitions; submissions
-must include `ucla_lung_repeats=100` in their metrics and
-`final_probe_ucla_lung_repeats=100` in their summary.
-Eligibility comes from saved probe results, not the current Git checkout.
-Pulling after training does not update a completed run's scores. Keep its
-checkpoint and `labless_source` snapshot for maintainer re-evaluation with
-the current probe; encoder retraining is unnecessary. A fresh `train.py`
-launch overwrites its output directory and is not a re-evaluation command.
 
 Agents can crawl the public experiment ledger directly with the JSON API:
 
