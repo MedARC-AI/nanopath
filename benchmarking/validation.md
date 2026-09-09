@@ -144,7 +144,7 @@ and high random-feature AUC remain limitations of this cohort.
 The earlier promotion study contained six nanopath checkpoints and seven
 principal baselines. Its table below records the pre-CRoMa protocol: official
 results were read after that benchmark, its manifests, and its scalar were
-frozen. The current CRoMa comparisons follow in the expanded 20-model table.
+frozen. The current CRoMa comparisons follow in the expanded 21-model table.
 
 Pairwise concordance is the fraction of non-tied model pairs ordered the same
 way by nanopath and the official target. Cross-family concordance restricts
@@ -172,21 +172,21 @@ Across those 12 pre-existing composite rows, the final score never places a
 studied nanopath checkpoint above GigaPath or H-Optimus-0 when the composite
 places it below that baseline.
 
-An expanded 20-model table adds H0-mini, DINOv2-S/B/L/G, Kaiko-S/16, and
-GigaPath-Flash:
+An expanded 21-model table adds H0-mini, DINOv2-S/B/L/G, Kaiko-S/16, and
+GigaPath-Flash, plus the validated GuruTurbo1.0 median (seed 3539):
 
-| Comparison, 20 models | Pearson | Kendall |
+| Comparison, 21 models | Pearson | Kendall |
 |---|---:|---:|
-| Classification / THUNDER | 0.988 | 0.958 |
-| Segmentation / THUNDER | 0.870 | 0.741 |
-| Final score / THUNDER classification + segmentation | 0.923 | 0.758 |
-| Final score / HEST | 0.896 | 0.768 |
-| Final score / CPTAC classification | 0.797 | 0.684 |
+| Classification / THUNDER | 0.986 | 0.952 |
+| Segmentation / THUNDER | 0.870 | 0.737 |
+| Final score / THUNDER classification + segmentation | 0.920 | 0.762 |
+| Final score / HEST | 0.874 | 0.733 |
+| Final score / CPTAC classification | 0.796 | 0.695 |
 
 The exact comparison input is
 [proxy-fidelity data](proxy_fidelity_v2.csv). Final scores use the assembled
 fixed result, including PanNuke and both SegPath tasks. THUNDER segmentation
-uses complete same-checkpoint results for all 20 models.
+uses complete same-checkpoint results for all 21 models.
 
 ## Random-feature null audit
 
