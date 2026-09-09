@@ -61,15 +61,16 @@ The `main` branch uses the `lr-and-curation` recipe. Model links below select th
 
 | # | Description | final score | classification | segmentation | progression | mutation | survival | robustness | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | [GuruTurbo1.0](https://github.com/MedARC-AI/nanopath/tree/GuruTurbo1.0) | **0.6597** | 0.7518 | 0.6030 | 0.6365 | 0.6289 | 0.6301 | 0.6046 | [@aajing](https://github.com/aajing) |
-| 2 | [pathway-tta](https://github.com/MedARC-AI/nanopath/tree/pathway-tta) | 0.6491 | 0.7557 | 0.6020 | 0.5993 | 0.6128 | 0.6242 | 0.5896 | [@achi2023](https://github.com/achi2023) |
-| 3 | [jepa-fino](https://github.com/MedARC-AI/nanopath/tree/jepa-fino-v2) | 0.6483 | 0.7384 | 0.6016 | 0.6010 | 0.6190 | 0.6210 | 0.6132 | [@ml-and-ml](https://github.com/ml-and-ml) |
-| 4 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm-v2) | 0.6465 | 0.7507 | 0.6024 | 0.6073 | 0.5885 | 0.6010 | 0.6088 | [@anishdulal](https://github.com/anishdulal) |
-| 5 | I-JEPA contig patch | 0.6463 | 0.7219 | 0.5993 | 0.6238 | 0.6148 | 0.6172 | 0.6143 | @NimaAsh |
-| 6 | block-strided-cls | 0.6448 | 0.7477 | 0.6039 | 0.5738 | 0.6066 | 0.6335 | 0.6069 | @RyanKim17920 |
-| 7 | [lr-and-curation](https://github.com/MedARC-AI/nanopath) | 0.6349 | 0.7048 | 0.5940 | 0.6045 | 0.6025 | 0.6199 | 0.6114 | @nevasini1 |
+| 1 | [robust-huelocal](https://github.com/MedARC-AI/nanopath/tree/robust-huelocal) | **0.6675** | 0.7350 | 0.5986 | 0.6884 | 0.6455 | 0.6131 | 0.6261 | [@anishdulal](https://github.com/anishdulal) |
+| 2 | [GuruTurbo1.0](https://github.com/MedARC-AI/nanopath/tree/GuruTurbo1.0) | 0.6597 | 0.7518 | 0.6030 | 0.6365 | 0.6289 | 0.6301 | 0.6046 | [@aajing](https://github.com/aajing) |
+| 3 | [pathway-tta](https://github.com/MedARC-AI/nanopath/tree/pathway-tta) | 0.6491 | 0.7557 | 0.6020 | 0.5993 | 0.6128 | 0.6242 | 0.5896 | [@achi2023](https://github.com/achi2023) |
+| 4 | [jepa-fino](https://github.com/MedARC-AI/nanopath/tree/jepa-fino-v2) | 0.6483 | 0.7384 | 0.6016 | 0.6010 | 0.6190 | 0.6210 | 0.6132 | [@ml-and-ml](https://github.com/ml-and-ml) |
+| 5 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm-v2) | 0.6465 | 0.7507 | 0.6024 | 0.6073 | 0.5885 | 0.6010 | 0.6088 | [@anishdulal](https://github.com/anishdulal) |
+| 6 | I-JEPA contig patch | 0.6463 | 0.7219 | 0.5993 | 0.6238 | 0.6148 | 0.6172 | 0.6143 | @NimaAsh |
+| 7 | block-strided-cls | 0.6448 | 0.7477 | 0.6039 | 0.5738 | 0.6066 | 0.6335 | 0.6069 | @RyanKim17920 |
+| 8 | [lr-and-curation](https://github.com/MedARC-AI/nanopath) | 0.6349 | 0.7048 | 0.5940 | 0.6045 | 0.6025 | 0.6199 | 0.6114 | @nevasini1 |
 
-The [GuruTurbo1.0](https://labless.dev/runs/run_sub_cb8d49013b) and [pathway-tta](https://labless.dev/runs/run_sub_92673d64ef) scores are validated medians of three independent training seeds.
+The [robust-huelocal](https://labless.dev/runs/run_sub_2e5c3d80c6), [GuruTurbo1.0](https://labless.dev/runs/run_sub_cb8d49013b), and [pathway-tta](https://labless.dev/runs/run_sub_92673d64ef) scores are validated medians of three independent training seeds.
 
 ### Baselines
 
