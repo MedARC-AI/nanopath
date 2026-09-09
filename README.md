@@ -10,6 +10,20 @@ This repository is intentionally made to be compatible with [autoresearch](https
 
 **Want to get involved? Join us in the [MedARC Discord](https://discord.gg/tVR4TWnRM9) (find us in #path-fm)!**
 
+## robust-huelocal
+
+Maintainer reproduction of [Anish Dulal’s frozen submission](https://labless.dev/runs/run_sub_8a160bb2d9), starting from `robust-norm-v2` at `3f1685f` (recipe code unchanged from `418605b`).
+
+- Local-crop hue jitter: 0 → 0.2; global-crop hue stays unchanged.
+- Pooled features: 1,920 → 640; typicality-gated final CLS (384) plus mean-pooled final-MLP activations (256).
+- Pooled views: 1 → 2; average identity and 180° rotation before gating.
+- Segmentation: sharpened 32×32 grid → native 16×16 grid; retain the last four blocks.
+- Photometric suppression rank: CLS/patch mean 32/32 → 32/256; add rank-128 within-cancer site suppression from TCGA metadata.
+- Robustness views: 1 → 8; average rotations/reflections after restoring patch-map orientation.
+- FINO backbone gradient multipliers for expr512/fga: 1 → 3.
+
+Reproduction retains the 1M presentation cap: 6,144 photometric + 11,941 site-calibration presentations are reserved, leaving 7,671 optimizer steps. The submitted source instead takes 7,812 steps and excludes both calibration draws from its reported count. The default training seed is 7974, the median of three maintainer reruns; evaluations remain unchanged.
+
 ## Quickstart
 
 Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:
