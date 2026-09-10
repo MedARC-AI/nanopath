@@ -21,6 +21,9 @@ dependencies = [
   "timm>=1.0.27",
 ]
 
+[project.optional-dependencies]
+gpu = ["kornia==0.8.3"]
+
 [tool.uv]
 package = false
 

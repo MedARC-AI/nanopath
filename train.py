@@ -29,7 +29,7 @@ import yaml
 from torch.utils.data import DataLoader
 from torch.utils.flop_counter import FlopCounterMode
 
-from dataloader import TCGATileDataset, TILE_SIZE
+from dataloader import GPUAugment, TCGATileDataset, TILE_SIZE
 from model import DINOHead, ViT, load_pretrained
 from probe import (
     completed_probe_summary,
@@ -370,6 +370,17 @@ def main():
     wandb_meta = {"entity": wandb_run.entity, "project": "nanopath", "id": wandb_run.id, "name": wandb_name, "url": wandb_run.url,
                   "mode": getattr(wandb_run.settings, "mode", ""), "source_artifact": source_id,
                   "source_dir": str(source_snapshot_dir), "git": {"commit": git_commit, "remote": git_remote}}
+    augment = torch.nn.Identity()
+    if train_cfg["gpu_augment"]:
+        augment = GPUAugment(cfg["data"]).to(device)
+        if train_cfg["compile"]:
+            augment.compile()
+            # Compile before timing; preserve the training RNG state through warmup.
+            rng = torch.cuda.get_rng_state(device)
+            for views, size in [(train_cfg["global_views"], train_cfg["global_size"]), (train_cfg["local_views"], train_cfg["local_size"])]:
+                augment(torch.zeros(batch_size, views, 3, size, size, dtype=torch.uint8, device=device))
+            torch.cuda.synchronize(device)
+            torch.cuda.set_rng_state(rng, device)
     train_ds = TCGATileDataset(cfg, is_train=True)
     val_ds = TCGATileDataset(cfg, is_train=False)
     probe_state = prepare_probe_state(cfg, output_dir) if probe_enabled(cfg) else None
@@ -472,7 +483,7 @@ def main():
         for vb_idx, vbatch in enumerate(val_loader):
             if vb_idx >= int(train_cfg["val_batches"]):
                 break
-            vg, vl = vbatch["global_views"].to(device, non_blocking=True), vbatch["local_views"].to(device, non_blocking=True)
+            vg, vl = [augment(vbatch[key].to(device, non_blocking=True)) for key in ("global_views", "local_views")]
             b = vg.shape[0]
             with torch.no_grad(), autocast:
                 gf, lf = vg.transpose(0, 1).flatten(0, 1), vl.transpose(0, 1).flatten(0, 1)
@@ -547,7 +558,7 @@ def main():
             # Data identifiers stay on CPU and feed coverage metrics; image tensors move below.
             for key, batch_key in (("sample", "sample_idx"), ("slide", "slide_id"), ("patient", "patient_id")):
                 pending_ids[key].update(int(x) for x in batch[batch_key].tolist())
-            global_views, local_views = [batch[key].to(device, non_blocking=True) for key in ("global_views", "local_views")]
+            global_views, local_views = [augment(batch[key].to(device, non_blocking=True)) for key in ("global_views", "local_views")]
             visible_now = batch_size * (train_cfg["global_views"] * global_patches + train_cfg["local_views"] * local_patches)
             # LR warmup uses the 1M-tile sample cap; decay/WD/teacher/freeze/KDE stay on the public FLOP budget.
             frac = min(1.0, train_flops / max_train_flops)

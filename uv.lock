@@ -273,6 +273,33 @@ wheels = [
 ]
 
 [[package]]
+name = "kornia"
+version = "0.8.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "kornia-rs" },
+    { name = "packaging" },
+    { name = "torch" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1a/80/460e9dad0c1b68f3e83f198f3983638d62f910a88542b492290010d25f50/kornia-0.8.3.tar.gz", hash = "sha256:c06887374eaf39fb614a77ca054383e6cc2092cb7225e45437111b4984d0f866", size = 727384, upload-time = "2026-05-19T20:23:35.048Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/85/05/0c1cc486e87d2a5ad6649eb96a8ccaa7c6002d8d73d676c13e2102f286c1/kornia-0.8.3-py3-none-any.whl", hash = "sha256:0b15f5d359aeafd7ff54ea631ed1943a3eb295c4a6dae3f745ddeada25e33289", size = 1189381, upload-time = "2026-05-19T20:23:33.209Z" },
+]
+
+[[package]]
+name = "kornia-rs"
+version = "0.1.14"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/09/0f/cd6985790031ad2f0d4fcdfdb9763a177bebb970edddc6fe29f9e6afd902/kornia_rs-0.1.14.tar.gz", hash = "sha256:7584f654a9db2b41bee05c9aaf865608b665e2f7195096372e001b6f220de1d2", size = 2556658, upload-time = "2026-05-19T07:45:06.366Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d9/e3/e57480f38e395262616afd8efe91d0a1f7a4b875b52c9890e31aa85a057c/kornia_rs-0.1.14-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:76faf5389b1ea53452fc08561622ccad8ce81c8ff1857c4742be6ae4e82bf078", size = 3555313, upload-time = "2026-05-19T07:46:01.714Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/4f/2935c5186cce45bfa85b587883d627627427bceb61d0b0e0aa0267339910/kornia_rs-0.1.14-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:0025db9854f3a34c66123c2646d52e71a534678d9343f3c897192136b2c3ddaf", size = 3349262, upload-time = "2026-05-19T07:45:47.689Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/f5/dc5e8f69130de7ed8d59500789bc0cf1658ada8d5360164e416622cb47f1/kornia_rs-0.1.14-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:747b26a3ce0cad76aa1047ed65f95dcd649286a2d5417d8ad93f03bb1909238d", size = 3381293, upload-time = "2026-05-19T07:45:10.552Z" },
+    { url = "https://files.pythonhosted.org/packages/72/7f/01c9456a09a3a5731bf986724f6f6ff70d627ac8072cf298d842ec204692/kornia_rs-0.1.14-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:396f84661fcf260885c3f9db717caf6904eafd44857dca17be09a835bd7da8d9", size = 3695565, upload-time = "2026-05-19T07:45:30.01Z" },
+    { url = "https://files.pythonhosted.org/packages/e0/6f/01e0e2cf90c47ecf26656263cdabe491a1b206c94c0c30a1dd7e4d13ed29/kornia_rs-0.1.14-cp312-cp312-win_amd64.whl", hash = "sha256:ac4bbd0a8fd73b5058a39707c790fecec4c5204a42d1f5af17f1fa57cc83d406", size = 3367565, upload-time = "2026-05-19T07:46:16.682Z" },
+]
+
+[[package]]
 name = "markdown-it-py"
 version = "4.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -342,10 +369,16 @@ dependencies = [
     { name = "wandb" },
 ]
 
+[package.optional-dependencies]
+gpu = [
+    { name = "kornia" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "h5py", specifier = ">=3.16.0" },
     { name = "huggingface-hub", specifier = ">=0.30.0" },
+    { name = "kornia", marker = "extra == 'gpu'", specifier = "==0.8.3" },
     { name = "numpy", specifier = ">=2.2.0" },
     { name = "openslide-bin", specifier = ">=4.0.0" },
     { name = "openslide-python", specifier = ">=1.4.0" },
@@ -359,6 +392,7 @@ requires-dist = [
     { name = "torchvision", specifier = "==0.23.0+cu129", index = "https://download.pytorch.org/whl/cu129" },
     { name = "wandb", specifier = ">=0.20.0" },
 ]
+provides-extras = ["gpu"]
 
 [[package]]
 name = "networkx"

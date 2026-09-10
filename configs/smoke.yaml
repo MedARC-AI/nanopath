@@ -30,6 +30,7 @@ train:
   compile: false
   fused_adamw: false
   batch_size: 128
+  gpu_augment: false # experimental Kornia tail; uint8 geometry remains on CPU
   num_workers: 16
   prefetch_factor: 2
   persistent_workers: true
