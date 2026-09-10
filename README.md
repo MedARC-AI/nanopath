@@ -33,7 +33,7 @@ RUN_DIR=$PWD/data/main/my-run
 # or directly on a GPU machine: python train.py configs/main.yaml output_dir=$RUN_DIR
 ```
 
-`pyproject.toml` pins `torch` / `torchvision` against the CUDA 12.9 wheel index. If your GPU/driver needs a different CUDA build, edit the `torch` and `torchvision` lines in `pyproject.toml` before `uv sync`.
+`pyproject.toml` pins PyTorch 2.8.0 and torchvision 0.23.0 against the CUDA 12.9 wheel index. Ordinary `uv sync` installs Pillow without Kornia. For GPU augmentation, run `uv sync --extra gpu` to install Kornia 0.8.3. If your GPU/driver needs a different CUDA build, edit the `torch` and `torchvision` lines in `pyproject.toml` before `uv sync`.
 
 A successful model training prints periodic train lines, appends metrics to `metrics.jsonl`, and writes the final comparison artifact to `summary.json`. `configs/smoke.yaml` is simply meant to pretrain briefly and then run the fixed downstream probe suite to ensure everything works without errors.
 
@@ -238,6 +238,50 @@ Full main `nanopath` recipe:
 ```
 
 `submit/train_1gpu.sbatch` is a prompt-aware launcher when run directly: it collects Labless run name, notes, and GitHub device login before submitting itself to SLURM, then auto-submits eligible completed full runs. Calling `sbatch submit/train_1gpu.sbatch ...` bypasses that prompt and trains without auto-submit. `configs/main.yaml` is sized for an 80 GB H100 at `train.batch_size: 128`. On smaller cards you can set `train.activation_checkpointing: true` and lower `train.batch_size` if you OOM.
+
+The three performance switches in `train` are independent and default to `false`:
+
+| Config key | Effect when true |
+|---|---|
+| `compile` | Compiles backbones, heads, losses, and the GPU augmentation tail |
+| `fused_adamw` | Enables native AdamW fusion |
+| `gpu_augment` | Applies stain jitter, color changes, blur, and normalization on the GPU |
+
+All loaders crop, resize, and flip PIL images on the CPU. The CPU tail receives float32 crops. The GPU tail receives uint8 crops and requires `uv sync --extra gpu`. With `compile: false`, the GPU tail runs eagerly.
+
+For the fastest tested recipe, use the isolated SIMD installation below. Change these values in your YAML config:
+
+```yaml
+train:
+  compile: true
+  fused_adamw: true
+  gpu_augment: true
+  num_workers: 8
+```
+
+Keep the other `train` values in your config. Add explicit `compile`, `fused_adamw`, and `gpu_augment` keys to older external YAML copies. Checkpoint weight keys stay unchanged. Resume uses the fused backend from the requested config.
+
+The first compiled run builds kernels for the crop sizes. Compiler caches live beside `project.wandb_dir`. Standard `TORCHINDUCTOR_CACHE_DIR` and `TRITON_CACHE_DIR` values override these paths. Compilation adds startup time.
+
+PIL geometry changes interpolation from the older tensor loader. GPU augmentation also changes grayscale coefficients and random-number consumption. These changes do not preserve identical stochastic trajectories. The performance switches remain disabled pending full-protocol quality validation.
+
+Pillow-SIMD is an optional pretraining installation. The tested AVX2 build requires an x86 CPU with AVX2, a compatible Python ABI, and libjpeg/zlib development headers and libraries. The default environment keeps ordinary Pillow. Both distributions provide `PIL`, so a uv extra cannot isolate them.
+
+On a compatible allocated node, choose an empty target directory and build the tested version without cached wheels:
+
+```bash
+SIMD_DIR=/data/$USER/nanopath/pillow-simd-o3
+CC='cc -mavx2' CFLAGS='-O3 -DNDEBUG' uv pip install \
+  --python .venv/bin/python --target "$SIMD_DIR" --no-cache --no-binary pillow-simd \
+  --verbose --no-deps pillow-simd==9.5.0.post2
+PYTHONPATH="$SIMD_DIR" python -c "import PIL; from PIL import features; print(PIL.__version__, PIL.__file__, features.check_feature('libjpeg_turbo'))"
+PYTHONPATH="$SIMD_DIR" ./submit/train_1gpu.sbatch configs/main.yaml
+# On an allocated GPU, use the same override with python train.py configs/main.yaml.
+```
+
+The [tested cluster build recipe](/data/benjamin/nanopath/dataloader-bench/jitter-fixed/jitter-fixed.sbatch) supplies site-specific include and library paths. Preserve `-O3 -DNDEBUG` when adding include flags. The launcher passes `PYTHONPATH` to pretraining without changing Labless behavior. Startup logs and W&B config record the effective Pillow version and import path.
+
+Remove the `PYTHONPATH` override from the invocation to return to ordinary Pillow. The probe subprocess replaces `PYTHONPATH` with the repository path, so downstream probes retain ordinary Pillow. This overlay targets pretraining only.
 
 The checked-in `#SBATCH` lines are specific to our MedARC cluster. On another SLURM cluster, edit those header lines once to match your queue, or run `python train.py ...` directly on an allocated GPU.
 

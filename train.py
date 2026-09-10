@@ -21,6 +21,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
+import PIL
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -316,6 +317,7 @@ def main():
         wandb_init["id"] = wandb_meta["id"]
         wandb_init["resume"] = "must"
     wandb_run = wandb.init(**wandb_init)
+    wandb_run.config.update({"pillow": {"version": PIL.__version__, "path": PIL.__file__}}, allow_val_change=True)
     for key in ("probe/target_flops", "probe/wall_seconds"):
         wandb_run.define_metric(key, hidden=True, overwrite=True)
     print(
@@ -326,7 +328,7 @@ def main():
         f"probe_count: {cfg['probe']['count']}  warmup_fraction: {dino_cfg['warmup_fraction']}  "
         f"lr: {dino_cfg['lr']}  adam_beta2: {dino_cfg['adam_beta2']}  kde_loss_weight: {dino_cfg['kde_loss_weight']}  "
         f"kde_concentration: {dino_cfg['kde_concentration']}  drop_path: {dino_cfg['drop_path_rate']}  "
-        f"layerwise_decay: {dino_cfg['layerwise_decay']}",
+        f"layerwise_decay: {dino_cfg['layerwise_decay']}  pillow: {PIL.__version__} ({PIL.__file__})",
         flush=True,
     )
     git_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_dir, text=True).strip()

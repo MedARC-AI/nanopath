@@ -27,10 +27,10 @@ train:
   seed: 7777
   bf16: true
   activation_checkpointing: false
-  compile: false
-  fused_adamw: false
+  compile: false # compile model, losses, and the optional GPU augmentation tail
+  fused_adamw: false # native AdamW fusion; independent of compilation
   batch_size: 128
-  gpu_augment: false # experimental Kornia tail; uint8 geometry remains on CPU
+  gpu_augment: false # requires uv sync --extra gpu; PIL geometry stays on CPU
   num_workers: 16
   prefetch_factor: 2
   persistent_workers: true
