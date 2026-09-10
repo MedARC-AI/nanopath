@@ -30,7 +30,7 @@ train:
   compile: false # compile model, losses, and the optional GPU augmentation tail
   fused_adamw: false # native AdamW fusion; independent of compilation
   batch_size: 128
-  gpu_augment: false # requires uv sync --extra gpu; PIL geometry stays on CPU
+  gpu_augment: false # requires uv sync --extra gpuaug; PIL geometry stays on CPU
   num_workers: 16
   prefetch_factor: 2
   persistent_workers: true

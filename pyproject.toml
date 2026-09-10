@@ -22,10 +22,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gpu = ["kornia==0.8.3"]
+gpuaug = ["kornia==0.8.3"]
+simd = ["pillow-simd==9.5.0.post2"]
 
 [tool.uv]
 package = false
+no-binary-package = ["pillow-simd"]
+
+[tool.uv.extra-build-variables]
+pillow-simd = { CC = "cc -mavx2", CFLAGS = "-O3 -DNDEBUG" }
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu129" }
