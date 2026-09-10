@@ -277,7 +277,7 @@ Compilation adds startup time on the first run. Later runs can reuse cached comp
 
 #### Installation
 
-Pillow-SIMD requires an x86 CPU with AVX2 and libjpeg/zlib development headers and libraries.
+Pillow-SIMD requires an x86 CPU with AVX2 and libjpeg, zlib, and libtiff development headers and libraries.
 
 ```bash
 uv sync --extra gpuaug --extra simd --no-install-package pillow
