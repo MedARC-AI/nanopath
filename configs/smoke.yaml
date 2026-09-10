@@ -27,6 +27,8 @@ train:
   seed: 1337
   bf16: true
   activation_checkpointing: false
+  compile: false
+  fused_adamw: false
   batch_size: 128
   num_workers: 16
   prefetch_factor: 2
