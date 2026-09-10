@@ -199,6 +199,7 @@ class TCGATileDataset(Dataset):
                 tile = img.convert("RGB")
             if self.tissue_thresh <= 0:
                 break
+            # temporary until we precalculate the tile tissue percentage
             rgb = v2.functional.to_image(tile).float() / 255
             sat = (rgb.amax(0) - rgb.amin(0)) / (rgb.amax(0) + 1e-6)
             if float((sat > 0.07).float().mean()) >= self.tissue_thresh:

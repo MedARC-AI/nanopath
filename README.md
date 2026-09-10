@@ -239,17 +239,31 @@ Full main `nanopath` recipe:
 
 `submit/train_1gpu.sbatch` is a prompt-aware launcher when run directly: it collects Labless run name, notes, and GitHub device login before submitting itself to SLURM, then auto-submits eligible completed full runs. Calling `sbatch submit/train_1gpu.sbatch ...` bypasses that prompt and trains without auto-submit. `configs/main.yaml` is sized for an 80 GB H100 at `train.batch_size: 128`. On smaller cards you can set `train.activation_checkpointing: true` and lower `train.batch_size` if you OOM.
 
-The three performance switches in `train` are independent and default to `false`:
+The checked-in `#SBATCH` lines are specific to our MedARC cluster. On another SLURM cluster, edit those header lines once to match your queue, or run `python train.py ...` directly on an allocated GPU.
+
+### Performance
+
+nonpath has three performance flags in `train`, which are independent and default to `false`:
 
 | Config key | Effect when true |
 |---|---|
-| `compile` | Compiles backbones, heads, losses, and the GPU augmentation tail |
-| `fused_adamw` | Enables native AdamW fusion |
+| `compile` | Compiles model backbones, heads, losses, and the GPU augmentations if enabled |
+| `fused_adamw` | Use PyTorch's fused AdamW |
 | `gpu_augment` | Applies stain jitter, color changes, blur, and normalization on the GPU |
 
-All loaders crop, resize, and flip PIL images on the CPU. The CPU tail receives float32 crops. The GPU tail receives uint8 crops and requires `uv sync --extra gpuaug`. With `compile: false`, the GPU tail runs eagerly.
+All loaders crop, resize, and flip PIL images on the CPU. The CPU tail receives float32 crops. The GPU augmentations pipeline requires `uv sync --extra gpuaug`. With `compile: false`, GPU augmentations run eagerly.
 
-For the fastest tested recipe, install the SIMD extra below. Change these values in your YAML config:
+Training throughput from 15-minute trials after warmup, each using one H100 at batch size 128:
+
+| Augmentation | Compile + fused AdamW | Tiles/second |
+|---|---|---:|
+| Original CPU | Off | ~300 |
+| Pillow-SIMD | On | ~350 |
+| Pillow + GPU augmentations | Off | ~420 |
+| Pillow + GPU augmentations | On | ~660 |
+| Pillow-SIMD + GPU augmentations | On | ~690 |
+
+For the fastest tested recipe, install the SIMD and GPU augmentation extras below and enable these flags in your YAML config:
 
 ```yaml
 train:
@@ -259,25 +273,20 @@ train:
   num_workers: 8
 ```
 
-Keep the other `train` values in your config. Add explicit `compile`, `fused_adamw`, and `gpu_augment` keys to older external YAML copies. Checkpoint weight keys stay unchanged. Resume uses the fused backend from the requested config.
+Compilation adds startup time on the first run. Later runs can reuse cached compiled code. Compiler cache defaults to beside `project.wandb_dir` with `TORCHINDUCTOR_CACHE_DIR` and `TRITON_CACHE_DIR` values overriding these paths.
 
-The first compiled run builds kernels for the crop sizes. Compiler caches live beside `project.wandb_dir`. Standard `TORCHINDUCTOR_CACHE_DIR` and `TRITON_CACHE_DIR` values override these paths. Compilation adds startup time.
+#### Installation
 
-PIL geometry changes interpolation from the older tensor loader. GPU augmentation also changes grayscale coefficients and random-number consumption. These changes do not preserve identical stochastic trajectories. The performance switches remain disabled pending full-protocol quality validation.
-
-Pillow-SIMD requires an x86 CPU with AVX2 and libjpeg/zlib development headers and libraries. On a compatible allocated node, install both optional extras:
+Pillow-SIMD requires an x86 CPU with AVX2 and libjpeg/zlib development headers and libraries.
 
 ```bash
 uv sync --extra gpuaug --extra simd --no-install-package pillow
-python -c "import PIL; from PIL import features; print(PIL.__version__, PIL.__file__, features.check_feature('libjpeg_turbo'))"
 ./submit/train_1gpu.sbatch configs/main.yaml
 ```
 
 Omit `--extra gpuaug` if you only want SIMD. Keep `--no-install-package pillow` whenever you select `simd`: both distributions provide `PIL`. The build uses `-mavx2` and `-O3 -DNDEBUG` from `pyproject.toml`; uv tracks these settings in its build cache. Cluster installations may need site-specific header and library paths.
 
 Run `uv sync` (or `uv sync --extra gpuaug`) to restore ordinary Pillow. The selected Pillow backend applies to training and probes. Startup logs and W&B config record its version and import path.
-
-The checked-in `#SBATCH` lines are specific to our MedARC cluster. On another SLURM cluster, edit those header lines once to match your queue, or run `python train.py ...` directly on an allocated GPU.
 
 ## Outputs
 
