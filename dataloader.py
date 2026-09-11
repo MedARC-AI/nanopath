@@ -13,8 +13,7 @@
 # stays cleanly out-of-distribution from optimization.
 #
 # Each view uses PIL crop/resize/flips, then optional HED jitter, color jitter,
-# grayscale/blur, and normalization. The CPU tail receives float32 crops; the
-# optional Kornia GPU tail receives uint8 crops and compiles only when requested.
+# grayscale/blur, and normalization.
 #
 # This file is the *pretraining* input pipeline only. The downstream probes
 # (probe.py) do not import anything from here.

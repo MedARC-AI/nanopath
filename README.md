@@ -16,7 +16,7 @@ Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:
 
 ```bash
 git clone https://github.com/MedARC-AI/nanopath.git && cd nanopath
-uv sync --extra gpuaug --extra simd --no-install-package pillow
+uv sync
 source .venv/bin/activate
 wandb login  # or: export WANDB_MODE=offline before launching noninteractive SLURM jobs
 
@@ -34,7 +34,7 @@ RUN_DIR=$PWD/data/main/my-run
 # or directly on a GPU machine: python train.py configs/main.yaml output_dir=$RUN_DIR
 ```
 
-`pyproject.toml` pins PyTorch 2.8.0 and torchvision 0.23.0 against the CUDA 12.9 wheel index. Ordinary `uv sync` installs Pillow without Kornia. For GPU augmentation, run `uv sync --extra gpuaug` to install Kornia 0.8.3. If your GPU/driver needs a different CUDA build, edit the `torch` and `torchvision` lines in `pyproject.toml` before `uv sync`.
+`pyproject.toml` pins PyTorch 2.8.0 and torchvision 0.23.0 against the CUDA 12.9 wheel index. By default `uv sync` installs Pillow-SIMD. For Apple Silicon, other ARM CPUs, or x86 CPUs without AVX2, see [Installation](#installation). If your GPU/driver needs a different CUDA build, edit the `torch` and `torchvision` lines in `pyproject.toml` before `uv sync`.
 
 A successful model training prints periodic train lines, appends metrics to `metrics.jsonl`, and writes the final comparison artifact to `summary.json`. `configs/smoke.yaml` is simply meant to pretrain briefly and then run the fixed downstream probe suite to ensure everything works without errors.
 
@@ -242,52 +242,15 @@ Full main `nanopath` recipe:
 
 The checked-in `#SBATCH` lines are specific to our MedARC cluster. On another SLURM cluster, edit those header lines once to match your queue, or run `python train.py ...` directly on an allocated GPU.
 
-### Performance
-
-Nanopath enables these three independent performance flags in the main and smoke configs:
-
-| Config key | Effect when true |
-|---|---|
-| `compile` | Compiles model backbones, heads, losses, and the GPU augmentations if enabled |
-| `fused_adamw` | Use PyTorch's fused AdamW |
-| `gpu_augment` | Applies stain jitter, color changes, blur, and normalization on the GPU |
-
-All loaders crop, resize, and flip PIL images on the CPU. The CPU tail receives float32 crops. The GPU augmentations pipeline requires `uv sync --extra gpuaug`. With `compile: false`, GPU augmentations run eagerly.
-
-Training throughput from 15-minute trials after warmup, each using one H100 at batch size 128:
-
-| Augmentation | Compile + fused AdamW | Tiles/second |
-|---|---|---:|
-| Original CPU | Off | ~300 |
-| Pillow-SIMD | On | ~350 |
-| Pillow + GPU augmentations | Off | ~420 |
-| Pillow + GPU augmentations | On | ~660 |
-| Pillow-SIMD + GPU augmentations | On | ~690 |
-
-The main and smoke configs use the tested fast recipe:
-
-```yaml
-train:
-  compile: true
-  fused_adamw: true
-  gpu_augment: true
-  num_workers: 8
-```
-
-Compilation adds startup time on the first run. Later runs can reuse cached compiled code. Compiler cache defaults to beside `project.wandb_dir` with `TORCHINDUCTOR_CACHE_DIR` and `TRITON_CACHE_DIR` values overriding these paths.
-
-#### Installation
+## Installation
 
 Pillow-SIMD requires an x86 CPU with AVX2 and libjpeg, zlib, and libtiff development headers and libraries.
 
+On Apple Silicon, other ARM CPUs, or x86 CPUs without AVX2, exclude Pillow-SIMD with the following install command:
+
 ```bash
-uv sync --extra gpuaug --extra simd --no-install-package pillow
-./submit/train_1gpu.sbatch configs/main.yaml
+uv sync --no-group simd --group pillow
 ```
-
-Omit `--extra gpuaug` if you only want SIMD. Keep `--no-install-package pillow` whenever you select `simd`: both distributions provide `PIL`. The build uses `-mavx2` and `-O3 -DNDEBUG` from `pyproject.toml`; uv tracks these settings in its build cache. Cluster installations may need site-specific header and library paths.
-
-Run `uv sync --extra gpuaug` to use ordinary Pillow with the default GPU augmentation config. For CPU augmentation, set `train.gpu_augment: false` and run `uv sync`. The selected Pillow backend applies to training and probes. Startup logs and W&B config record its version and import path.
 
 ## Outputs
 

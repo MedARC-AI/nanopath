@@ -21,12 +21,20 @@ dependencies = [
   "timm>=1.0.27",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 gpuaug = ["kornia==0.8.3"]
 simd = ["pillow-simd==9.5.0.post2"]
+pillow = ["pillow"]
 
 [tool.uv]
 package = false
+default-groups = ["gpuaug", "simd"]
+# Select one PIL provider through groups instead of transitive requirements.
+exclude-dependencies = [
+  { package = { name = "torchvision" }, dependencies = ["pillow"] },
+  { package = { name = "openslide-python" }, dependencies = ["pillow"] },
+]
+conflicts = [[{ group = "simd" }, { group = "pillow" }]]
 no-binary-package = ["pillow-simd"]
 
 [tool.uv.extra-build-variables]
