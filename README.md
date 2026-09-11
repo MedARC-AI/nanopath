@@ -16,7 +16,8 @@ Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:
 
 ```bash
 git clone https://github.com/MedARC-AI/nanopath.git && cd nanopath
-uv sync && source .venv/bin/activate
+uv sync --extra gpuaug --extra simd --no-install-package pillow
+source .venv/bin/activate
 wandb login  # or: export WANDB_MODE=offline before launching noninteractive SLURM jobs
 
 # download pretraining & probe datasets & DINOv2 pretrained ckpt
@@ -243,7 +244,7 @@ The checked-in `#SBATCH` lines are specific to our MedARC cluster. On another SL
 
 ### Performance
 
-nonpath has three performance flags in `train`, which are independent and default to `false`:
+Nanopath enables these three independent performance flags in the main and smoke configs:
 
 | Config key | Effect when true |
 |---|---|
@@ -263,7 +264,7 @@ Training throughput from 15-minute trials after warmup, each using one H100 at b
 | Pillow + GPU augmentations | On | ~660 |
 | Pillow-SIMD + GPU augmentations | On | ~690 |
 
-For the fastest tested recipe, install the SIMD and GPU augmentation extras below and enable these flags in your YAML config:
+The main and smoke configs use the tested fast recipe:
 
 ```yaml
 train:
@@ -286,7 +287,7 @@ uv sync --extra gpuaug --extra simd --no-install-package pillow
 
 Omit `--extra gpuaug` if you only want SIMD. Keep `--no-install-package pillow` whenever you select `simd`: both distributions provide `PIL`. The build uses `-mavx2` and `-O3 -DNDEBUG` from `pyproject.toml`; uv tracks these settings in its build cache. Cluster installations may need site-specific header and library paths.
 
-Run `uv sync` (or `uv sync --extra gpuaug`) to restore ordinary Pillow. The selected Pillow backend applies to training and probes. Startup logs and W&B config record its version and import path.
+Run `uv sync --extra gpuaug` to use ordinary Pillow with the default GPU augmentation config. For CPU augmentation, set `train.gpu_augment: false` and run `uv sync`. The selected Pillow backend applies to training and probes. Startup logs and W&B config record its version and import path.
 
 ## Outputs
 

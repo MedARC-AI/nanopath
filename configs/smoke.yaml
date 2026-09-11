@@ -27,11 +27,11 @@ train:
   seed: 1337
   bf16: true
   activation_checkpointing: false
-  compile: false # compile model, losses, and the optional GPU augmentation tail
-  fused_adamw: false # native AdamW fusion; independent of compilation
+  compile: true # compile model, losses, and the optional GPU augmentation tail
+  fused_adamw: true # native AdamW fusion; independent of compilation
   batch_size: 128
-  gpu_augment: false # requires uv sync --extra gpuaug; PIL geometry stays on CPU
-  num_workers: 16
+  gpu_augment: true # requires uv sync --extra gpuaug; PIL geometry stays on CPU
+  num_workers: 8
   prefetch_factor: 2
   persistent_workers: true
   max_train_samples: 1000000 # full-run sample cap; smoke normally reaches max_train_flops first
