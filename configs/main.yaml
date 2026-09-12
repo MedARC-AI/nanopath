@@ -27,8 +27,11 @@ train:
   seed: 7777
   bf16: true
   activation_checkpointing: false
+  compile: true
+  fused_adamw: true
   batch_size: 128
-  num_workers: 16
+  gpu_augment: true
+  num_workers: 8
   prefetch_factor: 2
   persistent_workers: true
   max_train_samples: 1000000 # tile presentations; global/local crops still count as one sample

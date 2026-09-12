@@ -21,6 +21,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
+import PIL
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -29,7 +30,7 @@ import yaml
 from torch.utils.data import DataLoader
 from torch.utils.flop_counter import FlopCounterMode
 
-from dataloader import TCGATileDataset, TILE_SIZE
+from dataloader import GPUAugment, TCGATileDataset, TILE_SIZE
 from model import DINOHead, ViT, load_pretrained
 from probe import (
     completed_probe_summary,
@@ -158,6 +159,11 @@ def dino_ce(student, teacher):
     return -(teacher * F.log_softmax(student / 0.1, dim=-1)).sum(-1).mean()
 
 
+# Weight masked patches by their image's inverse mask count before summing iBOT CE.
+def ibot_ce(student, teacher, weights):
+    return -(teacher * F.log_softmax(student / 0.1, dim=-1)).sum(-1).mul(weights).sum()
+
+
 # KDE uniformity loss on L2-normalised CLS tokens.
 def kde_loss(x, concentration):
     x = F.normalize(x, p=2, dim=-1)
@@ -245,7 +251,7 @@ def main():
             p.requires_grad = False
     backbone_activated_params = sum(p.numel() for p in student_backbone.parameters() if p.requires_grad)
     # AdamW param groups carry per-parameter LR/WD multipliers (LWD + patch_embed + biases-no-WD).
-    opt = torch.optim.AdamW(build_param_groups(student_backbone, student_dino_head, student_ibot_head, dino_cfg["layerwise_decay"], dino_cfg["patch_embed_lr_mult"]), lr=1.0, betas=(0.9, dino_cfg["adam_beta2"]))
+    opt = torch.optim.AdamW(build_param_groups(student_backbone, student_dino_head, student_ibot_head, dino_cfg["layerwise_decay"], dino_cfg["patch_embed_lr_mult"]), lr=1.0, betas=(0.9, dino_cfg["adam_beta2"]), fused=train_cfg["fused_adamw"])
     step = 0
     batch_size = int(train_cfg["batch_size"])
     max_train_samples = int(train_cfg["max_train_samples"])
@@ -254,6 +260,14 @@ def main():
     train_flops = 0
     output_dir = Path(cfg["project"]["output_dir"])
     wandb_dir = Path(cfg["project"]["wandb_dir"])
+    for key, name in [("TORCHINDUCTOR_CACHE_DIR", "inductor"), ("TRITON_CACHE_DIR", "triton")]:
+        os.environ.setdefault(key, str(wandb_dir.parent / name))
+    # Compile calls in place so checkpoint keys and parameter ownership stay unchanged.
+    for module in (student_backbone, teacher_backbone, student_dino_head, student_ibot_head, teacher_dino_head, teacher_ibot_head):
+        module.compile(dynamic=isinstance(module, DINOHead), disable=not train_cfg["compile"])
+    sinkhorn_fn = torch.compile(sinkhorn, dynamic=True, disable=not train_cfg["compile"])
+    dino_ce_fn = torch.compile(dino_ce, dynamic=True, disable=not train_cfg["compile"])
+    ibot_ce_fn = torch.compile(ibot_ce, dynamic=True, disable=not train_cfg["compile"])
     wandb_name = cfg["project"]["name"]
     if labless_autosubmit_file:
         wandb_name = json.loads(Path(labless_autosubmit_file).read_text()).get("run_name") or wandb_name
@@ -280,6 +294,11 @@ def main():
         student_ibot_head.load_state_dict(checkpoint["ibot_head"])
         teacher_dino_head.load_state_dict(checkpoint["dino_head_ema"])
         teacher_ibot_head.load_state_dict(checkpoint["ibot_head_ema"])
+        # The requested backend owns step placement, even when the saved backend differs.
+        for group in checkpoint["opt"]["param_groups"]:
+            group.update(fused=train_cfg["fused_adamw"], foreach=None)
+        for state in checkpoint["opt"]["state"].values():
+            state["step"] = state["step"].to(device if train_cfg["fused_adamw"] else "cpu")
         opt.load_state_dict(checkpoint["opt"])
         step = int(checkpoint["step"])
         examples_seen = int(checkpoint["examples_seen"])
@@ -300,6 +319,7 @@ def main():
         wandb_init["id"] = wandb_meta["id"]
         wandb_init["resume"] = "must"
     wandb_run = wandb.init(**wandb_init)
+    wandb_run.config.update({"pillow": {"version": PIL.__version__, "path": PIL.__file__}}, allow_val_change=True)
     for key in ("probe/target_flops", "probe/wall_seconds"):
         wandb_run.define_metric(key, hidden=True, overwrite=True)
     print(
@@ -310,7 +330,7 @@ def main():
         f"probe_count: {cfg['probe']['count']}  warmup_fraction: {dino_cfg['warmup_fraction']}  "
         f"lr: {dino_cfg['lr']}  adam_beta2: {dino_cfg['adam_beta2']}  kde_loss_weight: {dino_cfg['kde_loss_weight']}  "
         f"kde_concentration: {dino_cfg['kde_concentration']}  drop_path: {dino_cfg['drop_path_rate']}  "
-        f"layerwise_decay: {dino_cfg['layerwise_decay']}",
+        f"layerwise_decay: {dino_cfg['layerwise_decay']}  pillow: {PIL.__version__} ({PIL.__file__})",
         flush=True,
     )
     git_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_dir, text=True).strip()
@@ -354,6 +374,17 @@ def main():
     wandb_meta = {"entity": wandb_run.entity, "project": "nanopath", "id": wandb_run.id, "name": wandb_name, "url": wandb_run.url,
                   "mode": getattr(wandb_run.settings, "mode", ""), "source_artifact": source_id,
                   "source_dir": str(source_snapshot_dir), "git": {"commit": git_commit, "remote": git_remote}}
+    augment = torch.nn.Identity()
+    if train_cfg["gpu_augment"]:
+        augment = GPUAugment(cfg["data"]).to(device)
+        if train_cfg["compile"]:
+            augment.compile()
+            # Compile before timing; preserve the training RNG state through warmup.
+            rng = torch.cuda.get_rng_state(device)
+            for views, size in [(train_cfg["global_views"], train_cfg["global_size"]), (train_cfg["local_views"], train_cfg["local_size"])]:
+                augment(torch.zeros(batch_size, views, 3, size, size, dtype=torch.uint8, device=device))
+            torch.cuda.synchronize(device)
+            torch.cuda.set_rng_state(rng, device)
     train_ds = TCGATileDataset(cfg, is_train=True)
     val_ds = TCGATileDataset(cfg, is_train=False)
 
@@ -421,19 +452,23 @@ def main():
     # Compute (dino_loss, ibot_loss, kde) for one batch of (gf, lf) crops with the given masks +
     # schedule values. Used by both the train step and evaluate() (no_grad).
     def compute_losses(gf, lf, b, masks, mask_idx, mask_w, t_temp, k_scale, ckpt=False):
+        # Tensor schedule values do not specialize Sinkhorn to each temperature.
+        t_temp = torch.tensor(t_temp, device=gf.device)
         with torch.no_grad():
             t = teacher_backbone(gf)
             t_cls = teacher_dino_head(t["cls"]).chunk(train_cfg["global_views"])
-            t_prob = sinkhorn(torch.cat((t_cls[1], t_cls[0])), t_temp).view(2, b, -1)
-            t_patch_prob = sinkhorn(teacher_ibot_head(t["patches"].flatten(0, 1)[mask_idx]), t_temp)
+            t_prob = sinkhorn_fn(torch.cat((t_cls[1], t_cls[0])), t_temp).view(2, b, -1)
+            t_patch_prob = sinkhorn_fn(teacher_ibot_head(t["patches"].flatten(0, 1)[mask_idx]), t_temp)
         sg = student_backbone(gf, masks=masks, checkpoint=ckpt)
         sl = student_backbone(lf, checkpoint=ckpt)
         sg_cls, sl_cls = student_dino_head(sg["cls"]), student_dino_head(sl["cls"])
         L = train_cfg["local_views"]
-        local_loss = sum(dino_ce(x, y) for x in sl_cls.chunk(L) for y in t_prob) / (2 * L + 2)
-        global_loss = dino_ce(sg_cls, t_prob.flatten(0, 1)) * 2 / (2 * L + 2)
+        # CE is linear in targets; keep the original reduction order for eager recipes.
+        local_loss = (dino_ce_fn(sl_cls.view(L, b, -1), t_prob.sum(0)) * L if train_cfg["compile"]
+                      else sum(dino_ce_fn(x, y) for x in sl_cls.chunk(L) for y in t_prob)) / (2 * L + 2)
+        global_loss = dino_ce_fn(sg_cls, t_prob.flatten(0, 1)) * 2 / (2 * L + 2)
         s_patch = student_ibot_head(sg["patches"].flatten(0, 1)[mask_idx])
-        ibot_loss = -(t_patch_prob * F.log_softmax(s_patch / 0.1, dim=-1)).sum(-1).mul(mask_w).sum() / max(1, b * 2)
+        ibot_loss = ibot_ce_fn(s_patch, t_patch_prob, mask_w) / max(1, b * 2)
         kde = dino_cfg["kde_loss_weight"] * k_scale * sum(kde_loss(x, dino_cfg["kde_concentration"]) for x in sg["cls"].chunk(train_cfg["global_views"]))
         return local_loss + global_loss, ibot_loss, kde
 
@@ -451,7 +486,7 @@ def main():
         for vb_idx, vbatch in enumerate(val_loader):
             if vb_idx >= int(train_cfg["val_batches"]):
                 break
-            vg, vl = vbatch["global_views"].to(device, non_blocking=True), vbatch["local_views"].to(device, non_blocking=True)
+            vg, vl = [augment(vbatch[key].to(device, non_blocking=True)) for key in ("global_views", "local_views")]
             b = vg.shape[0]
             with torch.no_grad(), autocast:
                 gf, lf = vg.transpose(0, 1).flatten(0, 1), vl.transpose(0, 1).flatten(0, 1)
@@ -526,7 +561,7 @@ def main():
             # Data identifiers stay on CPU and feed coverage metrics; image tensors move below.
             for key, batch_key in (("sample", "sample_idx"), ("slide", "slide_id"), ("patient", "patient_id")):
                 pending_ids[key].update(int(x) for x in batch[batch_key].tolist())
-            global_views, local_views = [batch[key].to(device, non_blocking=True) for key in ("global_views", "local_views")]
+            global_views, local_views = [augment(batch[key].to(device, non_blocking=True)) for key in ("global_views", "local_views")]
             visible_now = batch_size * (train_cfg["global_views"] * global_patches + train_cfg["local_views"] * local_patches)
             # LR warmup uses the 1M-tile sample cap; decay/WD/teacher/freeze/KDE stay on the public FLOP budget.
             frac = min(1.0, train_flops / max_train_flops)
@@ -547,7 +582,8 @@ def main():
             # Wrap forward + backward + opt.step in FlopCounterMode on the first step only;
             # subsequent steps reuse measured_flops_per_step (fixed shapes => fixed cost).
             flop_ctx = FlopCounterMode(display=False) if measured_flops_per_step is None else contextlib.nullcontext()
-            with flop_ctx:
+            # Compiled kernels are opaque to the counter; measure the first step eagerly.
+            with flop_ctx, torch.compiler.set_stance("force_eager" if measured_flops_per_step is None else "default"):
                 with autocast:
                     # Crop-major flatten: collate shape is (B, V, 3, H, W) but DINO wants per-crop chunks
                     # so [crop0_img0, crop0_img1, ..., crop1_img0, ...] for clean teacher/student alignment.
@@ -574,7 +610,6 @@ def main():
                 update_ema(student_backbone, teacher_backbone, m)
                 update_ema(student_dino_head, teacher_dino_head, m)
                 update_ema(student_ibot_head, teacher_ibot_head, m)
-            step_seconds = time.monotonic() - batch_started_at
             examples_seen += batch_size
             visible_patch_presentations += visible_now
             train_flops += step_train_flops
@@ -585,6 +620,7 @@ def main():
                     "kde": float(kde.detach()),
                     "total": float(total_loss.detach()),
                 }
+                step_seconds = time.monotonic() - batch_started_at  # Loss transfers wait for GPU completion.
                 unique_counts = flush_unique_counts()
                 now = time.time()
                 elapsed = max(1e-6, now - last_time)

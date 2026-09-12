@@ -33,7 +33,7 @@ RUN_DIR=$PWD/data/main/my-run
 # or directly on a GPU machine: python train.py configs/main.yaml output_dir=$RUN_DIR
 ```
 
-`pyproject.toml` pins `torch` / `torchvision` against the CUDA 12.9 wheel index. If your GPU/driver needs a different CUDA build, edit the `torch` and `torchvision` lines in `pyproject.toml` before `uv sync`.
+`pyproject.toml` pins PyTorch 2.8.0 and torchvision 0.23.0 against the CUDA 12.9 wheel index. By default `uv sync` installs Pillow-SIMD. For Apple Silicon, other ARM CPUs, or x86 CPUs without AVX2, see [Installation](#installation). If your GPU/driver needs a different CUDA build, edit the `torch` and `torchvision` lines in `pyproject.toml` before `uv sync`.
 
 A successful model training prints periodic train lines, appends metrics to `metrics.jsonl`, and writes the final comparison artifact to `summary.json`. `configs/smoke.yaml` is simply meant to pretrain briefly and then run the fixed downstream probe suite to ensure everything works without errors.
 
@@ -245,6 +245,16 @@ Full main `nanopath` recipe:
 `submit/train_1gpu.sbatch` is a prompt-aware launcher when run directly: it collects Labless run name, notes, and GitHub device login before submitting itself to SLURM, then auto-submits eligible completed full runs. Calling `sbatch submit/train_1gpu.sbatch ...` bypasses that prompt and trains without auto-submit. `configs/main.yaml` is sized for an 80 GB H100 at `train.batch_size: 128`. On smaller cards you can set `train.activation_checkpointing: true` and lower `train.batch_size` if you OOM.
 
 The checked-in `#SBATCH` lines are specific to our MedARC cluster. On another SLURM cluster, edit those header lines once to match your queue, or run `python train.py ...` directly on an allocated GPU.
+
+## Installation
+
+Pillow-SIMD requires an x86 CPU with AVX2 and libjpeg, zlib, and libtiff development headers and libraries.
+
+On Apple Silicon, other ARM CPUs, or x86 CPUs without AVX2, exclude Pillow-SIMD with the following install command:
+
+```bash
+uv sync --no-group simd --group pillow
+```
 
 ## Outputs
 
