@@ -3,8 +3,8 @@
 # directly (NOT `datasets.load_dataset`, which copies into ~/.cache) so the
 # ~120 GB of shards are mmap'd in place with zero duplication. Random access
 # is resolved by per-shard ParquetFile.read_row_group; prepare.py packs each
-# shard with PARQUET_ROW_GROUP_SIZE=64 rows/group so reading one row group is
-# ~2 MB and __getitem__ is ~2-3 ms incl. JPEG decode.
+# shard with PARQUET_ROW_GROUP_SIZE=64 rows/group. Smaller row groups reduce
+# unused JPEG reads but increase Parquet metadata and index startup cost.
 #
 # Patients (not tiles) are hashed by TCGA barcode and the bottom `val_fraction`
 # of the hash space is held out from training; train.py instantiates the dataset
@@ -12,8 +12,8 @@
 # lightweight DINO/I-JEPA/KDE validation pass), so the held-out patient slice
 # stays cleanly out-of-distribution from optimization.
 #
-# Augmentation per view: RandomResizedCrop -> optional HEDJitter -> horizontal/
-# vertical flips -> ColorJitter -> occasional grayscale/blur -> Normalize.
+# Each view uses PIL crop/resize/flips, then optional HED jitter, color jitter,
+# grayscale/blur, and normalization.
 #
 # This file is the *pretraining* input pipeline only. The downstream probes
 # (probe.py) do not import anything from here.
@@ -76,14 +76,46 @@ class HEDJitter(nn.Module):
 
     # Perturb HED channels, then convert back to RGB while the crop is still in [0, 1].
     def forward(self, x):
-        rgb = x.permute(1, 2, 0).clamp_min(1e-6)
+        rgb = x.movedim(-3, -1).clamp_min(1e-6)
         hed = (torch.log(rgb) / LOG_1E6) @ self.hed_from_rgb.to(dtype=x.dtype)
         hed = hed.clamp_min(0.0)
-        shift = torch.randn((1, 1, 3), dtype=x.dtype) * self.sigma
-        scale = 1.0 + torch.randn((1, 1, 3), dtype=x.dtype) * self.sigma
+        shape = (*x.shape[:-3], 1, 1, 3)
+        shift = torch.randn(shape, dtype=x.dtype, device=x.device) * self.sigma
+        scale = 1.0 + torch.randn(shape, dtype=x.dtype, device=x.device) * self.sigma
         hed = hed * scale + shift
         log_rgb = -(hed * (-LOG_1E6)) @ self.rgb_from_hed.to(dtype=x.dtype)
-        return torch.exp(log_rgb).clamp_(0.0, 1.0).permute(2, 0, 1)
+        return torch.exp(log_rgb).clamp_(0.0, 1.0).movedim(-1, -3)
+
+
+class GPUAugment(nn.Module):
+    def __init__(self, data):
+        super().__init__()
+        self.hed = HEDJitter(data["hed_jitter"]) if data["hed_jitter"] > 0 else nn.Identity()
+        for name, value in [("mean", data["mean"]), ("std", data["std"]),
+                            ("jitter", [data["color_jitter"], data["color_jitter"], data["color_jitter_saturation"]])]:
+            self.register_buffer(name, torch.tensor(value).view(1, 3, 1, 1))
+
+    @torch.no_grad()
+    def forward(self, views):
+        import kornia as K
+        shape = views.shape
+        x = self.hed(views.flatten(0, 1).float() / 255)
+        n = x.shape[0]
+        factors = 1 + (torch.rand(n, 3, 1, 1, device=x.device) * 2 - 1) * self.jitter
+        order = torch.rand(n, 3, device=x.device).argsort(1)
+        # Kornia's high-level jitter shares order; functions preserve per-view orders.
+        for position in range(3):
+            brightness = K.enhance.adjust_brightness_accumulative(x, factors[:, 0, 0, 0])
+            contrast = K.enhance.adjust_contrast_with_mean_subtraction(x, factors[:, 1, 0, 0])
+            saturation = K.enhance.adjust_saturation_with_gray_subtraction(x, factors[:, 2, 0, 0])
+            op = order[:, position, None, None, None]
+            x = torch.where(op == 0, brightness, torch.where(op == 1, contrast, saturation))
+        x = torch.where(torch.rand(n, 1, 1, 1, device=x.device) < 0.1, K.color.rgb_to_grayscale(x), x)
+        sigma = (0.1 + torch.rand(n, 1, device=x.device) * 1.7).expand(-1, 2)
+        # Kornia's batched blur needs contiguous NCHW after stain/color transforms.
+        blurred = K.filters.gaussian_blur2d(x.contiguous(), (9, 9), sigma, border_type="reflect", separable=True)
+        x = torch.where(torch.rand(n, 1, 1, 1, device=x.device) < 0.35, blurred, x)
+        return ((x - self.mean) / self.std).reshape(shape)
 
 
 # Map-style TCGA tile dataset that emits global/local multi-view stacks for train.py.
@@ -135,16 +167,19 @@ class TCGATileDataset(Dataset):
         mean, std = data["mean"], data["std"]
         self.global_views = int(train["global_views"])
         self.local_views = int(train["local_views"])
-        self.to_tensor = v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])
         # Global and local views differ only in crop scale/size; the stochastic tail is shared.
         augment = [
-            *([HEDJitter(data["hed_jitter"])] if data["hed_jitter"] > 0 else []),
-            v2.RandomHorizontalFlip(), v2.RandomVerticalFlip(),
-            v2.ColorJitter(data["color_jitter"], data["color_jitter"], data["color_jitter_saturation"], 0.0),
-            v2.RandomGrayscale(p=0.1),
-            v2.RandomApply([v2.GaussianBlur(9, sigma=(0.1, 1.8))], p=0.35),
-            v2.Normalize(mean=mean, std=std),
+            v2.RandomHorizontalFlip(), v2.RandomVerticalFlip(), v2.ToImage(),
         ]
+        if not train["gpu_augment"]:
+            augment += [
+                v2.ToDtype(torch.float32, scale=True),
+                *([HEDJitter(data["hed_jitter"])] if data["hed_jitter"] > 0 else []),
+                v2.ColorJitter(data["color_jitter"], data["color_jitter"], data["color_jitter_saturation"], 0.0),
+                v2.RandomGrayscale(p=0.1),
+                v2.RandomApply([v2.GaussianBlur(9, sigma=(0.1, 1.8))], p=0.35),
+                v2.Normalize(mean=mean, std=std),
+            ]
         self.global_aug = v2.Compose([v2.RandomResizedCrop(train["global_size"], scale=tuple(data["global_crop_scale"]), antialias=True), *augment])
         self.local_aug = v2.Compose([v2.RandomResizedCrop(train["local_size"], scale=tuple(data["local_crop_scale"]), antialias=True), *augment])
 
@@ -162,8 +197,7 @@ class TCGATileDataset(Dataset):
             if reader is None:
                 reader = pq.ParquetFile(str(self.shards[shard_idx]), memory_map=True)
                 self._readers[shard_idx] = reader
-            # Each shard has uniform-size row groups (PARQUET_ROW_GROUP_SIZE in
-            # prepare.py); reading one group is ~2 MB and ~2-3 ms incl. JPEG decode.
+            # Read the actual group size so repacked shards keep the same sample indices.
             rg_size = reader.metadata.row_group(0).num_rows
             rg_idx = row_idx // rg_size
             row_in_rg = row_idx % rg_size
@@ -171,10 +205,12 @@ class TCGATileDataset(Dataset):
             rel = table["path"][row_in_rg].as_py()
             jpeg_bytes = table["jpeg"][row_in_rg].as_py()
             with Image.open(io.BytesIO(jpeg_bytes)) as img:
-                tile = self.to_tensor(img.convert("RGB"))
+                tile = img.convert("RGB")
             if self.tissue_thresh <= 0:
                 break
-            sat = (tile.amax(0) - tile.amin(0)) / (tile.amax(0) + 1e-6)
+            # temporary until we precalculate the tile tissue percentage
+            rgb = v2.functional.to_image(tile).float() / 255
+            sat = (rgb.amax(0) - rgb.amin(0)) / (rgb.amax(0) + 1e-6)
             if float((sat > 0.07).float().mean()) >= self.tissue_thresh:
                 break
             idx = random.randint(0, self.shard_of.shape[0] - 1)
