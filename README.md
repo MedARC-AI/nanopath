@@ -16,8 +16,7 @@ Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:
 
 ```bash
 git clone https://github.com/MedARC-AI/nanopath.git && cd nanopath
-uv sync
-source .venv/bin/activate
+uv sync && source .venv/bin/activate
 wandb login  # or: export WANDB_MODE=offline before launching noninteractive SLURM jobs
 
 # download pretraining & probe datasets & DINOv2 pretrained ckpt

@@ -27,10 +27,10 @@ train:
   seed: 7777
   bf16: true
   activation_checkpointing: false
-  compile: true # compile model, losses, and the optional GPU augmentations
-  fused_adamw: true # faster native AdamW fusion
+  compile: true
+  fused_adamw: true
   batch_size: 128
-  gpu_augment: true # use fast GPU augmentation with Kornia. Pair with compile: true for better performance.
+  gpu_augment: true
   num_workers: 8
   prefetch_factor: 2
   persistent_workers: true

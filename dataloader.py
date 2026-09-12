@@ -86,7 +86,6 @@ class HEDJitter(nn.Module):
         return torch.exp(log_rgb).clamp_(0.0, 1.0).movedim(-1, -3)
 
 
-# Batched GPU tail; CPU workers send uint8 crops to reduce transfer and worker work.
 class GPUAugment(nn.Module):
     def __init__(self, data):
         super().__init__()
