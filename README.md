@@ -22,11 +22,17 @@ Maintainer reproduction of [Anish Dulal’s frozen submission](https://labless.d
 - Robustness views: 1 → 8; average rotations/reflections after restoring patch-map orientation.
 - FINO backbone gradient multipliers for expr512/fga: 1 → 3.
 
-Reproduction retains the 1M presentation cap: 6,144 photometric + 11,941 site-calibration presentations are reserved, leaving 7,671 optimizer steps. The submitted source instead takes 7,812 steps and excludes both calibration draws from its reported count. The default training seed is 7974, the median of three maintainer reruns; evaluations remain unchanged.
+Reproduction retains the 1M presentation cap: 6,144 photometric + 11,941 site-calibration presentations are reserved, leaving 7,671 optimizer steps. The submitted source instead takes 7,812 steps and excludes both calibration draws from its reported count. The default training seed is 7974, the median of the September 9 maintainer reruns; evaluations remain unchanged.
 
 PR #19 adds memory-mapped Arrow loading and Python 3.14/PyTorch 2.14. Calibration
 recovers the original tiles by lexical path order; shuffled Arrow storage changes
 training order while retaining the recipe, calibration panels, and probe protocol.
+
+September 26 reruns (seeds 13647 / 61259 / 48731) scored 0.665542 / 0.668820 / 0.663635.
+The [median run](https://labless.dev/runs/run_sub_06a86337d4) scored 0.665542 versus the
+previous 0.667509. Median training fell from 104.7 to 32.5 minutes and complete jobs
+from 123.6 to 55.3 minutes; probes increased from 16.8 to 19.7 minutes. This historical
+comparison includes both PR #18 and PR #19 with different seeds, so it does not isolate PR #19.
 
 ## Quickstart
 
