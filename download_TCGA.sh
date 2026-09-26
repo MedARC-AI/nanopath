@@ -246,6 +246,6 @@ cat <<EOF
 Sample list:
   $SAMPLE_LIST
 
-To regenerate parquet shards, pass this sample list to prepare_tiles(...) and
+To regenerate Arrow shards, pass this sample list to prepare_tiles(...) and
 then point data.dataset_dir at the pack_from_jpeg_dir(...) output.
 EOF

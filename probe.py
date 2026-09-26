@@ -40,6 +40,7 @@ THUNDER_V2 = json.loads((BENCHMARKING_DIR / "thunder_v2.json").read_text())
 assert THUNDER_V2["protocol_version"] == PROBE_PROTOCOL_VERSION
 assert all(set(spec) == {"root", "train", "val"} for family in ("classification", "segmentation") for spec in THUNDER_V2[family].values())
 EMBED_BATCH_SIZE = 512
+# Fork preserves local dataset classes and configured roots on Python 3.14.
 EMBED_NUM_WORKERS = 16
 SEGMENTATION_EPOCHS = {"pannuke": 30, "segpath_epithelial": 9, "segpath_lymphocytes": 21}
 SEGMENTATION_HYPERPARAMETERS = {
@@ -317,7 +318,7 @@ def embed_slide_dataset(model, mean, std, dataset, split, device, transform):
         def __getitem__(self, i):
             return transform(Image.open(io.BytesIO(paths[i])).convert("RGB")), slide_idx[i]
 
-    loader = torch.utils.data.DataLoader(_Tiles(), batch_size=EMBED_BATCH_SIZE, shuffle=False, num_workers=EMBED_NUM_WORKERS, pin_memory=True)
+    loader = torch.utils.data.DataLoader(_Tiles(), batch_size=EMBED_BATCH_SIZE, shuffle=False, num_workers=EMBED_NUM_WORKERS, multiprocessing_context="fork", pin_memory=True)
     sums, counts = None, torch.zeros(len(slides), dtype=torch.long)
     autocast = torch.autocast(device_type="cuda", dtype=torch.float16)
     with torch.no_grad():
@@ -340,7 +341,7 @@ def embed_classification_dataset(model, mean, std, dataset, split, device, trans
         ClassificationDataset(dataset, split, transform),
         batch_size=EMBED_BATCH_SIZE,
         shuffle=False,
-        num_workers=EMBED_NUM_WORKERS,
+        num_workers=EMBED_NUM_WORKERS, multiprocessing_context="fork",
         pin_memory=True,
     )
     embs, labels = [], []
@@ -636,7 +637,7 @@ def inline_pathorob(model, mean, std, device, transform):
             tbl = tbl.filter(pa.array(keep))
             meta = meta[keep].reset_index(drop=True)
         byts = [r["bytes"] for r in tbl.column("image").to_pylist()]
-        loader = torch.utils.data.DataLoader(_Patches(byts), batch_size=EMBED_BATCH_SIZE, num_workers=EMBED_NUM_WORKERS, pin_memory=True, shuffle=False)
+        loader = torch.utils.data.DataLoader(_Patches(byts), batch_size=EMBED_BATCH_SIZE, num_workers=EMBED_NUM_WORKERS, multiprocessing_context="fork", pin_memory=True, shuffle=False)
         embs = []
         with torch.no_grad():
             for batch in loader:
@@ -700,7 +701,7 @@ def inline_surgen_ras_auc(model, mean, std, device, transform):
                     if sid in label_of:
                         yield transform(Image.open(io.BytesIO(b)).convert("RGB")), sid
 
-    loader = torch.utils.data.DataLoader(_Tiles(), batch_size=EMBED_BATCH_SIZE, num_workers=EMBED_NUM_WORKERS, pin_memory=True)
+    loader = torch.utils.data.DataLoader(_Tiles(), batch_size=EMBED_BATCH_SIZE, num_workers=EMBED_NUM_WORKERS, multiprocessing_context="fork", pin_memory=True)
     autocast = torch.autocast(device_type="cuda", dtype=torch.float16)
     sums, counts, tiles = {}, defaultdict(int), 0
     with torch.no_grad():
@@ -774,7 +775,7 @@ def inline_pathobench_survival(model, mean, std, dataset, device, transform):
                     if sid in needed:
                         yield transform(Image.open(io.BytesIO(b)).convert("RGB")), sid
 
-    loader = torch.utils.data.DataLoader(_Tiles(), batch_size=EMBED_BATCH_SIZE, num_workers=EMBED_NUM_WORKERS, pin_memory=True)
+    loader = torch.utils.data.DataLoader(_Tiles(), batch_size=EMBED_BATCH_SIZE, num_workers=EMBED_NUM_WORKERS, multiprocessing_context="fork", pin_memory=True)
     autocast = torch.autocast(device_type="cuda", dtype=torch.float16)
     sums, counts, tiles = {}, defaultdict(int), 0
     with torch.no_grad():

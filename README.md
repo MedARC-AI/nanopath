@@ -24,6 +24,10 @@ Maintainer reproduction of [Anish Dulal’s frozen submission](https://labless.d
 
 Reproduction retains the 1M presentation cap: 6,144 photometric + 11,941 site-calibration presentations are reserved, leaving 7,671 optimizer steps. The submitted source instead takes 7,812 steps and excludes both calibration draws from its reported count. The default training seed is 7974, the median of three maintainer reruns; evaluations remain unchanged.
 
+PR #19 adds memory-mapped Arrow loading and Python 3.14/PyTorch 2.14. Calibration
+recovers the original tiles by lexical path order; shuffled Arrow storage changes
+training order while retaining the recipe, calibration panels, and probe protocol.
+
 ## Quickstart
 
 Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:
@@ -33,7 +37,7 @@ git clone https://github.com/MedARC-AI/nanopath.git && cd nanopath
 uv sync && source .venv/bin/activate
 wandb login  # or: export WANDB_MODE=offline before launching noninteractive SLURM jobs
 
-# download pretraining & probe datasets & DINOv2 pretrained ckpt
+# Download prepared Arrow tiles, probe datasets, and model weights.
 python prepare.py download=True
 
 # smoke test: very short training, then probe evals to ensure no errors
@@ -47,7 +51,7 @@ RUN_DIR=$PWD/data/main/my-run
 # or directly on a GPU machine: python train.py configs/main.yaml output_dir=$RUN_DIR
 ```
 
-`pyproject.toml` pins PyTorch 2.8.0 and torchvision 0.23.0 against the CUDA 12.9 wheel index. By default `uv sync` installs Pillow-SIMD. For Apple Silicon, other ARM CPUs, or x86 CPUs without AVX2, see [Installation](#installation). If your GPU/driver needs a different CUDA build, edit the `torch` and `torchvision` lines in `pyproject.toml` before `uv sync`.
+`pyproject.toml` requires Python 3.14 and pins PyTorch 2.14.0 and torchvision 0.29.0 from the CUDA 13.0 wheel index. By default `uv sync` installs Pillow-SIMD. For Apple Silicon, other ARM CPUs, or x86 CPUs without AVX2, see [Installation](#installation). If your GPU/driver needs a different CUDA build, update both package pins and their `[tool.uv.sources]` index in `pyproject.toml`, then run `uv sync`.
 
 A successful model training prints periodic train lines, appends metrics to `metrics.jsonl`, and writes the final comparison artifact to `summary.json`. `configs/smoke.yaml` is simply meant to pretrain briefly and then run the fixed downstream probe suite to ensure everything works without errors.
 
@@ -204,19 +208,21 @@ The script reads `summary.json` and `metrics.jsonl`, reviews `output_dir/labless
 On the MedARC cluster, the checked-in `/data` paths are the intended shared defaults and existing populated roots are reused. On a machine without writable `/data` or `/block` mounts, `download=True` rewrites the checked-in main and smoke configs to ignored repo-local `data/` roots before downloading.
 
 **What `download=True` does**
-1. **TCGA tiles**: `huggingface_hub.snapshot_download` (filtered to `shard-*.parquet`) pulls the 200 parquet shards (~120 GB total, `{path: string, jpeg: binary}` rows with 64-row row groups) from [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) into `data.dataset_dir`. The JEPA/FINO recipes also fetch patient metadata into this directory.
+
+1. **TCGA tiles**: `huggingface_hub.snapshot_download` fetches the 200 prepared Arrow shards (~120 GB) from [`medarc/nanopath`](https://huggingface.co/datasets/medarc/nanopath) into `data.dataset_dir`. Downloads include only `shard-*.arrow`. Each row contains `path`, original `jpeg` bytes, and cached `tissue_fraction`. FINO patient metadata is also fetched and verified in this directory.
 2. **Probe datasets**: downloads the exact evaluation snapshot from [`medarc/nanopath-evals`](https://huggingface.co/datasets/medarc/nanopath-evals) into each missing configured root, then verifies every required record.
 3. **DINOv2 backbone weights**: `torch.hub.load_state_dict_from_url` fetches the Meta checkpoint for `model.type` from `dl.fbaipublicfiles.com` into `~/.cache/torch/hub/checkpoints/`.
 
 **Prerequisites**
-- About 355 GB free for a fresh complete setup: ~120 GB of pretraining shards, ~215 GB of extracted probe data, and temporary room while the largest image archive is extracted. Existing populated roots reduce the download and space requirement.
+
+- About 335 GB for prepared data: 120 GB of Arrow tiles and 215 GB of probe data. Archive extraction needs additional temporary space. Raw-slide regeneration needs separate storage for slides and intermediate JPEGs.
 - Acceptance of each upstream benchmark dataset's original research-use terms. The MedARC mirror preserves the data needed by the protocol but does not relicense its components.
 
 Our evaluation suite only downloads a small subset of non-test data derived from [THUNDER](https://mics-lab.github.io/thunder/), [PathoBench](https://github.com/mahmoodlab/patho-bench), [LEOPARD](https://leopard.grand-challenge.org/), and [PathoROB](https://arxiv.org/abs/2507.17845). It contains no official THUNDER, HEST, or CPTAC classification test records; HEST is absent entirely, CPTAC appears only in the existing CPTAC-PDA survival development probe, PanNuke Fold3 is absent, and the unused TCGA center is removed from downloadable Tolkach ESCA. See [benchmarking/README.md](benchmarking/README.md) for the precise split contract.
 
 ### Regenerating the tile dataset from raw SVS
 
-`prepare.py` itself never touches raw SVS files—it always pulls the ready-made parquet shards from HF. If you want, however, you can download the full ~13 TB original SVS files from TCGA and pre-extract different tiles to pretrain on. Two-step workflow (decode SVS → JPEG dir + manifest, then pack into parquet shards):
+`prepare.py` itself never touches raw SVS files—it always pulls the ready-made Arrow shards from Hugging Face. If you want, however, you can download the full ~13 TB original SVS files from TCGA and pre-extract different tiles to pretrain on. Two-step workflow (decode SVS → JPEG dir + manifest, then pack into Arrow shards):
 
 ```bash
 # 1) Download the full 12K open-access TCGA SVS slide set (~13 TB).
@@ -227,18 +233,18 @@ bash download_TCGA.sh /data/TCGA 8
 #    dataset) and writes JPEGs + manifest.txt under jpeg_dir; reruns are
 #    resumable (existing JPEGs are EOF-validated and reused). pack_from_jpeg_dir
 #    then walks the manifest, splits into NUM_SHARDS=200 chunks, and writes
-#    shard-NNNNN.parquet files with 64-row row groups (the layout the
-#    dataloader expects). Once it's done you can rm -rf the jpeg_dir.
+#    shard-NNNNN.arrow files with one record batch per shard.
 python -c "
 from pathlib import Path
 from prepare import prepare_tiles, pack_from_jpeg_dir
 jpeg_dir = Path('/data/$USER/nanopath/nanopath_jpegs_tmp')
 prepare_tiles(Path('/data/TCGA/sample_dataset_30.txt'), jpeg_dir, split_seed=42)
-pack_from_jpeg_dir(jpeg_dir, jpeg_dir / 'manifest.txt', Path('/data/$USER/nanopath/nanopath_parquet'))
+pack_from_jpeg_dir(jpeg_dir, jpeg_dir / 'manifest.txt', Path('/data/nanopath_arrow'))
 "
 ```
 
-Point `data.dataset_dir` at the packed parquet directory before training. To publish a new variant of the training dataset, push the resulting shards to a fresh HF dataset repo and update `HF_TRAIN_REPO_ID` in `prepare.py`.
+Packing computes tissue fractions from the saved JPEG bytes and includes the required metadata.
+Point `data.dataset_dir` in both configs at the packed Arrow directory before training.
 
 ## Running
 
@@ -276,7 +282,7 @@ uv sync --no-group simd --group pillow
 
 - run outputs: `project.output_dir` (MedARC cluster default `/data/$USER/nanopath/main/...`; auto-localized default `nanopath/data/main/...`). Final probe results log to `metrics.jsonl`.
 - wandb: `project.wandb_dir` (cluster default `/data/$USER/nanopath/wandb`; auto-localized default `nanopath/data/wandb`).
-- parquet tile shards: `data.dataset_dir` (defaults to `/data/nanopath_parquet`).
+- Arrow tile shards: `data.dataset_dir` (defaults to `/data/nanopath_arrow`).
 - probe datasets: canonical shared `/data/thunder-data`, `/data/surgen`, `/data/leopard_bcr`, `/data/CPTAC-PDA`, `/data/pathorob`, and `/data/ucla-lung` roots declared in `probe.dataset_roots`.
 - DINOv2 backbone weights: `~/.cache/torch/hub/checkpoints/` for the selected `model.type`.
 - SLURM logs: `slurm/<jobid>.{out,err}` in the repo.

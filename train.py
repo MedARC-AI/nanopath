@@ -23,7 +23,8 @@ from pathlib import Path
 
 import numpy as np
 import PIL
-import pyarrow.parquet as pq
+import pyarrow as pa
+import pyarrow.compute as pc
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -50,7 +51,7 @@ from probe import (
 def console_prefix(): return f"{time.strftime('%H:%M:%S')} {os.environ.get('SLURM_JOB_ID', str(os.getpid()))}"
 
 
-# Read the YAML recipe and fail before any GPU work if the parquet tile dataset is absent.
+# Read the YAML recipe and fail before GPU work if the Arrow tile dataset is absent.
 # expandvars is necessary to resolve `$USER` for checked-in configs.
 def load_config():
     if len(sys.argv) < 2:
@@ -67,12 +68,11 @@ def load_config():
         else:
             raise ValueError(f"unsupported override {arg!r}; use output_dir=<path> or seed=<int>")
     dataset_dir = Path(cfg["data"]["dataset_dir"])
-    if not any(dataset_dir.glob("shard-*.parquet")):
+    if not any(dataset_dir.glob("shard-*.arrow")):
         raise FileNotFoundError(
-            f"No parquet shards (shard-*.parquet) under {dataset_dir}. Pull the 4M-tile "
-            f"parquet dataset from medarc/nanopath on HF by running "
-            f"`python prepare.py {cfg['config_path']} download=True`. Follow the data setup in "
-            f"README.md before launching train.py."
+            f"No Arrow shards (shard-*.arrow) under {dataset_dir}. "
+            "Set data.dataset_dir to a prepared Arrow dataset. "
+            "See README.md for tile creation from TCGA slides."
         )
     return cfg
 
@@ -276,13 +276,24 @@ def main():
     max_train_samples = int(train_cfg["max_train_samples"])
     robust_norm_tiles = 6144
     # Reserve both calibration draws inside the presentation cap before optimizing.
+    # Arrow shards are shuffled: lexical paths recover the original fixed panels.
+    tables = [pa.ipc.open_file(pa.memory_map(str(path), "r")).read_all() for path in sorted(Path(cfg["data"]["dataset_dir"]).glob("shard-*.arrow"))]
+    offsets = np.cumsum([0, *map(len, tables)])
+    order = pc.sort_indices(pa.concat_tables([table.select(["path"]) for table in tables])["path"]).to_numpy().astype(np.int64)
+    selected = order[(np.arange(200)[:, None] * math.ceil(len(order) / 200) + np.arange(64)).ravel()]
+    rows = [None] * len(selected)
+    # Gather only selected JPEGs per shard; never concatenate the 120 GB payload.
+    for shard, table in enumerate(tables):
+        positions = np.flatnonzero((selected >= offsets[shard]) & (selected < offsets[shard + 1]))
+        for position, row in zip(positions, table.select(["path", "jpeg"]).take(pa.array(selected[positions] - offsets[shard])).to_pylist()):
+            rows[position] = row
+    jpegs = [row["jpeg"] for i, row in enumerate(rows[:128 * 64]) if i % 64 < 48]
     site_rows = []
-    for shard in range(200):
-        rows = pq.ParquetFile(Path(cfg["data"]["dataset_dir"]) / f"shard-{shard:05d}.parquet").read_row_group(0, columns=["path", "jpeg"]).to_pydict()
-        for path, jpeg in zip(rows["path"][:64], rows["jpeg"][:64]):
-            patient = patient_id_from_relpath(path)
-            if patient in fino_meta["discrete"]["cancer"] and patient in fino_meta["discrete"]["tss"] and not patient_in_val(patient, cfg["data"]["split_seed"], cfg["data"]["val_fraction"]):
-                site_rows.append((jpeg, fino_meta["discrete"]["cancer"][patient], fino_meta["discrete"]["tss"][patient]))
+    for row in rows:
+        patient = patient_id_from_relpath(row["path"])
+        if patient in fino_meta["discrete"]["cancer"] and patient in fino_meta["discrete"]["tss"] and not patient_in_val(patient, cfg["data"]["split_seed"], cfg["data"]["val_fraction"]):
+            site_rows.append((row["jpeg"], fino_meta["discrete"]["cancer"][patient], fino_meta["discrete"]["tss"][patient]))
+    del rows, tables, table, order
     calibration_tiles = robust_norm_tiles + len(site_rows)
     train_sample_budget = max_train_samples - calibration_tiles
     examples_seen = 0
@@ -429,6 +440,7 @@ def main():
         "batch_size": batch_size,
         "drop_last": True,
         "num_workers": train_cfg["num_workers"],
+        "multiprocessing_context": "fork" if train_cfg["num_workers"] > 0 else None,
         "pin_memory": True,
         "prefetch_factor": train_cfg["prefetch_factor"] if train_cfg["num_workers"] > 0 else None,
         "persistent_workers": train_cfg["persistent_workers"] and train_cfg["num_workers"] > 0,
@@ -793,8 +805,6 @@ def main():
         # at end-of-run when periodic saving is on (save_every set) so smoke runs leave nothing.
         # Fit scanner-response directions after optimization so the training trajectory is unchanged.
         started = time.monotonic()
-        data_dir = Path(cfg["data"]["dataset_dir"])
-        jpegs = [jpeg for shard in range(128) for jpeg in pq.ParquetFile(data_dir / f"shard-{shard:05d}.parquet").read_row_group(0, columns=["jpeg"])["jpeg"].to_pylist()[:48]]
         assert len(jpegs) == robust_norm_tiles
         resize = transforms.Compose([transforms.Resize((224, 224), antialias=True), transforms.ToTensor()])
         mean = torch.tensor(cfg["data"]["mean"], device=device).view(1, 3, 1, 1)
