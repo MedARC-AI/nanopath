@@ -3,10 +3,10 @@ name = "nanopath"
 version = "0.1.0"
 description = "nanopath dependencies"
 readme = "README.md"
-requires-python = "==3.12.*"
+requires-python = "==3.14.*"
 dependencies = [
-  "torch==2.8.0+cu129",
-  "torchvision==0.23.0+cu129",
+  "torch==2.14.0+cu130",
+  "torchvision==0.29.0+cu130",
   "h5py>=3.16.0",
   "numpy>=2.2.0",
   "pyyaml>=6.0.3",
@@ -23,7 +23,7 @@ dependencies = [
 
 [dependency-groups]
 gpuaug = ["kornia==0.8.3"]
-simd = ["pillow-simd==9.5.0.post2"]
+simd = ["pillow-simd==12.1.1.post0"]
 pillow = ["pillow"]
 
 [tool.uv]
@@ -36,15 +36,16 @@ exclude-dependencies = [
 ]
 conflicts = [[{ group = "simd" }, { group = "pillow" }]]
 no-binary-package = ["pillow-simd"]
+config-settings-package = { pillow-simd = { tiff = "enable" } }
 
 [tool.uv.extra-build-variables]
 pillow-simd = { CC = "cc -mavx2", CFLAGS = "-O3 -DNDEBUG" }
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu129" }
-torchvision = { index = "pytorch-cu129" }
+torch = { index = "pytorch-cu130" }
+torchvision = { index = "pytorch-cu130" }
 
 [[tool.uv.index]]
-name = "pytorch-cu129"
-url = "https://download.pytorch.org/whl/cu129"
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
 explicit = true

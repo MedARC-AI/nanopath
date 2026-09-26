@@ -1,10 +1,10 @@
 # Single data-prep entry point. Reads configs/main.yaml by default (or a
 # user-passed YAML config) and checks every path train.py will read:
-#   - data.dataset_dir/shard-NNNNN.parquet   (the 4M-tile dataset, sharded)
+#   - data.dataset_dir/shard-NNNNN.arrow   (the 4M-tile dataset, sharded)
 #   - probe.dataset_roots[name] for each configured probe dataset
 #   - pretrained weights for cfg["model"]["type"] (torch.hub cache)
-# The tile dataset and protocol-v2 evaluation snapshot are downloaded from their
-# separate MedARC Hugging Face repositories when configured roots are missing.
+# Missing Arrow tiles and protocol-v2 evaluation datasets are downloaded
+# from their separate MedARC Hugging Face repositories.
 # download_TCGA.sh and prepare_tiles / pack_from_jpeg_dir are only relevant if
 # you want to regenerate the tile dataset from raw SVS files; see README.
 #
@@ -15,10 +15,11 @@
 #
 # `process_row`, `count_rows`, `select_rows`, `prepare_tiles`, and
 # `pack_from_jpeg_dir` are kept in this file so a contributor revising tile
-# selection can decode a fresh JPEG dataset and pack it into parquet shards
+# selection can decode a fresh JPEG dataset and pack it into Arrow shards
 # (see README "Regenerating the tile dataset"); main() does not call them.
 
 import hashlib
+import io
 import json
 import multiprocessing as mp
 import os
@@ -33,7 +34,9 @@ import openslide
 import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
+import torch
 from PIL import Image
+from torchvision.transforms import v2
 
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -48,10 +51,6 @@ TARGET_TILE_COUNT = 4_000_000
 # that a 4 TB shared dataset_dir holds the dataset comfortably.
 NUM_SHARDS = 200
 PREPARE_WORKERS = 16
-# Small row groups inside each parquet shard. The dataloader does random
-# per-row reads, and parquet's read_row_group materializes the whole group;
-# 64 rows × ~30 KB JPEG ≈ ~2 MB per random access (~2-3 ms incl. decode).
-PARQUET_ROW_GROUP_SIZE = 64
 # Per-worker LRU; rows are sorted by slide before dispatch so contiguous tiles
 # share a handle. Cache=2 covers the boundary when imap_unordered hands a chunk
 # from one slide while the previous slide still has tiles in flight.
@@ -177,54 +176,50 @@ def prepare_tiles(sample_list, dataset_dir, split_seed):
     )
 
 
+# Measure decoded JPEG pixels exactly as the training loader did before caching.
+def tissue_fraction(jpeg):
+    with Image.open(io.BytesIO(jpeg)) as img:
+        tile = img.convert("RGB")
+    rgb = v2.functional.to_image(tile).float() / 255
+    sat = (rgb.amax(0) - rgb.amin(0)) / (rgb.amax(0) + 1e-6)
+    return float((sat > 0.07).float().mean())
+
+
 # Pack a JPEG-on-disk dataset (the output of prepare_tiles: per-slide subdirs
-# + manifest.txt) into NUM_SHARDS parquet shards under out_dir. Step 2 of the
+# + manifest.txt) into NUM_SHARDS Arrow shards under out_dir. Step 2 of the
 # regen workflow; called by hand after prepare_tiles. File-based to avoid
 # materializing 4M JPEG byte-strings (~120 GB) in RAM. Each worker reads the
-# JPEGs for its shard chunk and writes one parquet shard with row groups
-# sized for cheap random access from the dataloader.
+# JPEGs for its shard chunk and writes one uncompressed Arrow record batch.
 def _pack_one_shard(args):
     jpeg_dir, chunk, out_path = args
+    torch.set_num_threads(1)
     rows = [(p, (jpeg_dir / p).read_bytes()) for p in chunk]
     table = pa.table({"path": [r[0] for r in rows], "jpeg": [r[1] for r in rows]})
-    pq.write_table(table, out_path, compression="none", row_group_size=PARQUET_ROW_GROUP_SIZE)
+    table = table.append_column(pa.field("tissue_fraction", pa.float32(), nullable=False),
+                                pa.array([tissue_fraction(r[1]) for r in rows], type=pa.float32()))
+    tmp = out_path.with_suffix(f".{os.getpid()}.tmp")
+    with pa.OSFile(str(tmp), "wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+        writer.write_table(table, max_chunksize=table.num_rows)
+    os.replace(tmp, out_path)
     return out_path.name, len(chunk), out_path.stat().st_size
 
 
 def pack_from_jpeg_dir(jpeg_dir, manifest_path, out_dir):
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = sorted(manifest_path.read_text().splitlines())
+    np.random.default_rng(161803).shuffle(paths)
     chunk_size = (len(paths) + NUM_SHARDS - 1) // NUM_SHARDS
     args_list = [
-        (jpeg_dir, paths[i * chunk_size: (i + 1) * chunk_size], out_dir / f"shard-{i:05d}.parquet")
+        (jpeg_dir, paths[i * chunk_size: (i + 1) * chunk_size], out_dir / f"shard-{i:05d}.arrow")
         for i in range(NUM_SHARDS) if paths[i * chunk_size: (i + 1) * chunk_size]
     ]
     workers = PREPARE_WORKERS
-    print(f"packing {len(paths):,} tiles into {len(args_list)} parquet shards with {workers} workers", flush=True)
+    print(f"packing {len(paths):,} tiles into {len(args_list)} Arrow shards with {workers} workers", flush=True)
     started = time.monotonic()
     with mp.Pool(workers) as pool:
         for done, (name, n, sz) in enumerate(pool.imap_unordered(_pack_one_shard, args_list), start=1):
             elapsed = time.monotonic() - started
             print(f"[{done}/{len(args_list)}]  {name}: {n:,} rows  {sz/(1<<20):.0f} MB  ({elapsed:.0f}s)", flush=True)
-
-
-# Pull every shard-NNNNN.parquet from the medarc/nanopath HF dataset into
-# dataset_dir. Resumable: huggingface_hub uses a content-addressed cache so
-# reruns only fetch what's missing. allow_patterns keeps any non-tile files
-# in the repo (README, .gitattributes, etc.) out of dataset_dir.
-def fetch_tiles_from_hf(dataset_dir):
-    from huggingface_hub import snapshot_download
-    started = time.monotonic()
-    workers = PREPARE_WORKERS
-    print(f"downloading parquet shards from huggingface.co/datasets/{HF_TRAIN_REPO_ID} -> {dataset_dir} ({workers} workers)", flush=True)
-    snapshot_download(
-        repo_id=HF_TRAIN_REPO_ID,
-        repo_type="dataset",
-        local_dir=str(dataset_dir),
-        allow_patterns=["shard-*.parquet"],
-        max_workers=workers,
-    )
-    print(f"  [done]  total wall {time.monotonic()-started:.0f}s", flush=True)
 
 
 PATHOBENCH_TILING_VERSION = "pathobench_20x_512_v1"
@@ -474,21 +469,22 @@ def main():
     cfg = yaml.safe_load(os.path.expandvars(config_path.read_text()))
     paths = get_paths(cfg)
     dataset_dir = paths["data.dataset_dir"]
-    shards = list(dataset_dir.glob("shard-*.parquet")) if dataset_dir.exists() else []
+    shards = sorted(dataset_dir.glob("shard-*.arrow"))
 
-    # Stage 1 — Parquet tile shards (default source: medarc/nanopath HF dataset).
-    if len(shards) == NUM_SHARDS:
-        print(f"[verify] tiles: {dataset_dir} ({len(shards)} shards)", flush=True)
-    elif not download:
-        raise SystemExit(
-            f"expected {NUM_SHARDS} parquet shards under {dataset_dir}, found {len(shards)}.\n"
-            f"Either fix data.dataset_dir in {config_label} to point at an existing prepared "
-            f"dataset, or rerun: {prepare_cmd}"
-        )
-    else:
-        dataset_dir.mkdir(parents=True, exist_ok=True)
-        fetch_tiles_from_hf(dataset_dir)
-        assert sum(1 for _ in dataset_dir.glob("shard-*.parquet")) == NUM_SHARDS, f"tiles still incomplete after fetch: {dataset_dir}"
+    # Stage 1 — download only prepared Arrow tile shards; keep probe files separate.
+    if len(shards) != NUM_SHARDS and download:
+        from huggingface_hub import snapshot_download
+        snapshot_download(repo_id=HF_TRAIN_REPO_ID, repo_type="dataset", local_dir=str(dataset_dir),
+                          allow_patterns=["shard-*.arrow"], max_workers=PREPARE_WORKERS)
+        shards = sorted(dataset_dir.glob("shard-*.arrow"))
+    assert len(shards) == NUM_SHARDS, (
+        f"expected {NUM_SHARDS} Arrow shards under {dataset_dir}. "
+        f"Set data.dataset_dir to a prepared Arrow dataset or run {prepare_cmd}."
+    )
+    for shard in shards:
+        with pa.memory_map(str(shard), "r") as source:
+            assert pa.field("tissue_fraction", pa.float32(), nullable=False) in pa.ipc.open_file(source).schema, shard
+    print(f"[verify] tiles: {dataset_dir} ({len(shards)} Arrow shards)", flush=True)
 
     # Stage 2 — probe datasets. Verify-only collects every gap and reports
     # them all at once so the user fixes the YAML in a single edit.
@@ -542,10 +538,10 @@ def main():
     # Reaching here means tiles + every configured probe dataset + model weights are
     # in place. Tell the user explicitly so they don't have to read between
     # the [skip] lines.
-    n_shards = sum(1 for _ in dataset_dir.glob("shard-*.parquet"))
+    n_shards = sum(1 for _ in dataset_dir.glob("shard-*.arrow"))
     n_probes = len(cfg["probe"]["dataset_roots"])
     print(
-        f"\nAll data ready: {n_shards} parquet shards at {dataset_dir}, {n_probes} probe datasets "
+        f"\nAll data ready: {n_shards} Arrow shards at {dataset_dir}, {n_probes} probe datasets "
         f"({', '.join(cfg['probe']['dataset_roots'])}), and {cfg['model']['type']} weights at "
         f"{weights_path}. Launch training with `python train.py {config_label}` or "
         f"`./submit/train_1gpu.sbatch {config_label}`.",

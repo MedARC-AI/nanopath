@@ -45,7 +45,7 @@ from probe import (
 def console_prefix(): return f"{time.strftime('%H:%M:%S')} {os.environ.get('SLURM_JOB_ID', str(os.getpid()))}"
 
 
-# Read the YAML recipe and fail before any GPU work if the parquet tile dataset is absent.
+# Read the YAML recipe and fail before GPU work if the Arrow tile dataset is absent.
 # expandvars is necessary to resolve `$USER` for checked-in configs.
 def load_config():
     if len(sys.argv) < 2:
@@ -62,12 +62,11 @@ def load_config():
         else:
             raise ValueError(f"unsupported override {arg!r}; use output_dir=<path> or seed=<int>")
     dataset_dir = Path(cfg["data"]["dataset_dir"])
-    if not any(dataset_dir.glob("shard-*.parquet")):
+    if not any(dataset_dir.glob("shard-*.arrow")):
         raise FileNotFoundError(
-            f"No parquet shards (shard-*.parquet) under {dataset_dir}. Pull the 4M-tile "
-            f"parquet dataset from medarc/nanopath on HF by running "
-            f"`python prepare.py {cfg['config_path']} download=True`. Follow the data setup in "
-            f"README.md before launching train.py."
+            f"No Arrow shards (shard-*.arrow) under {dataset_dir}. "
+            "Set data.dataset_dir to a prepared Arrow dataset. "
+            "See README.md for tile creation from TCGA slides."
         )
     return cfg
 
@@ -394,6 +393,7 @@ def main():
         "batch_size": batch_size,
         "drop_last": True,
         "num_workers": train_cfg["num_workers"],
+        "multiprocessing_context": "fork" if train_cfg["num_workers"] > 0 else None,
         "pin_memory": True,
         "prefetch_factor": train_cfg["prefetch_factor"] if train_cfg["num_workers"] > 0 else None,
         "persistent_workers": train_cfg["persistent_workers"] and train_cfg["num_workers"] > 0,
