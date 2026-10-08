@@ -27,11 +27,13 @@ October 8 maintainer results (training source `c8903eb`; one H100 per seed):
 
 | Seed | Final score | Training minutes | Probe minutes |
 |---|---:|---:|---:|
-| [64434](https://wandb.ai/paulscotti/nanopath/runs/4ywfr76c) | 0.680775 | 34.84 | 19.51 |
-| [22665](https://wandb.ai/paulscotti/nanopath/runs/ebubi4vi) | **0.681044** | 34.68 | 20.65 |
-| [52376](https://wandb.ai/paulscotti/nanopath/runs/3l4efid5) | 0.682462 | 34.76 | 19.50 |
+| [64434](https://labless.dev/runs/run_sub_486cc5aeed) | 0.680775 | 34.84 | 19.51 |
+| [22665](https://labless.dev/runs/run_sub_6da523428f) | **0.681044** | 34.68 | 20.65 |
+| [52376](https://labless.dev/runs/run_sub_76e1604eff) | 0.682462 | 34.76 | 19.50 |
 
 Median seed 22665 exceeds the validated incumbent by **0.013535**, passing the +0.004 gate; it is the default full-run seed. Ryan's discovery score was 0.680550. All three runs completed the fixed 20-dataset suite, consumed about 2.942e17 FLOPs under the 1e18 cap, and passed source, budget, finite-metric, and Labless submission checks. Fixed-input objective and gradient checks also matched the submitted implementation, including flipped crop alignment. Median loader waits after warmup were 0.20–0.26 ms, with 539–540 tiles/second and 51.4 GB peak GPU memory.
+
+All three runs are published under the verified GitHub login `PaulScotti`; median seed 22665 is the validated Labless leader. Each run page links its W&B log and frozen source.
 
 | Probe family | Incumbent | Median reproduction |
 |---|---:|---:|
