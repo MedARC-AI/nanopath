@@ -33,7 +33,7 @@ October 8 maintainer results (training source `c8903eb`; one H100 per seed):
 
 Median seed 22665 exceeds the validated incumbent by **0.013535**, passing the +0.004 gate; it is the default full-run seed. Ryan's discovery score was 0.680550. All three runs completed the fixed 20-dataset suite, consumed about 2.942e17 FLOPs under the 1e18 cap, and passed source, budget, finite-metric, and Labless submission checks. Fixed-input objective and gradient checks also matched the submitted implementation, including flipped crop alignment. Median loader waits after warmup were 0.20–0.26 ms, with 539–540 tiles/second and 51.4 GB peak GPU memory.
 
-All three runs are published under the verified GitHub login `PaulScotti`; median seed 22665 is the validated Labless leader. Each run page links its W&B log and frozen source.
+All three runs were submitted by `PaulScotti`; median seed 22665 is the validated Labless leader, credited to recipe contributor [@RyanKim17920](https://github.com/RyanKim17920). Each run page links its W&B log and frozen source.
 
 | Probe family | Incumbent | Median reproduction |
 |---|---:|---:|
@@ -51,7 +51,7 @@ Robustness supplies the largest weighted gain (+0.006138), followed by progressi
 Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:
 
 ```bash
-git clone https://github.com/MedARC-AI/nanopath.git && cd nanopath
+git clone --branch codex/stack4-salient https://github.com/MedARC-AI/nanopath.git && cd nanopath
 uv sync && source .venv/bin/activate
 wandb login  # or: export WANDB_MODE=offline before launching noninteractive SLURM jobs
 
