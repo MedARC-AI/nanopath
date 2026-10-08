@@ -6,8 +6,10 @@
 # a strict load.
 #
 # DINOHead is the small MLP + weight-normed classifier used by train.py for the
-# DINO CLS self-distillation loss. It is intentionally trivial
+# DINO CLS and iBOT patch self-distillation losses. It is intentionally trivial
 # (~15 lines) so we have zero runtime dependency on the dinov2 codebase.
+
+from collections import OrderedDict
 
 import torch
 import torch.nn as nn
@@ -308,6 +310,14 @@ class JEPAPredictor(nn.Module):
         self.blocks = nn.ModuleList(Block(width, heads, 4.0, 0.0) for _ in range(depth))
         self.norm = nn.LayerNorm(width, eps=1e-6)
         self.proj = nn.Linear(width, dim, bias=True)
+
+        # Local patches regress aligned global teacher features; zero output initially gates backbone gradients.
+        self.xscale = nn.Sequential(OrderedDict([
+            ("fc1", nn.Linear(dim, 2 * dim)), ("act", nn.GELU()),
+            ("norm", nn.LayerNorm(2 * dim, eps=1e-6)), ("fc2", nn.Linear(2 * dim, dim)),
+        ]))
+        nn.init.zeros_(self.xscale.fc2.weight)
+        nn.init.zeros_(self.xscale.fc2.bias)
 
     def forward(self, patch_tokens):
         x = self.proj_in(patch_tokens)

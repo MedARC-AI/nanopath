@@ -29,7 +29,7 @@ import torch
 import torch.nn as nn
 from PIL import Image
 from torch.utils.data import Dataset
-from torchvision.transforms import v2
+from torchvision.transforms import v2, RandomResizedCrop
 
 
 HED_FROM_RGB = torch.tensor(
@@ -144,6 +144,7 @@ class TCGATileDataset(Dataset):
         in_split_shard = []
         in_split_row = []
         in_split_tissue = []
+        slide_tiles = {}
         for shard_idx, shard_path in enumerate(self.shards):
             with pa.memory_map(str(shard_path), "r") as source:
                 schema = pa.ipc.open_file(source).schema
@@ -160,6 +161,7 @@ class TCGATileDataset(Dataset):
                     in_split_shard.append(shard_idx)
                     in_split_row.append(row_idx)
                     in_split_tissue.append(fractions[row_idx])
+                    slide_tiles.setdefault(p.split("/", 1)[0], []).append(len(in_split_row) - 1)
         if not in_split_shard:
             raise ValueError(f"no {'train' if is_train else 'val'} tiles found in {dataset_dir}; check val_fraction={data['val_fraction']}")
         # Split indices and fractions (~48 MB for 4M tiles) stay shared across fork-workers.
@@ -175,12 +177,13 @@ class TCGATileDataset(Dataset):
             self.meta_cont = {factor: meta["continuous"][factor] for factor in self.fino_cont}
             self.cont_dim = {factor: meta["cont_dim"].get(factor, 1) for factor in self.fino_cont}
         self.tissue_fraction = np.asarray(in_split_tissue, dtype=np.float32)
+        self.slide_tiles = [np.asarray(rows, dtype=np.int32) for rows in slide_tiles.values()] if is_train else None
         mean, std = data["mean"], data["std"]
         self.global_views = int(train["global_views"])
         self.local_views = int(train["local_views"])
         # Keep global hue unchanged; local crops also perturb hue before grayscale/blur.
         augment = [
-            v2.RandomHorizontalFlip(), v2.RandomVerticalFlip(), v2.ToImage(),
+            v2.ToImage(),
         ]
         if not train["gpu_augment"]:
             augment += [
@@ -191,10 +194,12 @@ class TCGATileDataset(Dataset):
                 v2.RandomApply([v2.GaussianBlur(9, sigma=(0.1, 1.8))], p=0.35),
                 v2.Normalize(mean=mean, std=std),
             ]
-        self.global_aug = v2.Compose([v2.RandomResizedCrop(train["global_size"], scale=tuple(data["global_crop_scale"]), antialias=True), *augment])
+        self.global_aug = v2.Compose([*augment])
         if not train["gpu_augment"]:
             augment[-4] = v2.ColorJitter(data["color_jitter"], data["color_jitter"], data["color_jitter_saturation"], data["aug_hue_local"])
-        self.local_aug = v2.Compose([v2.RandomResizedCrop(train["local_size"], scale=tuple(data["local_crop_scale"]), antialias=True), *augment])
+        self.local_aug = v2.Compose(augment)
+        self.crops = [(self.global_views, train["global_size"], data["global_crop_scale"], self.global_aug),
+                      (self.local_views, train["local_size"], data["local_crop_scale"], self.local_aug)]
 
     # Dataset length is the number of tiles in this train/val split.
     def __len__(self):
@@ -202,12 +207,13 @@ class TCGATileDataset(Dataset):
 
     # Resample from cached fractions, then read and augment one accepted JPEG.
     def __getitem__(self, idx):
-        idx = int(idx)
+        # Uniform slides followed by uniform tiles prevent large slides dominating training.
+        idx = int(random.choice(random.choice(self.slide_tiles))) if self.slide_tiles is not None else int(idx)
         # Reject from metadata before IO, preserving every resampling draw and limit.
         for _ in range(1000):
             if self.tissue_thresh <= 0 or float(self.tissue_fraction[idx]) >= self.tissue_thresh:
                 break
-            idx = random.randint(0, self.shard_of.shape[0] - 1)
+            idx = int(random.choice(random.choice(self.slide_tiles))) if self.slide_tiles is not None else random.randint(0, self.shard_of.shape[0] - 1)
         else:
             raise RuntimeError(f"no tile met tissue_thresh={self.tissue_thresh} after 1000 samples")
         shard_idx = int(self.shard_of[idx])
@@ -240,11 +246,23 @@ class TCGATileDataset(Dataset):
                 value = self.meta_cont[factor].get(patient_id, [float("nan")] * self.cont_dim[factor])
                 fino[f"mc_{factor}"] = torch.tensor(value if isinstance(value, list) else [value], dtype=torch.float32)
         # Augmentations are stochastic per view; reproducibility comes from worker seeds.
-        global_views = torch.stack([self.global_aug(tile) for _ in range(self.global_views)])
-        local_views = torch.stack([self.local_aug(tile) for _ in range(self.local_views)])
+        # Signed crop corners let training align local patch centers across independent flips.
+        views, boxes = [], []
+        for count, size, scale, post in self.crops:
+            images, corners = [], []
+            for _ in range(count):
+                top, left, height, width = RandomResizedCrop.get_params(tile, scale, (0.75, 4 / 3))
+                crop = v2.functional.resized_crop(tile, top, left, height, width, [size, size], antialias=True)
+                x0, y0, x1, y1 = left / tile.width, top / tile.height, (left + width) / tile.width, (top + height) / tile.height
+                if random.random() < 0.5:
+                    crop, x0, x1 = v2.functional.horizontal_flip(crop), x1, x0
+                if random.random() < 0.5:
+                    crop, y0, y1 = v2.functional.vertical_flip(crop), y1, y0
+                images.append(post(crop)); corners.append((x0, y0, x1, y1))
+            views.append(torch.stack(images)); boxes.append(torch.tensor(corners, dtype=torch.float32))
         return {
-            "global_views": global_views,
-            "local_views": local_views,
+            "global_views": views[0], "local_views": views[1],
+            "global_boxes": boxes[0], "local_boxes": boxes[1],
             "sample_idx": torch.tensor(int(idx), dtype=torch.int64),
             "slide_id": torch.tensor(slide_key, dtype=torch.int64),
             "patient_id": torch.tensor(patient_key, dtype=torch.int64),

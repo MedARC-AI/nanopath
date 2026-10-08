@@ -10,29 +10,18 @@ This repository is intentionally made to be compatible with [autoresearch](https
 
 **Want to get involved? Join us in the [MedARC Discord](https://discord.gg/tVR4TWnRM9) (find us in #path-fm)!**
 
-## robust-huelocal
+## stack4_salient reproduction
 
-Maintainer reproduction of [Anish Dulal’s frozen submission](https://labless.dev/runs/run_sub_8a160bb2d9), starting from `robust-norm-v2` at `3f1685f` (recipe code unchanged from `418605b`).
+Maintainer reproduction of [Ryan Kim’s submission](https://labless.dev/runs/run_sub_418cd40363), based on `robust-huelocal` at `6c142b9`, including Benjamin Warner’s Arrow loader, GPU augmentation, and runtime upgrades.
 
-- Local-crop hue jitter: 0 → 0.2; global-crop hue stays unchanged.
-- Pooled features: 1,920 → 640; typicality-gated final CLS (384) plus mean-pooled final-MLP activations (256).
-- Pooled views: 1 → 2; average identity and 180° rotation before gating.
-- Segmentation: sharpened 32×32 grid → native 16×16 grid; retain the last four blocks.
-- Photometric suppression rank: CLS/patch mean 32/32 → 32/256; add rank-128 within-cancer site suppression from TCGA metadata.
-- Robustness views: 1 → 8; average rotations/reflections after restoring patch-map orientation.
-- FINO backbone gradient multipliers for expr512/fga: 1 → 3.
+- Peak LR 0.000125 → 0.0002344; layerwise decay factor 0.7 → 0.8; KDE weight/concentration 0.1/10 → 0.0667/6.667. The original FLOP-based schedule stays unchanged.
+- Four contiguous JEPA blocks are sampled using standardized teacher patch-to-CLS cosine similarity (temperature factor 1.5).
+- Add 4096-prototype iBOT at weight 0.1 and local-to-global, overlap-aligned JEPA regression at weight 0.5, with a zero-initialized output layer.
+- Sample slides uniformly, then tiles uniformly within each slide. Preserve crop scales, hue, FINO, calibration, and feature aggregation from `robust-huelocal`.
 
-Reproduction retains the 1M presentation cap: 6,144 photometric + 11,941 site-calibration presentations are reserved, leaving 7,671 optimizer steps. The submitted source instead takes 7,812 steps and excludes both calibration draws from its reported count. The default training seed is 7974, the median of the September 9 maintainer reruns; evaluations remain unchanged.
+The implementation uses torchvision crop sampling and batched mask sampling rather than the contributor’s custom crop class and per-image mask loop. These retain the intended distributions but change RNG consumption; this is an independent approximate reproduction, not a bitwise replay. The cross-scale head lives in the existing JEPA predictor. All objective losses and gradient norm are logged separately.
 
-PR #19 adds memory-mapped Arrow loading and Python 3.14/PyTorch 2.14. Calibration
-recovers the original tiles by lexical path order; shuffled Arrow storage changes
-training order while retaining the recipe, calibration panels, and probe protocol.
-
-September 26 reruns (seeds 13647 / 61259 / 48731) scored 0.665542 / 0.668820 / 0.663635.
-The [median run](https://labless.dev/runs/run_sub_06a86337d4) scored 0.665542 versus the
-previous 0.667509. Median training fell from 104.7 to 32.5 minutes and complete jobs
-from 123.6 to 55.3 minutes; probes increased from 16.8 to 19.7 minutes. This historical
-comparison includes both PR #18 and PR #19 with different seeds, so it does not isolate PR #19.
+The fixed 1M cap includes 6,144 photometric and 11,941 site-calibration presentations, leaving 7,671 optimizer steps (999,973 total presentations). `probe.py`, `benchmarking/`, and the probe config are unchanged. Independent seeds 64434, 22665, and 52376 were drawn before training. Promotion requires their median to exceed the incumbent 0.6675094324 by at least 0.004; the discovery run is excluded.
 
 ## Quickstart
 

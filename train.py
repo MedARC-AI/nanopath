@@ -1,6 +1,6 @@
 # DINO/JEPA pretraining on TCGA tiles (single-GPU), initialized from DINOv2. The losses are:
 # DINO CLS self-distillation (Sinkhorn-Knopp centred teacher targets),
-# I-JEPA masked-patch prediction, FINO metadata guidance, and KDE uniformity on
+# Salient/cross-scale I-JEPA, iBOT, FINO metadata guidance, and KDE uniformity on
 # L2-normalised CLS tokens. YAML drives the tunable knobs (backbone variant,
 # LR + LR scheduler, drop path, layerwise decay, KDE weight + concentration,
 # FLOP/sample budgets, batch size); other objective hyperparameters are hardcoded
@@ -177,15 +177,16 @@ def kde_loss(x, concentration):
     return torch.logsumexp(sim, dim=1).mean() - math.log(max(1, sim.shape[1] - 1))
 
 
-# I-JEPA masks contiguous square blocks to infer missing tissue context.
-def make_block_mask(batch, grid, device, n_blocks, block_scale):
-    masks = torch.zeros(batch, grid, grid, dtype=torch.bool, device=device)
+# Sample block locations from teacher patch-to-CLS similarity, standardized within each image.
+def make_block_mask(teacher, grid, n_blocks, block_scale, tau):
     side = max(1, round(grid * block_scale ** 0.5))
-    for i in range(batch):
-        for _ in range(n_blocks):
-            top, left = random.randint(0, grid - side), random.randint(0, grid - side)
-            masks[i, top : top + side, left : left + side] = True
-    masks = masks.flatten(1)
+    saliency = (F.normalize(teacher["patches"].float(), dim=-1) * F.normalize(teacher["cls"].float(), dim=-1)[:, None]).sum(-1)
+    scores = F.avg_pool2d(saliency.reshape(-1, 1, grid, grid), side, stride=1).flatten(1)
+    scores = (scores - scores.mean(1, keepdim=True)) / (scores.std(1, keepdim=True) + 1e-6)
+    anchors = torch.multinomial((tau * scores).softmax(1), n_blocks, replacement=True)
+    top, left = (anchors // (grid - side + 1))[..., None, None], (anchors % (grid - side + 1))[..., None, None]
+    y, x = torch.meshgrid(torch.arange(grid, device=scores.device), torch.arange(grid, device=scores.device), indexing="ij")
+    masks = ((y >= top) & (y < top + side) & (x >= left) & (x < left + side)).any(1).flatten(1)
     idx = masks.flatten().nonzero().flatten()
     weights = (1 / masks.sum(-1).clamp(min=1)).unsqueeze(-1).expand_as(masks)[masks]
     return masks, idx, weights
@@ -195,13 +196,13 @@ def make_block_mask(batch, grid, device, n_blocks, block_scale):
 # block i gets lr * layerwise_decay^(depth - 1 - i); patch_embed gets the deepest decay
 # multiplied by patch_embed_lr_mult; biases and norms get no weight decay; the head's
 # final weight-norm last_layer parameters get an LR-freeze for the first dino.freeze_last_layer_fraction.
-def build_param_groups(student_backbone, student_dino_head, student_predictor, layerwise_decay, patch_embed_lr_mult):
+def build_param_groups(student_backbone, student_dino_head, student_predictor, student_ibot_head, layerwise_decay, patch_embed_lr_mult):
     depth = len(student_backbone.blocks)
     # Coalesce params that share (lr_mult, wd_mult, last_layer) into a single group each (~30 groups
     # instead of one-per-param), so AdamW's foreach path fuses the step across many tensors rather than
     # launching per-parameter kernels. Per-param lr/wd are unchanged, so the optimization is numerically identical.
     coalesced = {}
-    modules = ((student_backbone, "backbone"), (student_dino_head, "dino_head"), (student_predictor, "jepa_predictor"))
+    modules = ((student_backbone, "backbone"), (student_dino_head, "dino_head"), (student_predictor, "jepa_predictor"), (student_ibot_head, "ibot_head"))
     for module, kind in modules:
         for name, p in module.named_parameters():
             if not p.requires_grad:
@@ -259,13 +260,16 @@ def main():
     teacher_dino_head = deepcopy(student_dino_head)
     for p in teacher_dino_head.parameters():
         p.requires_grad = False
+    # Dense patch clustering complements JEPA with a 4096-prototype vocabulary.
+    student_ibot_head = DINOHead(student_backbone.embed_dim, 4096, 1024, 256).to(device)
+    teacher_ibot_head = deepcopy(student_ibot_head).requires_grad_(False)
     backbone_activated_params = sum(p.numel() for p in student_backbone.parameters() if p.requires_grad)
     predictors = {
         factor: nn.Sequential(nn.Linear(student_backbone.embed_dim, 512), nn.GELU(), nn.Linear(512, 256), nn.GELU(), nn.Linear(256, fino_meta["cont_dim"].get(factor, 1))).to(device)
         for factor, _ in fino_cont
     }
     # AdamW param groups carry per-parameter LR/WD multipliers (LWD + patch_embed + biases-no-WD).
-    param_groups = build_param_groups(student_backbone, student_dino_head, student_predictor, dino_cfg["layerwise_decay"], dino_cfg["patch_embed_lr_mult"])
+    param_groups = build_param_groups(student_backbone, student_dino_head, student_predictor, student_ibot_head, dino_cfg["layerwise_decay"], dino_cfg["patch_embed_lr_mult"])
     if predictors:
         param_groups.append({"params": [p for model in predictors.values() for p in model.parameters()], "lr_mult": 1.0, "wd_mult": 1.0, "last_layer": False})
     opt = torch.optim.AdamW(param_groups, lr=1.0, betas=(0.9, dino_cfg["adam_beta2"]), fused=train_cfg["fused_adamw"])
@@ -304,12 +308,12 @@ def main():
     for key, name in [("TORCHINDUCTOR_CACHE_DIR", "inductor"), ("TRITON_CACHE_DIR", "triton")]:
         os.environ.setdefault(key, str(wandb_dir.parent / name))
     # Compile calls in place so checkpoint keys and parameter ownership stay unchanged.
-    for module in (student_backbone, teacher_backbone, student_dino_head, teacher_dino_head, student_predictor, *predictors.values()):
+    for module in (student_backbone, teacher_backbone, student_dino_head, teacher_dino_head, student_predictor, student_predictor.xscale, student_ibot_head, teacher_ibot_head, *predictors.values()):
         module.compile(dynamic=not isinstance(module, (ViT, JEPAPredictor)), disable=not train_cfg["compile"])
     sinkhorn_fn = torch.compile(sinkhorn, dynamic=True, disable=not train_cfg["compile"])
     dino_ce_fn = torch.compile(dino_ce, dynamic=True, disable=not train_cfg["compile"])
     jepa_loss_fn = torch.compile(jepa_regression, dynamic=True, disable=not train_cfg["compile"])
-    wandb_name = cfg["project"]["name"]
+    wandb_name = f"{cfg['project']['name']}-s{train_cfg['seed']}"
     if labless_autosubmit_file:
         wandb_name = json.loads(Path(labless_autosubmit_file).read_text()).get("run_name") or wandb_name
     slurm_job_id = os.environ.get("SLURM_JOB_ID")
@@ -334,6 +338,8 @@ def main():
         student_dino_head.load_state_dict(checkpoint["dino_head"])
         teacher_dino_head.load_state_dict(checkpoint["dino_head_ema"])
         student_predictor.load_state_dict(checkpoint["predictor"])
+        student_ibot_head.load_state_dict(checkpoint["ibot_head"])
+        teacher_ibot_head.load_state_dict(checkpoint["ibot_head_ema"])
         # The requested backend owns step placement, even when the saved backend differs.
         for group in checkpoint["opt"]["param_groups"]:
             group.update(fused=train_cfg["fused_adamw"], foreach=None)
@@ -470,6 +476,7 @@ def main():
         if not full:
             return payload
         return {**payload, "dino_head": cpu_state(student_dino_head), "dino_head_ema": cpu_state(teacher_dino_head), "predictor": cpu_state(student_predictor),
+                "ibot_head": cpu_state(student_ibot_head), "ibot_head_ema": cpu_state(teacher_ibot_head),
                 "opt": opt.state_dict(), "examples_seen": examples_seen,
                 "visible_patch_presentations": visible_patch_presentations, "train_flops": train_flops, "wandb": wandb_meta,
                 **({"protos": {factor: value.cpu() for factor, value in prototypes.items()},
@@ -498,25 +505,45 @@ def main():
             "unique_patches_seen": unique_tiles_seen * unique_tile_patch_count,
         }
 
-    # Compute DINO, JEPA, KDE, and optional FINO; validation omits FINO.
-    def compute_losses(gf, lf, b, masks, mask_idx, mask_w, t_temp, k_scale, ckpt=False, meta=None):
-        # Tensor schedule values do not specialize Sinkhorn to each temperature.
-        t_temp = torch.tensor(t_temp, device=gf.device)
+    # DINO/JEPA/iBOT and KDE share backbone features; validation omits FINO and cross-scale regression.
+    def compute_losses(gf, lf, b, t_temp, k_scale, ckpt=False, meta=None, boxes=None):
+        t_temp = torch.tensor(t_temp, device=device)
         with torch.no_grad():
             t = teacher_backbone(gf)
             t_cls = teacher_dino_head(t["cls"]).chunk(train_cfg["global_views"])
             t_prob = sinkhorn_fn(torch.cat((t_cls[1], t_cls[0])), t_temp).view(2, b, -1)
+            masks, mask_idx, mask_w = make_block_mask(t, global_grid, dino_cfg["jepa_blocks"], dino_cfg["jepa_block_scale"], dino_cfg["jepa_salient_tau"])
         sg = student_backbone(gf, masks=masks, checkpoint=ckpt)
         sl = student_backbone(lf, checkpoint=ckpt)
         sg_cls, sl_cls = student_dino_head(sg["cls"]), student_dino_head(sl["cls"])
         L = train_cfg["local_views"]
-        # CE is linear in targets; keep the original reduction order for eager recipes.
-        local_loss = (dino_ce_fn(sl_cls.view(L, b, -1), t_prob.sum(0)) * L if train_cfg["compile"]
-                      else sum(dino_ce_fn(x, y) for x in sl_cls.chunk(L) for y in t_prob)) / (2 * L + 2)
+        local_loss = dino_ce_fn(sl_cls.view(L, b, -1), t_prob.sum(0)) * L / (2 * L + 2)
         global_loss = dino_ce_fn(sg_cls, t_prob.flatten(0, 1)) * 2 / (2 * L + 2)
         patch_target = F.layer_norm(t["patches"].flatten(0, 1), (student_backbone.embed_dim,))[mask_idx]
         patch_prediction = student_predictor(sg["patches"]).flatten(0, 1)[mask_idx]
         jepa_loss = jepa_loss_fn(patch_prediction, patch_target, mask_w) / max(1, b * 2)
+        with torch.no_grad():
+            patch_prob = sinkhorn_fn(teacher_ibot_head(t["patches"].flatten(0, 1)[mask_idx]), t_temp)
+        ibot_loss = 0.1 * dino_ce_fn(student_ibot_head(sg["patches"].flatten(0, 1)[mask_idx]), patch_prob)
+        xscale_loss = sg["cls"].new_zeros(())
+        if boxes is not None:
+            # Signed corners map local patch centers through tile coordinates into global view zero.
+            # Regress only overlapping tissue, using fp32 bilinear teacher targets as in the submitted recipe.
+            local_box, global_box = boxes
+            with torch.autocast(device_type="cuda", enabled=False):
+                n, dim = train_cfg["local_size"] // student_backbone.patch_size, student_backbone.embed_dim
+                y, x = torch.meshgrid((torch.arange(n, device=device) + 0.5) / n, (torch.arange(n, device=device) + 0.5) / n, indexing="ij")
+                centers = torch.stack((x, y), -1).reshape(1, 1, n * n, 2)
+                tile = local_box[:, :, None, :2] + centers * (local_box[:, :, None, 2:] - local_box[:, :, None, :2])
+                global_box = global_box[:, :1, None]
+                coords = (tile - global_box[..., :2]) / (global_box[..., 2:] - global_box[..., :2])
+                valid = ((coords >= 0) & (coords <= 1)).all(-1)
+                teacher_grid = F.layer_norm(t["patches"][:b].float(), (dim,)).transpose(1, 2).reshape(b, dim, global_grid, global_grid)
+                target = F.grid_sample(teacher_grid, (2 * coords - 1).reshape(b, L * n * n, 1, 2), padding_mode="border", align_corners=False)
+                target = target.squeeze(-1).transpose(1, 2).reshape(b, L, n * n, dim)
+                prediction = student_predictor.xscale(sl["patches"].reshape(L, b, n * n, dim).transpose(0, 1).float())
+                error = F.smooth_l1_loss(prediction, target, reduction="none").mean(-1)
+                xscale_loss = dino_cfg["jepa_xscale_weight"] * (error * valid).sum() / valid.sum().clamp_min(1)
         kde = dino_cfg["kde_loss_weight"] * k_scale * sum(kde_loss(x, dino_cfg["kde_concentration"]) for x in sg["cls"].chunk(train_cfg["global_views"]))
         meta_loss = sg["cls"].new_zeros(())
         if meta is not None:
@@ -548,18 +575,18 @@ def main():
                         terms.append(0.03 * F.mse_loss(prediction, values[keep]))
                 for term in terms:
                     meta_loss = meta_loss + term
-        return local_loss + global_loss, jepa_loss, kde, meta_loss
+        return local_loss + global_loss, jepa_loss, kde, meta_loss, ibot_loss, xscale_loss
 
-    # Held-out validation pass: same DINO + JEPA + KDE losses on `val_batches` of the val split.
+    # Held-out validation pass: DINO + JEPA + iBOT + KDE losses on `val_batches` of the val split.
     # Schedule terms (teacher_temp, kde_scale) drift over training, so read val curves as same-step
     # diagnostics. RNG is snapshotted/restored so val masks don't perturb the next training step.
     def evaluate(eval_step, eval_teacher_temp, eval_kde_scale):
-        for m in (student_backbone, student_dino_head, student_predictor):
+        for m in (student_backbone, student_dino_head, student_predictor, student_ibot_head):
             m.eval()
         py_rng, cpu_rng, cuda_rng = random.getstate(), torch.random.get_rng_state(), torch.cuda.get_rng_state(device)
         random.seed(train_cfg["seed"] + eval_step)
         torch.manual_seed(train_cfg["seed"] + eval_step)
-        sums = torch.zeros(4, device=device)
+        sums = torch.zeros(5, device=device)
         n_batches = 0
         for vb_idx, vbatch in enumerate(val_loader):
             if vb_idx >= int(train_cfg["val_batches"]):
@@ -568,14 +595,13 @@ def main():
             b = vg.shape[0]
             with torch.no_grad(), autocast:
                 gf, lf = vg.transpose(0, 1).flatten(0, 1), vl.transpose(0, 1).flatten(0, 1)
-                masks, mask_idx, mask_w = make_block_mask(b * train_cfg["global_views"], global_grid, device, int(dino_cfg["jepa_blocks"]), float(dino_cfg["jepa_block_scale"]))
-                dino_l, jepa_l, kde_v, _ = compute_losses(gf, lf, b, masks, mask_idx, mask_w, eval_teacher_temp, eval_kde_scale)
-            sums += torch.tensor([float(dino_l), float(jepa_l), float(kde_v), float(dino_l + jepa_l + kde_v)], device=device)
+                dino_l, jepa_l, kde_v, _, ibot_l, _ = compute_losses(gf, lf, b, eval_teacher_temp, eval_kde_scale)
+            sums += torch.stack([dino_l, jepa_l, kde_v, ibot_l, dino_l + jepa_l + kde_v + ibot_l])
             n_batches += 1
         random.setstate(py_rng)
         torch.random.set_rng_state(cpu_rng)
         torch.cuda.set_rng_state(cuda_rng, device)
-        return dict(zip(("dino", "jepa", "kde", "total"), (sums / max(1, n_batches)).tolist()))
+        return dict(zip(("dino", "jepa", "kde", "ibot", "total"), (sums / max(1, n_batches)).tolist()))
 
     # Ingest completed probe result JSONs into metrics.jsonl and wandb.
     def log_probe_results():
@@ -634,6 +660,7 @@ def main():
             student_backbone.train()
             student_dino_head.train()
             student_predictor.train()
+            student_ibot_head.train()
             completed_step = step + 1
             should_log = completed_step == 1 or completed_step % train_cfg["log_every"] == 0
             # Data identifiers stay on CPU and feed coverage metrics; image tensors move below.
@@ -655,7 +682,6 @@ def main():
                 base_lr = last_layer_lr if group["last_layer"] else lr
                 group["lr"] = base_lr * group["lr_mult"]
                 group["weight_decay"] = wd * group["wd_mult"]
-            masks, mask_idx, mask_w = make_block_mask(batch_size * train_cfg["global_views"], global_grid, device, int(dino_cfg["jepa_blocks"]), float(dino_cfg["jepa_block_scale"]))
             kde_scale = min(1.0, max(0.0, (frac - 0.1) / 0.4))
             # Wrap forward + backward + opt.step in FlopCounterMode on the first step only;
             # subsequent steps reuse measured_flops_per_step (fixed shapes => fixed cost).
@@ -671,15 +697,16 @@ def main():
                     gamma = fino_cfg["gamma_max"] * (2 / (1 + math.exp(-10 * sample_fraction)) - 1) if fino_cfg else 0.0
                     meta = ((gamma, batch["meta_disc"].to(device, non_blocking=True),
                              {factor: batch[f"mc_{factor}"].to(device, non_blocking=True) for factor, _ in fino_cont}) if fino_cfg else None)
-                    dino_loss_value, jepa_loss, kde, meta_loss = compute_losses(
-                        gf, lf, batch_size, masks, mask_idx, mask_w, teacher_temp, kde_scale,
+                    dino_loss_value, jepa_loss, kde, meta_loss, ibot_loss, xscale_loss = compute_losses(
+                        gf, lf, batch_size, teacher_temp, kde_scale,
                         ckpt=activation_checkpointing, meta=meta,
+                        boxes=(batch["local_boxes"].to(device), batch["global_boxes"].to(device)),
                     )
-                    total_loss = dino_loss_value + jepa_loss + kde + meta_loss
+                    total_loss = dino_loss_value + jepa_loss + kde + meta_loss + ibot_loss + xscale_loss
                 opt.zero_grad(set_to_none=True)
                 total_loss.backward()
                 grad_norm = nn.utils.clip_grad_norm_(
-                    [*student_backbone.parameters(), *student_dino_head.parameters(), *student_predictor.parameters()],
+                    [*student_backbone.parameters(), *student_dino_head.parameters(), *student_predictor.parameters(), *student_ibot_head.parameters()],
                     dino_cfg["clip_grad"],
                 )
                 opt.step()
@@ -691,6 +718,7 @@ def main():
                 m = cosine_schedule(0.994, 1.0, frac)
                 update_ema(student_backbone, teacher_backbone, m)
                 update_ema(student_dino_head, teacher_dino_head, m)
+                update_ema(student_ibot_head, teacher_ibot_head, m)
             examples_seen += batch_size
             visible_patch_presentations += visible_now
             train_flops += step_train_flops
@@ -698,6 +726,7 @@ def main():
                 reduced = {
                     "dino": float(dino_loss_value.detach()),
                     "jepa": float(jepa_loss.detach()),
+                    "ibot": float(ibot_loss.detach()), "xscale": float(xscale_loss.detach()), "fino": float(meta_loss.detach()),
                     "kde": float(kde.detach()),
                     "total": float(total_loss.detach()),
                 }
