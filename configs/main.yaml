@@ -25,7 +25,7 @@ model:
   type: robust_norm_dinov2_vits14_reg
 
 train:
-  seed: 7974
+  seed: 22665
   bf16: true
   activation_checkpointing: false
   compile: true

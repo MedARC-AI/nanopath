@@ -23,6 +23,27 @@ The implementation uses torchvision crop sampling and batched mask sampling rath
 
 The fixed 1M cap includes 6,144 photometric and 11,941 site-calibration presentations, leaving 7,671 optimizer steps (999,973 total presentations). `probe.py`, `benchmarking/`, and the probe config are unchanged. Independent seeds 64434, 22665, and 52376 were drawn before training. Promotion requires their median to exceed the incumbent 0.6675094324 by at least 0.004; the discovery run is excluded.
 
+October 8 maintainer results (training source `c8903eb`; one H100 per seed):
+
+| Seed | Final score | Training minutes | Probe minutes |
+|---|---:|---:|---:|
+| [64434](https://wandb.ai/paulscotti/nanopath/runs/4ywfr76c) | 0.680775 | 34.84 | 19.51 |
+| [22665](https://wandb.ai/paulscotti/nanopath/runs/ebubi4vi) | **0.681044** | 34.68 | 20.65 |
+| [52376](https://wandb.ai/paulscotti/nanopath/runs/3l4efid5) | 0.682462 | 34.76 | 19.50 |
+
+Median seed 22665 exceeds the validated incumbent by **0.013535**, passing the +0.004 gate; it is the default full-run seed. Ryan's discovery score was 0.680550. All three runs completed the fixed 20-dataset suite, consumed about 2.942e17 FLOPs under the 1e18 cap, and passed source, budget, finite-metric, and Labless submission checks. Fixed-input objective and gradient checks also matched the submitted implementation, including flipped crop alignment. Median loader waits after warmup were 0.20–0.26 ms, with 539–540 tiles/second and 51.4 GB peak GPU memory.
+
+| Probe family | Incumbent | Median reproduction |
+|---|---:|---:|
+| Classification | 0.735040 | 0.733178 |
+| Segmentation | 0.598623 | 0.610466 |
+| Progression | 0.688418 | 0.710721 |
+| Mutation | 0.645485 | 0.641003 |
+| Survival | 0.613149 | 0.652455 |
+| Robustness | 0.626146 | 0.667068 |
+
+Robustness supplies the largest weighted gain (+0.006138), followed by progression, survival, and segmentation; classification and mutation decline slightly. These are whole-recipe comparisons, not ablations of individual changes.
+
 ## Quickstart
 
 Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:
