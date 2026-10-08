@@ -51,7 +51,7 @@ Robustness supplies the largest weighted gain (+0.006138), followed by progressi
 Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:
 
 ```bash
-git clone --branch codex/stack4-salient https://github.com/MedARC-AI/nanopath.git && cd nanopath
+git clone --branch stack4-salient https://github.com/MedARC-AI/nanopath.git && cd nanopath
 uv sync && source .venv/bin/activate
 wandb login  # or: export WANDB_MODE=offline before launching noninteractive SLURM jobs
 
