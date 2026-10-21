@@ -274,8 +274,7 @@ uv sync --no-group simd --group pillow
 - labless source snapshot: `project.output_dir/labless_source`.
 - labless submission payload: `project.output_dir/labless_submission.json`.
 - labless auto-submit token: `${project.output_dir}.labless_autosubmit.json` while a prompt-armed SLURM job is running; the launcher removes it after the post-run submission attempt.
-- checkpoints: rolling `latest.pt` written every `train.save_every` steps under `project.output_dir`, plus one final save at end of run. `save_every: null` (smoke) disables both; probes always get their own short-lived checkpoint regardless.
-- completed runs: after successful evaluation, W&B finish, and any automatic Labless submission, the evaluated backbone (EMA by default) is saved to `final.pt`. Its weights are read back and verified before removing `latest.pt`. This retains config, step, and tile-presentation count alongside the weights; metrics, summaries, and probe results remain. Failed or interrupted runs keep their full checkpoint for recovery. Set `train.keep_full_checkpoint: true` in your YAML to retain full training state after completion instead. `final.pt` supports probing with the saved `probe.model_weights` setting, but cannot resume training because optimizer state and projection heads are removed.
+- checkpoints: rolling `latest.pt` written every `train.save_every` steps under `project.output_dir`, then replaced with backbone-only `final.pt` (not resumable) after successful completion. Set `train.keep_full_checkpoint: true` to retain full state. `save_every: null` disables persistent saves; probes use short-lived checkpoints regardless.
 
 ## Acknowledgements
 
