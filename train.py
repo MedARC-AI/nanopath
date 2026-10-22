@@ -777,6 +777,22 @@ def main():
         wandb_run.summary[key] = value
     wandb_run.finish()
     finish_labless_autosubmit(labless_autosubmit_file, output_dir, repo_dir)
+    # Keep recovery state until evaluation and submission succeed, then retain only
+    # the evaluated backbone. Publish and verify its weights before deleting latest.pt.
+    if save_checkpoints and step > 0 and not train_cfg.get("keep_full_checkpoint", False):
+        state_key = {"ema": "model_ema", "model": "model"}[cfg["probe"]["model_weights"]]
+        backbone = {"model_ema": teacher_backbone, "model": student_backbone}[state_key]
+        payload = {state_key: cpu_state(backbone), "config": cfg, "step": step,
+                   "examples_seen": examples_seen, "checkpoint_type": "backbone_only"}
+        final_path = output_dir / "final.pt"
+        temporary = final_path.with_suffix(".pt.tmp")
+        torch.save(payload, temporary)
+        saved = torch.load(temporary, map_location="cpu", weights_only=False)
+        assert saved[state_key].keys() == payload[state_key].keys()
+        assert all(torch.equal(value, saved[state_key][key]) for key, value in payload[state_key].items())
+        os.replace(temporary, final_path)
+        latest_checkpoint_path.unlink()
+        print(f"{console_prefix()} Checkpoint  retained backbone: final.pt; removed full training state", flush=True)
 
 
 if __name__ == "__main__":
