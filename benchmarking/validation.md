@@ -55,27 +55,6 @@ embeddings:
 Segmentation additionally uses the same present-class per-image F1/Jaccard and
 foreground/background image weighting as the pinned official THUNDER harness.
 
-### Survival solver audit (2026-10-28)
-
-With scikit-survival 0.28.0, independent fits failed in 4/45 scored cells across
-five frozen inputs: ViT-B batch/high-resolution/SPECTRA and ViT-L SPECTRA on
-CPTAC-PDA, plus ViT-B batch on LEOPARD. Those four fits still failed at 1,000,000
-iterations. Descending paths converged in all 45 cells, with at most 716 total
-iterations per fold. For the failing batch-scaling B fold, the penalized objective
-improved from 1.80493 to 1.67971 and the maximum KKT residual from 0.0853 to
-0.000617: the warning was not cosmetic.
-
-The successful CPTAC control retained all nine c-indices exactly. The LEOPARD
-control's mean changed by -0.0001843 (-0.00000691 in the final weighted score).
-Raw-tile production survival checks passed on the two failing B checkpoints and
-the L checkpoint on one H100, matching cached-input scores. Exact-alpha scoring,
-fold order, fatal convergence warnings, fresh state, compatible resume, and
-rejection of version-18 caches also passed. This is not a full-suite validation.
-
-Artifacts: `/data/paul/nanopath/coxnet-audit-20261028/`. Numerical stopping can
-change close risk rankings; maintainers must re-evaluate reference checkpoints
-before mixing solver versions. State version 19 rejects independent-fit caches.
-
 ### CRoMa revision audit (2026-09-05)
 
 CRoMa was evaluated on the existing all-row Camelyon and non-TCGA Tolkach

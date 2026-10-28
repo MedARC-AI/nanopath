@@ -813,8 +813,7 @@ def inline_pathobench_survival(model, mean, std, dataset, device, transform):
             head.set_params(alphas=alpha_max * np.asarray([1.0, *reversed(SURVIVAL_COXNET_ALPHA_FRACTIONS)])).fit(X_train, y[tr])
             for fraction in SURVIVAL_COXNET_ALPHA_FRACTIONS:
                 alpha = alpha_max * fraction
-                score = concordance_index_censored(pool_events[va], pool_days[va], head.predict(X_val, alpha=alpha))[0]
-                folds.append({"alpha_fraction": fraction, "alpha": float(alpha), "alpha_max": float(alpha_max), "val_cindex": float(score), "train_cases": len(tr), "val_cases": len(va)})
+                folds.append({"alpha_fraction": fraction, "alpha": float(alpha), "alpha_max": float(alpha_max), "val_cindex": float(concordance_index_censored(pool_events[va], pool_days[va], head.predict(X_val, alpha=alpha))[0]), "train_cases": len(tr), "val_cases": len(va)})
     val_cindex = float(np.mean([f["val_cindex"] for f in folds]))
     return {
         "val_cindex": val_cindex,
@@ -822,7 +821,6 @@ def inline_pathobench_survival(model, mean, std, dataset, device, transform):
         "coxnet_l1_ratio": SURVIVAL_COXNET_L1_RATIO,
         "coxnet_max_iter": SURVIVAL_COXNET_MAX_ITER,
         "coxnet_standardize": True,
-        "coxnet_warm_start": True,
         "val_cindex_per_alpha_fraction": {str(fraction): float(np.mean([f["val_cindex"] for f in folds if f["alpha_fraction"] == fraction])) for fraction in SURVIVAL_COXNET_ALPHA_FRACTIONS},
         "fold_scores": [float(f["val_cindex"]) for f in folds],
         "folds": folds,

@@ -86,9 +86,8 @@ validation cases. Within each fold:
 `survival_mean_cindex` averages every dataset × alpha fraction × fold c-index.
 No best alpha is selected. Convergence warnings and numerical errors fail the
 evaluation rather than being suppressed or replaced with a fallback result.
-Results record `coxnet_warm_start`; probe state version 19 rejects caches from
-the previous independent-fit solver. See the [solver audit](validation.md#survival-solver-audit-2026-10-28)
-for convergence and score-comparability checks.
+Probe state version 19 rejects caches from the previous independent-fit solver;
+see the [solver audit](https://github.com/MedARC-AI/nanopath/pull/21) before comparing scores across versions.
 
 An absolute alpha scale is not comparable across models with different feature
 dimensions and magnitudes. Fixed fractions of each training fold's `alpha_max`
