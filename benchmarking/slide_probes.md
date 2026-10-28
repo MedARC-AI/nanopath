@@ -77,13 +77,18 @@ validation cases. Within each fold:
 
 1. Fit `StandardScaler` on training cases only and transform train/validation.
 2. Estimate the fold's CoxNet `alpha_max` on training data.
-3. Fit three separate CoxNet heads at `0.1`, `0.2`, and `0.7` times that
-   `alpha_max`, with `l1_ratio=0.5` and `max_iter=100000`.
-4. Report Harrell's validation c-index for every fraction.
+3. Fit one descending CoxNet path at `1.0`, `0.7`, `0.2`, and `0.1` times that
+   `alpha_max`, with `l1_ratio=0.5` and `max_iter=100000`. Each solution initializes
+   the next; this avoids unstable cold starts on wide, correlated embeddings.
+4. Report Harrell's validation c-index at the exact fitted `0.1`, `0.2`, and
+   `0.7` fractions. The `1.0` anchor is not scored.
 
 `survival_mean_cindex` averages every dataset × alpha fraction × fold c-index.
 No best alpha is selected. Convergence warnings and numerical errors fail the
 evaluation rather than being suppressed or replaced with a fallback result.
+Results record `coxnet_warm_start`; probe state version 19 rejects caches from
+the previous independent-fit solver. See the [solver audit](validation.md#survival-solver-audit-2026-10-28)
+for convergence and score-comparability checks.
 
 An absolute alpha scale is not comparable across models with different feature
 dimensions and magnitudes. Fixed fractions of each training fold's `alpha_max`
