@@ -141,12 +141,15 @@ class ViT(nn.Module):
         if self.robust_norm:
             self.register_buffer("rn_fitted", torch.zeros((), dtype=torch.bool))
             self.register_buffer("rn_mu", torch.zeros(2, dim))
-            self.register_buffer("rn_v", torch.zeros(2, 256, dim))
-            self.register_buffer("sb_mu", torch.zeros(2, dim))
-            self.register_buffer("sb_v", torch.zeros(2, 128, dim))
+            self.register_buffer("rn_metric", torch.eye(2 * dim))
+            # Recent teacher CLS features guide DINO targets; buffers survive checkpoints and EMA copies.
+            self.register_buffer("rn_memory", torch.zeros(16384, dim))
+            self.register_buffer("rn_match", torch.zeros(()))
             self.register_buffer("pf_fitted", torch.zeros((), dtype=torch.bool))
             self.register_buffer("pf_mu", torch.zeros(5, dim))
             self.register_buffer("pf_v", torch.zeros(5, 1, dim))
+            self.register_buffer("pf_center", torch.zeros(dim + 256))
+            self.register_buffer("pf_scale", torch.ones(dim + 256))
             # TCGA-fitted typicality contracts atypical tiles toward the corpus mean.
             self.register_buffer("ct_mu", torch.zeros(5 * dim))
             self.register_buffer("ct_R", torch.zeros(64, 5 * dim))
@@ -205,8 +208,13 @@ class ViT(nn.Module):
                     grid = torch.rot90(grid, -k, (1, 2))
                     patches.append(grid.flip(2) if flipped else grid)
                     outputs.append(out)
-            return {"cls": torch.stack([out["cls"] for out in outputs]).mean(0),
-                    "registers": outputs[0]["registers"], "patches": torch.stack(patches).mean(0).flatten(1, 2)}
+            # Scanner/site projection and joint denoising are fitted once as a single linear map.
+            patches = torch.stack(patches).mean(0).flatten(1, 2)
+            pooled = patches.mean(1)
+            with torch.autocast(device_type=x.device.type, enabled=False):
+                joint = (torch.cat([torch.stack([out["cls"] for out in outputs]).mean(0), pooled], -1) - self.rn_mu.flatten()) @ self.rn_metric
+            return {"cls": joint[:, :self.embed_dim], "registers": outputs[0]["registers"],
+                    "patches": 0.5 * (patches - pooled[:, None]) + joint[:, None, self.embed_dim:]}
         return self._forward_tokens(x, masks, checkpoint)
 
     def _forward_tokens(self, x, masks, checkpoint):
@@ -218,12 +226,6 @@ class ViT(nn.Module):
                 x = blk(x)
         x = self.norm(x)
         cls, patches = x[:, 0], x[:, 1 + self.registers :]
-        if not self.training and self.rn_fitted:
-            cls = self._suppress(cls, self.rn_mu[0], self.rn_v[0])
-            patch_mean = patches.mean(1)
-            corrected = self._suppress(patch_mean, self.rn_mu[1], self.rn_v[1])
-            cls = self._suppress(cls, self.sb_mu[0], self.sb_v[0])
-            patches = patches + (self._suppress(corrected, self.sb_mu[1], self.sb_v[1]) - patch_mean).unsqueeze(1)
         return {
             "cls": cls,
             "registers": x[:, 1 : 1 + self.registers],
@@ -238,16 +240,17 @@ class ViT(nn.Module):
         for i, block in enumerate(self.blocks):
             tokens = torch.utils.checkpoint.checkpoint(block, tokens, use_reentrant=False) if checkpoint and self.training else block(tokens)
             if i >= len(self.blocks) - 4:
-                features.append(self.norm(tokens)[:, 1 + self.registers :])
+                # Remove learned affine outliers from the four dense feature taps.
+                features.append(F.layer_norm(tokens, (self.embed_dim,), eps=self.norm.eps)[:, 1 + self.registers :])
         return torch.cat(features, dim=-1)
 
-    # Two-view CLS plus pooled MLP activation; five suppressed taps determine the typicality gate.
+    # D4-averaged CLS plus pooled MLP activation, centered and partially whitened on TCGA.
     def probe_features(self, x):
         if not self.robust_norm:
             return self(x)["cls"]
         views, activations = [], []
         hook = self.blocks[-1].mlp.fc1.register_forward_hook(lambda module, args, out: activations.append(F.gelu(out[:, 0].float())))
-        for view in (x, torch.rot90(x, 2, (-2, -1))):
+        for view in (torch.rot90(v, k, (-2, -1)) for v in (x, x.flip(-1)) for k in range(4)):
             tokens, features = self._prepare_tokens(view), []
             for i, block in enumerate(self.blocks):
                 tokens = block(tokens)
@@ -263,7 +266,7 @@ class ViT(nn.Module):
             gate = torch.sigmoid(((typicality - self.ct_ms[0]) / self.ct_ms[1]).clamp(-30, 30))
             cls = self.rn_mu[0] + gate[:, None] * (cls - self.rn_mu[0])
         activation = torch.stack(activations).mean(0).reshape(len(x), 256, -1).mean(-1)
-        return torch.cat([cls, activation], -1)
+        return (torch.cat([cls, activation], -1) - self.pf_center) * self.pf_scale
 
 
 # Strict-load the model's declared pretrained weights; incompatible layouts fail loudly.

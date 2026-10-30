@@ -10,48 +10,24 @@ This repository is intentionally made to be compatible with [autoresearch](https
 
 **Want to get involved? Join us in the [MedARC Discord](https://discord.gg/tVR4TWnRM9) (find us in #path-fm)!**
 
-## stack4_salient reproduction
+## Joint-power8 validation
 
-Maintainer reproduction of [Ryan Kim’s submission](https://labless.dev/runs/run_sub_418cd40363), based on `robust-huelocal` at `6c142b9`, including Benjamin Warner’s Arrow loader, GPU augmentation, and runtime upgrades.
+This branch starts from Ryan Kim’s `stack4-salient` (`2c6206a`) and independently implements the recipe behind [joint-power8-s22665](https://labless.dev/runs/run_sub_8ffed95604). That discovery checkpoint scored 0.698511; it is excluded from the new three-seed validation.
 
-- Peak LR 0.000125 → 0.0002344; layerwise decay factor 0.7 → 0.8; KDE weight/concentration 0.1/10 → 0.0667/6.667. The original FLOP-based schedule stays unchanged.
-- Four contiguous JEPA blocks are sampled using standardized teacher patch-to-CLS cosine similarity (temperature factor 1.5).
-- Add 4096-prototype iBOT at weight 0.1 and local-to-global, overlap-aligned JEPA regression at weight 0.5, with a zero-initialized output layer.
-- Sample slides uniformly, then tiles uniformly within each slide. Preserve crop scales, hue, FINO, calibration, and feature aggregation from `robust-huelocal`.
+- DINO targets blend toward the closest of 16,384 recent teacher CLS features, weighted by half the squared nonnegative cosine similarity.
+- Classification and slide readouts average all eight D4 views, then use TCGA-fitted centering and partial diagonal whitening, following tmabraham's c69 readout. Dense segmentation taps omit the learned LayerNorm affine parameters.
+- TCGA photometric residuals fit a joint CLS/pooled-patch denoising map. Scanner and site projections are composed into that map; the discovery's eighth power of exponent -2 becomes exponent -16 in the noise eigenbasis. This preserves the intended cosine geometry without repeated matrix powers or inference-time projections.
 
-The implementation uses torchvision crop sampling and batched mask sampling rather than the contributor’s custom crop class and per-image mask loop. These retain the intended distributions but change RNG consumption; this is an independent approximate reproduction, not a bitwise replay. The cross-scale head lives in the existing JEPA predictor. All objective losses and gradient norm are logged separately.
+The training objectives, augmentations, loader, hyperparameters, and 18,085-tile calibration panels otherwise follow `stack4-salient`. All three fresh runs use the same frozen 20-dataset probe suite, a one-million-presentation cap, and a 1e18-FLOP cap. Training uses one H100 and 16 CPUs per seed, with at most three concurrent GPUs. W&B records objective terms, gradient norms, neighbor similarity, and calibration noise ratios.
 
-The fixed 1M cap includes 6,144 photometric and 11,941 site-calibration presentations, leaving 7,671 optimizer steps (999,973 total presentations). `probe.py`, `benchmarking/`, and the probe config are unchanged. Independent seeds 64434, 22665, and 52376 were drawn before training. Promotion requires their median to exceed the incumbent 0.6675094324 by at least 0.004; the discovery run is excluded.
-
-October 8 maintainer results (training source `c8903eb`; one H100 per seed):
-
-| Seed | Final score | Training minutes | Probe minutes |
-|---|---:|---:|---:|
-| [64434](https://labless.dev/runs/run_sub_486cc5aeed) | 0.680775 | 34.84 | 19.51 |
-| [22665](https://labless.dev/runs/run_sub_6da523428f) | **0.681044** | 34.68 | 20.65 |
-| [52376](https://labless.dev/runs/run_sub_76e1604eff) | 0.682462 | 34.76 | 19.50 |
-
-Median seed 22665 exceeds the validated incumbent by **0.013535**, passing the +0.004 gate; it is the default full-run seed. Ryan's discovery score was 0.680550. All three runs completed the fixed 20-dataset suite, consumed about 2.942e17 FLOPs under the 1e18 cap, and passed source, budget, finite-metric, and Labless submission checks. Fixed-input objective and gradient checks also matched the submitted implementation, including flipped crop alignment. Median loader waits after warmup were 0.20–0.26 ms, with 539–540 tiles/second and 51.4 GB peak GPU memory.
-
-All three runs were submitted by `PaulScotti`; median seed 22665 is the validated Labless leader, credited to recipe contributor [@RyanKim17920](https://github.com/RyanKim17920). Each run page links its W&B log and frozen source.
-
-| Probe family | Incumbent | Median reproduction |
-|---|---:|---:|
-| Classification | 0.735040 | 0.733178 |
-| Segmentation | 0.598623 | 0.610466 |
-| Progression | 0.688418 | 0.710721 |
-| Mutation | 0.645485 | 0.641003 |
-| Survival | 0.613149 | 0.652455 |
-| Robustness | 0.626146 | 0.667068 |
-
-Robustness supplies the largest weighted gain (+0.006138), followed by progression, survival, and segmentation; classification and mutation decline slightly. These are whole-recipe comparisons, not ablations of individual changes.
+Seeds **69684, 82449, and 20344** were drawn from OS randomness before training. Their median determines the submitted run; promotion requires at least +0.004 over the validated incumbent. Validation results will be recorded here when all three evaluations finish.
 
 ## Quickstart
 
 Install [uv](https://docs.astral.sh/uv/) first if you don't have it, then:
 
 ```bash
-git clone --branch stack4-salient https://github.com/MedARC-AI/nanopath.git && cd nanopath
+git clone --branch joint-power8 https://github.com/MedARC-AI/nanopath.git && cd nanopath
 uv sync && source .venv/bin/activate
 wandb login  # or: export WANDB_MODE=offline before launching noninteractive SLURM jobs
 

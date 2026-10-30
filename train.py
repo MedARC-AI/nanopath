@@ -1,5 +1,5 @@
 # DINO/JEPA pretraining on TCGA tiles (single-GPU), initialized from DINOv2. The losses are:
-# DINO CLS self-distillation (Sinkhorn-Knopp centred teacher targets),
+# DINO CLS self-distillation (neighbor-guided, Sinkhorn-Knopp centred teacher targets),
 # Salient/cross-scale I-JEPA, iBOT, FINO metadata guidance, and KDE uniformity on
 # L2-normalised CLS tokens. YAML drives the tunable knobs (backbone variant,
 # LR + LR scheduler, drop path, layerwise decay, KDE weight + concentration,
@@ -510,7 +510,13 @@ def main():
         t_temp = torch.tensor(t_temp, device=device)
         with torch.no_grad():
             t = teacher_backbone(gf)
-            t_cls = teacher_dino_head(t["cls"]).chunk(train_cfg["global_views"])
+            # Blend toward the nearest recent teacher feature, trusting close cosine matches most.
+            similarity, index = (F.normalize(t["cls"].float(), dim=-1) @ F.normalize(teacher_backbone.rn_memory, dim=-1).T).max(-1)
+            hint = 0.5 * similarity.clamp_min(0).square()[:, None] * (teacher_backbone.rn_memory[index] - t["cls"].float())
+            t_cls = teacher_dino_head(t["cls"] + hint.to(t["cls"].dtype)).chunk(train_cfg["global_views"])
+            if meta is not None:
+                student_backbone.rn_memory[(step * len(t["cls"]) + torch.arange(len(t["cls"]), device=device)) % 16384] = t["cls"].float()
+                student_backbone.rn_match.copy_(similarity.mean())
             t_prob = sinkhorn_fn(torch.cat((t_cls[1], t_cls[0])), t_temp).view(2, b, -1)
             masks, mask_idx, mask_w = make_block_mask(t, global_grid, dino_cfg["jepa_blocks"], dino_cfg["jepa_block_scale"], dino_cfg["jepa_salient_tau"])
         sg = student_backbone(gf, masks=masks, checkpoint=ckpt)
@@ -779,6 +785,7 @@ def main():
                     "gpu_mem_gb": gpu_mem_gb,
                     "gpu_peak_mem_gb": gpu_peak_mem_gb,
                     "grad_norm": float(grad_norm.detach()),
+                    "neighbor_cosine": float(student_backbone.rn_match),
                 }
                 train_log.update(unique_counts)
                 print(
@@ -867,15 +874,16 @@ def main():
             deltas.extend(robust_features(view) - base_features for view in views)
         base_features, delta_features = torch.cat(bases), torch.cat(deltas)
         directions = torch.linalg.svd((delta_features - delta_features.mean(0)).movedim(1, 0).to(device), full_matrices=False)[2]
+        scanner = [directions[group, :rank].double().cpu() for group, rank in enumerate((32, 256))]
         for model in (student_backbone, teacher_backbone):
-            model.rn_mu.copy_(base_features.mean(0)[:2]); model.rn_v.zero_()
-            model.rn_v[0, :32].copy_(directions[0, :32]); model.rn_v[1].copy_(directions[1, :256])
+            model.rn_mu.copy_(base_features.mean(0)[:2])
             model.pf_mu.copy_(base_features.mean(0)[2:]); model.pf_v.copy_(directions[2:, :1])
             model.rn_fitted.fill_(True); model.pf_fitted.fill_(True)
         print(f"{console_prefix()} RobustNorm  [{step}]  fitted CLS/patch ranks 32/256 + per-tap rank 1 from {len(jpegs)} tiles in {time.monotonic() - started:.0f}s", flush=True)
         # Within-cancer site LDA separates acquisition effects from cancer-type differences.
         site_features = torch.cat([robust_features(torch.stack([resize(Image.open(io.BytesIO(jpeg)).convert("RGB")) for jpeg, _, _ in site_rows[start : start + batch_size]]))[:, :2] for start in range(0, len(site_rows), batch_size)]).double()
         labels = np.array([(cancer, site) for _, cancer, site in site_rows])
+        projections = []
         for group in range(2):
             features = site_features[:, group]
             dim = features.shape[1]
@@ -893,9 +901,25 @@ def main():
             within = (0.9 * within + 0.1 * within.trace() / dim * torch.eye(dim, dtype=torch.float64)) / len(features)
             whitening = torch.linalg.inv(torch.linalg.cholesky(within))
             _, vectors = torch.linalg.eigh(whitening @ (between / len(features)) @ whitening.T)
-            directions = torch.linalg.qr(whitening.T @ vectors[:, -128:].flip(1))[0].T
-            for model in (student_backbone, teacher_backbone):
-                model.sb_mu[group].copy_(features.mean(0)); model.sb_v[group].copy_(directions)
+            directions = torch.linalg.qr(whitening.T @ vectors[:, -128:].flip(1))[0].T.float().double()
+            eye = torch.eye(dim, dtype=torch.float64)
+            projections.append((eye - scanner[group].T @ scanner[group]) @ (eye - directions.T @ directions) * (1.0, 0.5)[group])
+        # Joint signal/noise whitening shares stain evidence across CLS and pooled patches.
+        projection = torch.block_diag(*projections)
+        clean = (base_features[:, :2].double() - base_features[:, :2].double().mean(0)).flatten(1) @ projection
+        residual = delta_features[:, :2].double().flatten(1) @ projection
+        signal = clean.T @ clean / len(clean)
+        values, vectors = torch.linalg.eigh(signal + 0.01 * signal.trace() / len(signal) * torch.eye(len(signal), dtype=torch.float64))
+        whitening, unwhitening = (vectors * values.rsqrt()) @ vectors.T, (vectors * values.sqrt()) @ vectors.T
+        values, vectors = torch.linalg.eigh(whitening @ (residual.T @ residual / len(residual)) @ whitening)
+        values = values.clamp_min(0)
+        # Power eight of the discovery run's exponent -2 map is exponent -16 in this eigenbasis.
+        metric = whitening @ (vectors * (1 + values / values.mean()).pow(-16)) @ vectors.T @ unwhitening
+        metric *= (clean.square().sum() / (clean @ metric).square().sum()).sqrt()
+        wandb_run.log({"calibration/joint_noise_ratio": float(residual.square().mean() / clean.square().mean()),
+                       "calibration/conditioned_joint_noise_ratio": float((residual @ metric).square().mean() / (clean @ metric).square().mean())}, step=step, commit=False)
+        for model in (student_backbone, teacher_backbone):
+            model.rn_metric.copy_(projection @ metric)
         # Fit typicality on raw taps, then standardize its distance after rank-one suppression.
         taps = base_features[:, 2:].flatten(1).double()
         ct_mu = taps.mean(0)
@@ -907,6 +931,18 @@ def main():
             model.ct_mu.copy_(ct_mu); model.ct_R.copy_(ct_R); model.ct_lam.copy_(ct_lam)
             model.ct_ms.copy_(torch.stack([typicality.mean(), typicality.std() + 1e-8]))
         print(f"{console_prefix()} Calibration  site rank 128 from {len(site_rows)} tiles; typicality rank 64 from {robust_norm_tiles} tiles", flush=True)
+        # Reuse the budgeted TCGA panels to fit c69-style centering and partial diagonal whitening.
+        readout_jpegs, features = jpegs + [jpeg for jpeg, _, _ in site_rows], []
+        with torch.no_grad(), autocast:
+            for start in range(0, len(readout_jpegs), batch_size):
+                images = torch.stack([resize(Image.open(io.BytesIO(jpeg)).convert("RGB")) for jpeg in readout_jpegs[start : start + batch_size]]).to(device)
+                features.append(teacher_backbone.probe_features((images - mean) / std).double().cpu())
+        features = torch.cat(features)
+        variance = features.var(0)
+        scale = (variance + 0.1 * variance.mean()).pow(-0.25)
+        scale *= (variance.sum() / (variance * scale.square()).sum()).sqrt()
+        for model in (student_backbone, teacher_backbone):
+            model.pf_center.copy_(features.mean(0)); model.pf_scale.copy_(scale)
         # Persist the fitted buffers even if this step already had a periodic save.
         if save_checkpoints:
             save_latest_checkpoint(step)
