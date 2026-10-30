@@ -20,7 +20,15 @@ This branch starts from Ryan Kim’s `stack4-salient` (`2c6206a`) and independen
 
 The training objectives, augmentations, loader, hyperparameters, and 18,085-tile calibration panels otherwise follow `stack4-salient`. All three fresh runs use the same frozen 20-dataset probe suite, a one-million-presentation cap, and a 1e18-FLOP cap. Training uses one H100 and 16 CPUs per seed, with at most three concurrent GPUs. W&B records objective terms, gradient norms, neighbor similarity, and calibration noise ratios.
 
-Seeds **69684, 82449, and 20344** were drawn from OS randomness before training. Their median determines the submitted run; promotion requires at least +0.004 over the validated incumbent. Validation results will be recorded here when all three evaluations finish.
+Seeds **69684, 82449, and 20344** were drawn from OS randomness before training. All three completed the full probe suite:
+
+| Training seed | Final score | W&B |
+| --- | ---: | --- |
+| 69684 | 0.687869 | [run](https://wandb.ai/paulscotti/nanopath/runs/xqesg0eq) |
+| **20344 (median)** | **0.694248** | [run](https://wandb.ai/paulscotti/nanopath/runs/jl1v5lvg) |
+| 82449 | 0.696118 | [run](https://wandb.ai/paulscotti/nanopath/runs/5iuaky1u) |
+
+The median, submitted as [joint-power8](https://labless.dev/runs/run_sub_2d21371b50), improves on the validated [stack4_salient incumbent](https://labless.dev/runs/run_sub_6da523428f) (0.681044) by **0.013204**, exceeding the +0.004 promotion margin. `configs/main.yaml` defaults to the median seed. Each run completed 7,671 steps and 999,973 tile presentations in about 35 training minutes plus 24–26 probe minutes, using about 2.94e17 training FLOPs. All logged metrics were finite, and all 14 locked benchmark files matched the starting branch. A separate frozen-checkpoint check reproduced discovery classification and segmentation features exactly; composing the robustness projections changed cohort scores by at most 0.000054.
 
 ## Quickstart
 
