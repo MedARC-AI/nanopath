@@ -69,7 +69,7 @@ Encoder inference uses fp16 autocast and caches classification/slide embeddings 
 | [`surgen.json`](surgen.json) | SurGen fold-0 development-pool slide labels |
 | [`leopard_bcr.json`](leopard_bcr.json) | LEOPARD public-training cohort and fixed folds |
 | [`cptac_pda_os.json`](cptac_pda_os.json) | CPTAC-PDA fold-0 development-pool survival labels and fixed folds |
-| [Proxy-fidelity data](proxy_fidelity_v2.csv) | Frozen 13- and 20-model proxy/official comparison values |
+| [Proxy-fidelity data](proxy_fidelity_v2.csv) | Frozen proxy/official comparison values for 23 models |
 | [Random-feature audit](random_dinov2_s_v2.csv) | Ten-seed predictive and CRoMa audit |
 | [classification.md](classification.md) | Dataset provenance, sampling, head math, and THUNDER deviations |
 | [segmentation.md](segmentation.md) | Source boundary, decoder, loss, metric, and PanNuke caveat |
