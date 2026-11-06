@@ -447,7 +447,8 @@ def collect_source_context(main_ref: dict[str, str], summary: dict[str, Any], so
         "source_changed_files": source_changed_files,
         "new_source_files": new_source_files,
         "diff_summary": main_diff["summary"] if main_diff else {"files": 0, "added": 0, "removed": 0},
-        "locked_path_changes": [path for path in source_changed_files if path == "probe.py" or path.startswith("benchmarking/")],
+        # Evaluation code must match current GitHub main, including changes the contributor committed.
+        "locked_path_changes": [path for path in changed_source_paths(main_ref["commit"], source_dir, config_rel) if path == "probe.py" or path.startswith("benchmarking/")],
         "policy_errors": policy_errors,
     }
     if main_diff:
