@@ -172,22 +172,25 @@ Across those 12 pre-existing composite rows, the final score never places a
 studied nanopath checkpoint above GigaPath or H-Optimus-0 when the composite
 places it below that baseline.
 
-An expanded 22-model table adds H0-mini, DINOv2-S/B/L/G, Kaiko-S/16, and
+An expanded 24-model table adds H0-mini, DINOv2-S/B/L/G, Kaiko-S/16, and
 GigaPath-Flash, plus the validated GuruTurbo1.0 (seed 3539) and robust-huelocal
-(seed 7974) medians:
+(seed 7974) medians, and the unvalidated
+[joint-power8-s22665](https://labless.dev/runs/run_sub_8ffed95604) and
+[PCGrad (seed 20344)](https://labless.dev/runs/run_sub_f2d430a19a) discovery checkpoints:
 
-| Comparison, 22 models | Pearson | Kendall |
+| Comparison, 24 models | Pearson | Kendall |
 |---|---:|---:|
-| Classification / THUNDER | 0.986 | 0.948 |
-| Segmentation / THUNDER | 0.869 | 0.735 |
-| Final score / THUNDER classification + segmentation | 0.907 | 0.740 |
-| Final score / HEST | 0.801 | 0.636 |
-| Final score / CPTAC classification | 0.800 | 0.697 |
+| Classification / THUNDER | 0.983 | 0.935 |
+| Segmentation / THUNDER | 0.868 | 0.698 |
+| Final score / THUNDER classification + segmentation | 0.827 | 0.638 |
+| Final score / HEST | 0.623 | 0.464 |
+| Final score / CPTAC classification | 0.807 | 0.688 |
 
 The exact comparison input is
 [proxy-fidelity data](proxy_fidelity_v2.csv). Final scores use the assembled
 fixed result, including PanNuke and both SegPath tasks. THUNDER segmentation
-uses complete same-checkpoint results for all 22 models.
+uses complete same-checkpoint results for all 24 models. The README figures
+highlight PCGrad in red and joint-power8 in green.
 
 ## Random-feature null audit
 

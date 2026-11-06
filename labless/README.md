@@ -90,7 +90,8 @@ python baselines/dinov2_small_baseline.py configs/main.yaml
 ```
 
 The submit script detects `summary.family == "baseline"` and marks the run as
-`tier=baseline`. Labless uses GenBio-PathFM and Virchow as pathology references;
+`tier=baseline`. Baseline runs start unvalidated like any other; a maintainer marks
+them reference. Labless uses GenBio-PathFM and Virchow as pathology references;
 DINOv2 giant and small provide natural-image references. Other baselines,
 including GigaPath, can stay in the repo README without becoming Labless
 reference rows. The nanopath leaderboard still ranks validated completed full
@@ -123,7 +124,9 @@ payload locally without signing in or posting.
 ## Validation rules
 
 The benchmark score is only meaningful when evaluation stays fixed. The script
-marks submissions invalid if the saved source snapshot changed:
+marks submissions invalid if the saved source snapshot's locked paths differ from
+current GitHub `main`, including changes committed on your branch, so pull `main`
+when it changes them. These paths are locked:
 
 - `probe.py`
 - anything under `benchmarking/`
