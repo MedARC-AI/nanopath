@@ -12,12 +12,13 @@ about proxy fidelity, not permission to tune weights or datasets against test
 outcomes.
 
 The records below were measured under protocol v2, whose robustness probe read
-CLS concatenated with the mean patch token. They have not been repeated for
-v3's CLS-only robustness readout.
+CLS concatenated with the mean patch token and whose final score weighted the
+six families 30/15/17.5/15/7.5/15. They have not been repeated for v3's CLS-only
+robustness readout and weights.
 
 The selected THUNDER manifest SHA-256 is
 `fc9a92587f78078c1d3c880f95a795ff229affb61c67de1a7886221dc99a0b8b`.
-The 30/15/17.5/15/7.5/15 weights are a fixed scoring-policy choice.
+The 40/20/10/10/5/15 weights are a fixed scoring-policy choice.
 
 ## Leakage and manifest audit
 
@@ -125,10 +126,10 @@ Across six three-seed groups (18 completed checkpoints), UCLA's pooled
 within-group sample SD is 0.011269. The groups cover related main,
 robust-norm and drop-local recipes on the same 90-slide cohort.
 Observed within-group AUC ranges are 0.015750–0.025879, contributing
-0.002756–0.004529 to the weighted score. Repeated splits do not eliminate
+0.001575–0.002588 to the weighted score. Repeated splits do not eliminate
 training-seed variability or the need for independent training runs.
 
-Seven 1,000-repeat checks yield weighted SD 0.00030–0.00050 across disjoint
+Seven 1,000-repeat checks yield weighted SD 0.00017–0.00029 across disjoint
 100-repeat blocks. One hundred complete-protocol label permutations each
 for main and UNI2-h average 0.48908 and 0.49258 AUC. The 300-fit head takes
 about 3 seconds for main and at most 27 seconds across the 20 reference
