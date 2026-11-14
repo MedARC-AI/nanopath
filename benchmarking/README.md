@@ -56,7 +56,7 @@ We try to reduce overlap between our pretraining dataset (TCGA) and downstream d
 
 ## Frozen-backbone contract
 
-`nanopath-evals` operates on frozen representations from one eval-mode forward pass per tile. Protocol v3 fixes the readout of nanopath models: classification and slide probes consume the final-layer CLS token `model(x)["cls"]`, segmentation consumes the final-layer patch tokens `model(x)["patches"]` on the native patch grid, and CRoMa consumes CLS concatenated with the mean patch token. Before probing, `probe.py` runs a fixed 4-tile batch and asserts that every weight-carrying module runs once per pass on exactly those tiles, that both outputs are `embed_dim` wide, and that eval-mode output equals train-mode output. Frozen baselines keep their published `probe_features()` / `encode_image()` adapters; CRoMa uses the same CLS-plus-mean-patch adapter for every model.
+`nanopath-evals` operates on frozen representations from one eval-mode forward pass per tile. Protocol v3 fixes the readout of nanopath models: classification, slide and CRoMa probes consume the final-layer CLS token `model(x)["cls"]`, and segmentation consumes the final-layer patch tokens `model(x)["patches"]` on the native patch grid. Before probing, `probe.py` runs a fixed 4-tile batch and asserts that every weight-carrying module runs once per pass on exactly those tiles, that both outputs are `embed_dim` wide, and that eval-mode output equals train-mode output. Frozen baselines keep their published `probe_features()` / `encode_image()` adapters, and CRoMa reads `probe_features()` like the other pooled probes.
 
 Encoder inference uses fp16 autocast and caches classification/slide embeddings as float32. Segmentation patch vectors are cached as per-vector signed int8 plus fp16 scales. See [validation.md](validation.md) for release timing and validation evidence.
 
@@ -74,5 +74,5 @@ Encoder inference uses fp16 autocast and caches classification/slide embeddings 
 | [classification.md](classification.md) | Dataset provenance, sampling, head math, and THUNDER deviations |
 | [segmentation.md](segmentation.md) | Source boundary, decoder, loss, metric, and PanNuke caveat |
 | [slide_probes.md](slide_probes.md) | Tile caching, pooling, folds, AUROC, and survival protocols |
-| [pathorob.md](pathorob.md) | Fixed adapter and CRoMa neighbor-margin computation |
+| [pathorob.md](pathorob.md) | Readout and CRoMa neighbor-margin computation |
 | [validation.md](validation.md) | Implementation parity, runtime, null checks, and official-suite fidelity |

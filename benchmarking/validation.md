@@ -11,6 +11,10 @@ The first is an implementation-parity check. The second is post-freeze evidence
 about proxy fidelity, not permission to tune weights or datasets against test
 outcomes.
 
+The records below were measured under protocol v2, whose robustness probe read
+CLS concatenated with the mean patch token. They have not been repeated for
+v3's CLS-only robustness readout.
+
 The selected THUNDER manifest SHA-256 is
 `fc9a92587f78078c1d3c880f95a795ff229affb61c67de1a7886221dc99a0b8b`.
 The 30/15/17.5/15/7.5/15 weights are a fixed scoring-policy choice.

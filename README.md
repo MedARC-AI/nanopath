@@ -12,7 +12,7 @@ This repository is intentionally made to be compatible with [autoresearch](https
 
 ## stack4_salient_v3
 
-[stack4_salient](https://github.com/MedARC-AI/nanopath/tree/stack4-salient) by [@RyanKim17920](https://github.com/RyanKim17920), ported to nanopath-evals v3, where its validated checkpoint scores **0.6604** (three seeds: 0.6604, 0.6613, 0.6688). Training is unchanged. The v2 readout (D4 test-time augmentation, fused last-four-block patch features, two-view CLS with MLP-activation concatenation, post-training scanner/site suppression and typicality gating) and its calibration pass are removed, so the probe reads the plain final-layer CLS and patch tokens. v2 results for the original readout are in the `stack4-salient` branch README.
+[stack4_salient](https://github.com/MedARC-AI/nanopath/tree/stack4-salient) by [@RyanKim17920](https://github.com/RyanKim17920), ported to nanopath-evals v3, where its validated checkpoint scores **0.6605** (three seeds: 0.6605, 0.6613, 0.6688). Training is unchanged. The v2 readout (D4 test-time augmentation, fused last-four-block patch features, two-view CLS with MLP-activation concatenation, post-training scanner/site suppression and typicality gating) and its calibration pass are removed, so the probe reads the plain final-layer CLS and patch tokens. v2 results for the original readout are in the `stack4-salient` branch README.
 
 The recipe, relative to `robust-huelocal` at `6c142b9` (including Benjamin Warner's Arrow loader, GPU augmentation, and runtime upgrades):
 
@@ -76,15 +76,15 @@ The `main` branch uses the `lr-and-curation` recipe. Scores are v3 re-evaluation
 
 | # | Description | final score | classification | segmentation | progression | mutation | survival | robustness | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | [stack4_salient](https://github.com/MedARC-AI/nanopath/tree/stack4_salient_v3) | **0.6604** | 0.7488 | 0.6011 | 0.6090 | 0.6239 | 0.6539 | 0.6425 | [@RyanKim17920](https://github.com/RyanKim17920) |
-| 2 | [robust-huelocal](https://github.com/MedARC-AI/nanopath/tree/robust-huelocal) | 0.6561 | 0.7423 | 0.5981 | 0.6511 | 0.6288 | 0.6179 | 0.5940 | [@anishdulal](https://github.com/anishdulal) |
-| 3 | [GuruTurbo1.0](https://github.com/MedARC-AI/nanopath/tree/GuruTurbo1.0) | 0.6519 | 0.7449 | 0.6027 | 0.6111 | 0.6296 | 0.6326 | 0.5947 | [@aajing](https://github.com/aajing) |
-| 4 | [jepa-fino](https://github.com/MedARC-AI/nanopath/tree/jepa-fino-v2) | 0.6485 | 0.7383 | 0.6024 | 0.6010 | 0.6194 | 0.6215 | 0.6132 | [@ml-and-ml](https://github.com/ml-and-ml) |
-| 5 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm-v2) | 0.6471 | 0.7387 | 0.5968 | 0.6351 | 0.5915 | 0.6115 | 0.6018 | [@anishdulal](https://github.com/anishdulal) |
-| 6 | block-strided-cls | 0.6458 | 0.7362 | 0.5963 | 0.6047 | 0.6056 | 0.6376 | 0.6069 | @RyanKim17920 |
-| 7 | I-JEPA contig patch | 0.6446 | 0.7218 | 0.5877 | 0.6238 | 0.6151 | 0.6173 | 0.6143 | @NimaAsh |
-| 8 | [pathway-tta](https://github.com/MedARC-AI/nanopath/tree/pathway-tta) | 0.6444 | 0.7395 | 0.5988 | 0.6214 | 0.6060 | 0.6086 | 0.5833 | [@achi2023](https://github.com/achi2023) |
-| 9 | [lr-and-curation](https://github.com/MedARC-AI/nanopath) | 0.6351 | 0.7048 | 0.5948 | 0.6047 | 0.6026 | 0.6201 | 0.6115 | @nevasini1 |
+| 1 | [stack4_salient](https://github.com/MedARC-AI/nanopath/tree/stack4_salient_v3) | **0.6605** | 0.7488 | 0.6011 | 0.6090 | 0.6239 | 0.6539 | 0.6429 | [@RyanKim17920](https://github.com/RyanKim17920) |
+| 2 | [robust-huelocal](https://github.com/MedARC-AI/nanopath/tree/robust-huelocal) | 0.6576 | 0.7423 | 0.5981 | 0.6511 | 0.6288 | 0.6179 | 0.6038 | [@anishdulal](https://github.com/anishdulal) |
+| 3 | [GuruTurbo1.0](https://github.com/MedARC-AI/nanopath/tree/GuruTurbo1.0) | 0.6537 | 0.7449 | 0.6027 | 0.6111 | 0.6296 | 0.6326 | 0.6069 | [@aajing](https://github.com/aajing) |
+| 4 | [jepa-fino](https://github.com/MedARC-AI/nanopath/tree/jepa-fino-v2) | 0.6524 | 0.7383 | 0.6024 | 0.6010 | 0.6194 | 0.6215 | 0.6392 | [@ml-and-ml](https://github.com/ml-and-ml) |
+| 5 | block-strided-cls | 0.6501 | 0.7362 | 0.5963 | 0.6047 | 0.6056 | 0.6376 | 0.6353 | @RyanKim17920 |
+| 6 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm-v2) | 0.6478 | 0.7387 | 0.5968 | 0.6351 | 0.5915 | 0.6115 | 0.6064 | [@anishdulal](https://github.com/anishdulal) |
+| 7 | I-JEPA contig patch | 0.6476 | 0.7218 | 0.5877 | 0.6238 | 0.6151 | 0.6173 | 0.6342 | @NimaAsh |
+| 8 | [pathway-tta](https://github.com/MedARC-AI/nanopath/tree/pathway-tta) | 0.6446 | 0.7395 | 0.5988 | 0.6214 | 0.6060 | 0.6086 | 0.5846 | [@achi2023](https://github.com/achi2023) |
+| 9 | [lr-and-curation](https://github.com/MedARC-AI/nanopath) | 0.6357 | 0.7048 | 0.5948 | 0.6047 | 0.6026 | 0.6201 | 0.6158 | @nevasini1 |
 
 The stack4_salient, robust-huelocal, GuruTurbo1.0, and pathway-tta rows are the median-seed checkpoints of their three-seed v2 validations.
 
@@ -92,20 +92,20 @@ The stack4_salient, robust-huelocal, GuruTurbo1.0, and pathway-tta rows are the 
 
 | # | Name | Description | final score | classification | segmentation | progression | mutation | survival | robustness |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|
-| 1 | GenBio-PathFM | GenBio-PathFM ViT-G/16 | **0.6926** | 0.8213 | 0.6100 | 0.6630 | 0.6232 | 0.6312 | 0.6525 |
-| 2 | UNI-2-h | MahmoodLab UNI-2-h ViT-H/14 | 0.6876 | 0.8161 | 0.6323 | 0.6771 | 0.6408 | 0.6105 | 0.5837 |
-| 3 | Midnight-12K | Kaiko Midnight-12K ViT-G/14 | 0.6865 | 0.7761 | 0.6326 | 0.6669 | 0.6170 | 0.6100 | 0.6918 |
-| 4 | H-optimus-0 | H-optimus-0 ViT-G/14-reg | 0.6785 | 0.8082 | 0.5916 | 0.6683 | 0.6485 | 0.6059 | 0.5838 |
-| 5 | H0-mini | Bioptimus H0-mini ViT-B/14-reg | 0.6774 | 0.7956 | 0.6371 | 0.6387 | 0.6026 | 0.5945 | 0.6429 |
+| 1 | GenBio-PathFM | GenBio-PathFM ViT-G/16 | **0.6925** | 0.8213 | 0.6100 | 0.6630 | 0.6232 | 0.6312 | 0.6518 |
+| 2 | Midnight-12K | Kaiko Midnight-12K ViT-G/14 | 0.6865 | 0.7761 | 0.6326 | 0.6669 | 0.6170 | 0.6100 | 0.6918 |
+| 3 | UNI-2-h | MahmoodLab UNI-2-h ViT-H/14 | 0.6862 | 0.8161 | 0.6323 | 0.6771 | 0.6408 | 0.6105 | 0.5745 |
+| 4 | H0-mini | Bioptimus H0-mini ViT-B/14-reg | 0.6774 | 0.7956 | 0.6371 | 0.6387 | 0.6026 | 0.5945 | 0.6429 |
+| 5 | H-optimus-0 | H-optimus-0 ViT-G/14-reg | 0.6770 | 0.8082 | 0.5916 | 0.6683 | 0.6485 | 0.6059 | 0.5737 |
 | 6 | Virchow | Paige/Microsoft Virchow ViT-H/14 | 0.6761 | 0.7728 | 0.6326 | 0.6460 | 0.6291 | 0.6173 | 0.6379 |
-| 7 | GigaPath | Prov-GigaPath tile encoder ViT-G/16 | 0.6659 | 0.7948 | 0.6197 | 0.6663 | 0.6130 | 0.5802 | 0.5492 |
-| 8 | GigaPath-Flash | Prov-GigaPath-Flash tile encoder ViT-S/16 | 0.6496 | 0.7742 | 0.5569 | 0.6592 | 0.5796 | 0.6122 | 0.5703 |
-| 9 | Kaiko-S/16 | Kaiko pathology ViT-S/16 | 0.6420 | 0.7737 | 0.6060 | 0.6025 | 0.5539 | 0.5907 | 0.5741 |
-| 10 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.6327 | 0.6640 | 0.6306 | 0.6435 | 0.5829 | 0.6058 | 0.6229 |
-| 11 | DINOv2-G/14 | Meta DINOv2-G/14-reg | 0.6043 | 0.6804 | 0.5753 | 0.5320 | 0.6038 | 0.6288 | 0.5534 |
-| 12 | DINOv2-L/14 | Meta DINOv2-L/14-reg | 0.5975 | 0.6632 | 0.5667 | 0.5445 | 0.6005 | 0.6009 | 0.5540 |
-| 13 | DINOv2-S/14 | Meta DINOv2-S/14-reg | 0.5943 | 0.6480 | 0.5665 | 0.5352 | 0.6202 | 0.6220 | 0.5437 |
-| 14 | DINOv2-B/14 | Meta DINOv2-B/14-reg | 0.5920 | 0.6500 | 0.5691 | 0.5364 | 0.6062 | 0.6015 | 0.5449 |
+| 7 | GigaPath | Prov-GigaPath tile encoder ViT-G/16 | 0.6643 | 0.7948 | 0.6197 | 0.6663 | 0.6130 | 0.5802 | 0.5391 |
+| 8 | GigaPath-Flash | Prov-GigaPath-Flash tile encoder ViT-S/16 | 0.6464 | 0.7742 | 0.5569 | 0.6592 | 0.5796 | 0.6122 | 0.5493 |
+| 9 | Kaiko-S/16 | Kaiko pathology ViT-S/16 | 0.6419 | 0.7737 | 0.6060 | 0.6025 | 0.5539 | 0.5907 | 0.5735 |
+| 10 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.6302 | 0.6640 | 0.6306 | 0.6435 | 0.5829 | 0.6058 | 0.6062 |
+| 11 | DINOv2-G/14 | Meta DINOv2-G/14-reg | 0.6033 | 0.6804 | 0.5753 | 0.5320 | 0.6038 | 0.6288 | 0.5469 |
+| 12 | DINOv2-L/14 | Meta DINOv2-L/14-reg | 0.5962 | 0.6632 | 0.5667 | 0.5445 | 0.6005 | 0.6009 | 0.5454 |
+| 13 | DINOv2-S/14 | Meta DINOv2-S/14-reg | 0.5942 | 0.6480 | 0.5665 | 0.5352 | 0.6202 | 0.6220 | 0.5430 |
+| 14 | DINOv2-B/14 | Meta DINOv2-B/14-reg | 0.5914 | 0.6500 | 0.5691 | 0.5364 | 0.6062 | 0.6015 | 0.5408 |
 
 Baseline rows are frozen reference checkpoints evaluated with the same probe suite. They help calibrate the plot, but pathology-specific baselines are not valid initialization points for nanopath leaderboard submissions. The reference scripts live in `baselines/`.
 
@@ -171,16 +171,10 @@ Intensive preprocessing before model training starts, such as tile extraction, d
 **Probe evaluation and readout must be untouched**
 - All of `probe.py` and `benchmarking/`.
 - All probe config variables in `configs/main.yaml`.
-- The readout. The probe calls `model(x)` once per tile in eval mode and reads only `cls` and `patches` (CRoMa uses `cls` plus the mean of `patches`). That forward must be the same single pass the pretraining loss trained: final layer only, `embed_dim` wide, no extra views or passes, no eval-only branches, no statistics fitted after training, and nothing conditioned on the dataset or task. `probe.py` asserts single-pass execution, output shapes, and train/eval equality before probing; a run that passes the asserts but breaks this rule is marked invalid. The rest of `model.py` is yours to change.
+- The readout. The probe calls `model(x)` once per tile in eval mode and reads only `cls` (classification, slide and CRoMa probes) and `patches` (segmentation). That forward must be the same single pass the pretraining loss trained: final layer only, `embed_dim` wide, no extra views or passes, no eval-only branches, no statistics fitted after training, and nothing conditioned on the dataset or task. `probe.py` asserts single-pass execution, output shapes, and train/eval equality before probing; a run that passes the asserts but breaks this rule is marked invalid. The rest of `model.py` is yours to change.
 
 **Pretraining must not use pathology-specific pretrained models**
 Non-pathology pretrained models such as DINOv2 may be used for initialization, teachers, data curation, or preprocessing. Pathology-trained checkpoints such as H-optimus-0 or OpenMidnight may not initialize weights or guide training, but they may be used before and separately from training for TCGA-tile curation or preprocessing.
-
-### Labless for live tracking
-
-Full training runs auto-submit to the labless live tracker if certain criteria are met (see [How to submit to the leaderboard](#how-to-submit-to-the-leaderboard)).
-
-The script reads `summary.json` and `metrics.jsonl`, reviews `output_dir/labless_source` rather than your current working tree, and posts the local payload in `labless_submission.json` after GitHub device sign-in succeeds. W&B can be online or offline; online runs add a public W&B link, while source review always comes from the local snapshot. `AGENTS.md` and `CLAUDE.md` are excluded from Labless source packaging. The labless website, run log, and plot update automatically.
 
 ## Repository layout
 
@@ -245,21 +239,7 @@ pack_from_jpeg_dir(jpeg_dir, jpeg_dir / 'manifest.txt', Path('/data/nanopath_arr
 Packing computes tissue fractions from the saved JPEG bytes and includes the required metadata.
 Point `data.dataset_dir` in both configs at the packed Arrow directory before training.
 
-## Running
-
-Smoke (short training + full probe):
-
-```bash
-./submit/train_1gpu.sbatch configs/smoke.yaml
-# or directly on a GPU machine: `python train.py configs/smoke.yaml`
-```
-
-Full main `nanopath` recipe:
-
-```bash
-./submit/train_1gpu.sbatch configs/main.yaml
-# or directly on a GPU machine: `python train.py configs/main.yaml`
-```
+## Running on SLURM
 
 `submit/train_1gpu.sbatch` is a prompt-aware launcher when run directly: it collects Labless run name, notes, and GitHub device login before submitting itself to SLURM, then auto-submits eligible completed full runs. Calling `sbatch submit/train_1gpu.sbatch ...` bypasses that prompt and trains without auto-submit. `configs/main.yaml` is sized for an 80 GB H100 at `train.batch_size: 128`. On smaller cards you can set `train.activation_checkpointing: true` and lower `train.batch_size` if you OOM.
 

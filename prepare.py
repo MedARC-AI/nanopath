@@ -4,7 +4,7 @@
 #   - data.dataset_dir/fino_meta.json         (FINO patient metadata)
 #   - probe.dataset_roots[name] for each configured probe dataset
 #   - pretrained weights for cfg["model"]["type"] (torch.hub cache)
-# Missing Arrow tiles and protocol-v2 evaluation datasets are downloaded
+# Missing Arrow tiles and evaluation datasets are downloaded
 # from their separate MedARC Hugging Face repositories.
 # download_TCGA.sh and prepare_tiles / pack_from_jpeg_dir are only relevant if
 # you want to regenerate the tile dataset from raw SVS files; see README.

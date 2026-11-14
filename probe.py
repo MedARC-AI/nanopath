@@ -1,7 +1,7 @@
 # Inline downstream probes. Protocol v3 weights classification/segmentation/
 # progression/mutation/survival/robustness at 30/15/17.5/15/7.5/15 percent and
 # fixes the nanopath readout to one eval forward per tile: final-layer CLS for
-# pooled probes, patch tokens for segmentation, CLS + mean patch for CRoMa.
+# pooled probes and CRoMa, patch tokens for segmentation.
 #
 # train.py can snapshot a probe checkpoint at each FLOP milestone to run
 # this file as a subprocess (`python probe.py req.json`), whereby training pauses,
@@ -599,8 +599,8 @@ def croma_score(embeddings, meta, device):
     }
 
 
-# CRoMa over held-out Camelyon + Tolkach ESCA. Every model, baselines included, is read
-# as PathoROB's final CLS plus mean patch tokens.
+# CRoMa over held-out Camelyon + Tolkach ESCA, on the same probe_features() readout as the
+# tile and slide probes: final-layer CLS for nanopath models.
 def inline_pathorob(model, mean, std, device, transform):
     import io
     import numpy as np
@@ -631,8 +631,7 @@ def inline_pathorob(model, mean, std, device, transform):
             for batch in loader:
                 x = batch.to(device, non_blocking=True)
                 with autocast:
-                    o = model((x - mean) / std)
-                    feat = torch.cat([o["cls"], o["patches"].mean(dim=1)], dim=-1)
+                    feat = model.probe_features((x - mean) / std)
                 embs.append(feat.float().cpu().numpy())
         out[name] = croma_score(np.concatenate(embs), meta, device)
     return out, time.monotonic() - started_at

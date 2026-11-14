@@ -197,11 +197,5 @@ mark the run whose commit is on `main`. Failed runs are not accepted.
 The v3 plot was seeded by re-evaluating retained v2 checkpoints with the v3
 readout; v2 runs without retained weights stay on the legacy v2 plot only.
 
-On the legacy v2 plot, runs without retained weights are marked as estimates. Their
-robustness is the original quality-adjusted value minus 0.3063356348369218, the
-mean difference measured on the six plotted nanopath checkpoints (SD 0.01637).
-The five predictive components are unchanged and the new six-family weights
-are applied. Estimated points are labeled with ≈ and cannot establish a leader.
-New submissions must provide measured `croma_mean` and satisfy
-`robustness_mean == (1 + croma_mean) / 2`; historical estimates are a maintainer
-migration exception. Original scores remain available in each run's metrics.
+Submissions must provide measured `croma_mean` and satisfy
+`robustness_mean == (1 + croma_mean) / 2`.
