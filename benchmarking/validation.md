@@ -112,8 +112,7 @@ H100, not a promise for arbitrary hardware.
 
 A maintainer reruns promising candidates with three different randomly
 selected training seeds. The median run must beat the incumbent by at least
-**0.004** to become the validated leader. The discovery run is excluded;
-`robust-norm-s9876` is the approved exception. This is a fixed promotion
+**0.004** to become the validated leader. The discovery run is excluded. This is a fixed promotion
 policy, not a margin recalculated from each candidate's measured variance.
 
 ### Progression stability

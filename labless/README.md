@@ -167,7 +167,7 @@ Labless rejects scores that do not match those submitted components.
 Agents can crawl the public experiment ledger directly with the JSON API:
 
 ```bash
-curl -fsS "https://api.labless.dev/api/nano-projects/nanopath-v2/experiment-log?limit=100" \
+curl -fsS "https://api.labless.dev/api/nano-projects/nanopath-v3/experiment-log?limit=100" \
   | jq '.runs[] | {run_id, title, validation, metric_value, summary}'
 ```
 
@@ -191,10 +191,13 @@ and raw data are not posted.
 New completed full runs appear as `unvalidated`. A maintainer reruns promising
 candidates three times with different randomly selected training seeds. The
 median run becomes validated leader if it beats the incumbent by at least
-0.004; `robust-norm-s9876` is the approved exception. Maintainers separately
+0.004. Maintainers separately
 mark the run whose commit is on `main`. Failed runs are not accepted.
 
-Historical v2 runs without retained weights are marked as estimates. Their
+The v3 plot was seeded by re-evaluating retained v2 checkpoints with the v3
+readout; v2 runs without retained weights stay on the legacy v2 plot only.
+
+On the legacy v2 plot, runs without retained weights are marked as estimates. Their
 robustness is the original quality-adjusted value minus 0.3063356348369218, the
 mean difference measured on the six plotted nanopath checkpoints (SD 0.01637).
 The five predictive components are unchanged and the new six-family weights

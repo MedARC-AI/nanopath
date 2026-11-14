@@ -24,7 +24,7 @@ Coding guidelines:
 Experiment and benchmark discipline:
 - Validate opinions experimentally whenever feasible. Run code, tests, probes, or short jobs that directly support the conclusion.
 - Use downstream probing as the main comparison signal because objectives like JEPA, MAE, DINO, and iBOT may not have comparable validation losses.
-- Treat one run as discovery. A maintainer reruns promising candidates three times with different random training seeds; the median run becomes the validated leader if it beats the incumbent by at least 0.004. `robust-norm-s9876` is the approved exception.
+- Treat one run as discovery. A maintainer reruns promising candidates three times with different random training seeds; the median run becomes the validated leader if it beats the incumbent by at least 0.004.
 - Use wandb for logging, plotting, and utilization monitoring throughout pretraining. Log all metrics needed to validate training behavior (i.e., gradient norm).
 - Full runs launched with `./submit/train_1gpu.sbatch ...` prompt for Labless run name, notes, and GitHub no-scope device login before scheduling, then auto-submit after a successful eligible run.
 - For direct `python train.py` runs or frozen baseline evaluations worth sharing, run `./labless/submit_to_labless.py output_dir=... run_name=... notes=...`; labless records the verified GitHub login. Full submissions require `summary.json`, `metrics.jsonl`, `summary.max_train_samples == 1000000`, `summary.tile_presentations <= 1000000`, and `summary.max_train_flops == 1e18`. Keep smoke checks and failed runs local.

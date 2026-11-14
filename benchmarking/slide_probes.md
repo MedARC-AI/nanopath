@@ -36,7 +36,8 @@ are inference inputs, not additional labels. SurGen and LEOPARD use at most 768
 raster/source-spaced tiles per slide to bound runtime; UCLA and CPTAC-PDA use
 their full prepared grids.
 
-For every task, the frozen encoder's `probe_features()` runs under fp16 autocast
+For every task, the frozen encoder's final-layer CLS readout (a frozen
+baseline's published `probe_features()`) runs under fp16 autocast
 and the resulting float32 tile vectors are averaged to slides. Survival then
 averages multiple slide vectors belonging to the same case. No attention MIL
 model or end-to-end finetuning is used.

@@ -2,7 +2,7 @@
 
 ![nanopath logo](imgs/nanopath_logo.png)
 
-> **Sept 2026 update**: Our ~20 min. fast evaluation suite now adds more downstream datasets, removes explicitly TCGA-derived tasks, reworks the lightweight probing code, and reweights final score calculation. "nanopath-evals" is now a much more faithful proxy for performance on official benchmarks. However, this required resetting the Labless live leaderboard plot (original is still preserved but should not be hillclimbed on).
+> **Nov 2026 update**: nanopath-evals v3 keeps the v2 datasets and score weights but fixes the readout: one forward pass per tile, final-layer CLS and patch tokens, no test-time augmentation or feature aggregation (see [what you must not change](#what-you-must-not-change-for-a-leaderboard-submission)). The Labless plot was reset to v3 and seeded by re-evaluating retained v2 checkpoints; the v2 and v1 plots are preserved but should not be hillclimbed on (v2 code can still submit from the [`main_v2`](https://github.com/MedARC-AI/nanopath/tree/main_v2) branch).
 
 `nanopath` is a super lean experimental harness for training tile-level computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). In ~1 hour it trains on 1 million pathology tiles on a single GPU and evaluates a broad suite of downstream probes spanning tile classification, segmentation, slide-level mutation/progression/survival, and robustness. The goal is to easily explore and iterate on research directions to see what works best on small-scale, then scale up the best performing training recipes with more data and larger compute.
 
@@ -10,7 +10,7 @@ This repository is intentionally made to be compatible with [autoresearch](https
 
 **Want to get involved? Join us in the [MedARC Discord](https://discord.gg/tVR4TWnRM9) (find us in #path-fm)!**
 
-The current validated leader is [stack4_salient](https://github.com/MedARC-AI/nanopath/tree/stack4-salient) by [@RyanKim17920](https://github.com/RyanKim17920), with a median score of **0.6810** across three training seeds ([Labless run](https://labless.dev/runs/run_sub_6da523428f)).
+The current validated leader is [stack4_salient](https://github.com/MedARC-AI/nanopath/tree/stack4_salient_v3) by [@RyanKim17920](https://github.com/RyanKim17920), scoring **0.6604** under v3 ([Labless run](https://labless.dev/runs/run_v3_sub_6da523428f)).
 
 ## Quickstart
 
@@ -43,13 +43,13 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
 
 ## Leaderboard
 
-<a href="https://labless.dev/nano-projects/nanopath-v2">
-  <img src="https://api.labless.dev/api/nano-projects/nanopath-v2/plot.svg" alt="nanopath progress plot" width="1290">
+<a href="https://labless.dev/nano-projects/nanopath-v3">
+  <img src="https://api.labless.dev/api/nano-projects/nanopath-v3/plot.svg" alt="nanopath progress plot" width="1290">
 </a>
 
 `final_score` weights classification, segmentation, progression, mutation, survival, and CRoMa robustness at 30%, 15%, 17.5%, 15%, 7.5%, and 15%. These columns summarize a 20-dataset suite derived from [THUNDER](https://mics-lab.github.io/thunder/), [PathoBench](https://github.com/mahmoodlab/patho-bench), [LEOPARD](https://leopard.grand-challenge.org/), [PathoROB](https://arxiv.org/abs/2507.17845), and [CRoMa](https://github.com/clemsgrs/croma), with modifications to keep single-GPU evaluation lightweight and use train/validation-only data. See [benchmarking/README.md](benchmarking/README.md) for the full protocol and provenance caveats.
 
-Nanopath models should be submitted to [Labless](https://labless.dev). `main` corresponds to this repository's main recipe. For promotion, [@PaulScotti](https://github.com/PaulScotti) retrains an unvalidated candidate three times with different randomly selected RNG seeds; its median run becomes the validated `leader` if it beats the incumbent by at least 0.004. `robust-norm-s9876` is the approved exception.
+Nanopath models should be submitted to [Labless](https://labless.dev). `main` corresponds to this repository's main recipe. For promotion, [@PaulScotti](https://github.com/PaulScotti) retrains an unvalidated candidate three times with different randomly selected RNG seeds; its median run becomes the validated `leader` if it beats the incumbent by at least 0.004.
 
 ![nanopath final score compared with held-out official evaluations](imgs/threepanel-v2.png)
 
@@ -59,21 +59,21 @@ As you can see in the above correlation plots, our fast ~20 minute evaluation su
 
 ### nanopath models
 
-The `main` branch uses the `lr-and-curation` recipe. Model links below select the corresponding training recipe; clone with `--branch <branch-name>` to use that recipe with nanopath-evals v2.
+The `main` branch uses the `lr-and-curation` recipe. Scores are v3 re-evaluations of each model's validated v2 checkpoint. Only `main` and `stack4_salient_v3` are ported to v3; the other links are v2-era recipe branches.
 
 | # | Description | final score | classification | segmentation | progression | mutation | survival | robustness | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | [stack4_salient](https://github.com/MedARC-AI/nanopath/tree/stack4-salient) | **0.6810** | 0.7332 | 0.6105 | 0.7107 | 0.6410 | 0.6525 | 0.6671 | [@RyanKim17920](https://github.com/RyanKim17920) |
-| 2 | [robust-huelocal](https://github.com/MedARC-AI/nanopath/tree/robust-huelocal) | 0.6675 | 0.7350 | 0.5986 | 0.6884 | 0.6455 | 0.6131 | 0.6261 | [@anishdulal](https://github.com/anishdulal) |
-| 3 | [GuruTurbo1.0](https://github.com/MedARC-AI/nanopath/tree/GuruTurbo1.0) | 0.6597 | 0.7518 | 0.6030 | 0.6365 | 0.6289 | 0.6301 | 0.6046 | [@aajing](https://github.com/aajing) |
-| 4 | [pathway-tta](https://github.com/MedARC-AI/nanopath/tree/pathway-tta) | 0.6491 | 0.7557 | 0.6020 | 0.5993 | 0.6128 | 0.6242 | 0.5896 | [@achi2023](https://github.com/achi2023) |
-| 5 | [jepa-fino](https://github.com/MedARC-AI/nanopath/tree/jepa-fino-v2) | 0.6483 | 0.7384 | 0.6016 | 0.6010 | 0.6190 | 0.6210 | 0.6132 | [@ml-and-ml](https://github.com/ml-and-ml) |
-| 6 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm-v2) | 0.6465 | 0.7507 | 0.6024 | 0.6073 | 0.5885 | 0.6010 | 0.6088 | [@anishdulal](https://github.com/anishdulal) |
-| 7 | I-JEPA contig patch | 0.6463 | 0.7219 | 0.5993 | 0.6238 | 0.6148 | 0.6172 | 0.6143 | @NimaAsh |
-| 8 | block-strided-cls | 0.6448 | 0.7477 | 0.6039 | 0.5738 | 0.6066 | 0.6335 | 0.6069 | @RyanKim17920 |
-| 9 | [lr-and-curation](https://github.com/MedARC-AI/nanopath) | 0.6349 | 0.7048 | 0.5940 | 0.6045 | 0.6025 | 0.6199 | 0.6114 | @nevasini1 |
+| 1 | [stack4_salient](https://github.com/MedARC-AI/nanopath/tree/stack4_salient_v3) | **0.6604** | 0.7488 | 0.6011 | 0.6090 | 0.6239 | 0.6539 | 0.6425 | [@RyanKim17920](https://github.com/RyanKim17920) |
+| 2 | [robust-huelocal](https://github.com/MedARC-AI/nanopath/tree/robust-huelocal) | 0.6561 | 0.7423 | 0.5981 | 0.6511 | 0.6288 | 0.6179 | 0.5940 | [@anishdulal](https://github.com/anishdulal) |
+| 3 | [GuruTurbo1.0](https://github.com/MedARC-AI/nanopath/tree/GuruTurbo1.0) | 0.6519 | 0.7449 | 0.6027 | 0.6111 | 0.6296 | 0.6326 | 0.5947 | [@aajing](https://github.com/aajing) |
+| 4 | [jepa-fino](https://github.com/MedARC-AI/nanopath/tree/jepa-fino-v2) | 0.6485 | 0.7383 | 0.6024 | 0.6010 | 0.6194 | 0.6215 | 0.6132 | [@ml-and-ml](https://github.com/ml-and-ml) |
+| 5 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm-v2) | 0.6471 | 0.7387 | 0.5968 | 0.6351 | 0.5915 | 0.6115 | 0.6018 | [@anishdulal](https://github.com/anishdulal) |
+| 6 | block-strided-cls | 0.6458 | 0.7362 | 0.5963 | 0.6047 | 0.6056 | 0.6376 | 0.6069 | @RyanKim17920 |
+| 7 | I-JEPA contig patch | 0.6446 | 0.7218 | 0.5877 | 0.6238 | 0.6151 | 0.6173 | 0.6143 | @NimaAsh |
+| 8 | [pathway-tta](https://github.com/MedARC-AI/nanopath/tree/pathway-tta) | 0.6444 | 0.7395 | 0.5988 | 0.6214 | 0.6060 | 0.6086 | 0.5833 | [@achi2023](https://github.com/achi2023) |
+| 9 | [lr-and-curation](https://github.com/MedARC-AI/nanopath) | 0.6351 | 0.7048 | 0.5948 | 0.6047 | 0.6026 | 0.6201 | 0.6115 | @nevasini1 |
 
-The [stack4_salient](https://labless.dev/runs/run_sub_6da523428f), [robust-huelocal](https://labless.dev/runs/run_sub_2e5c3d80c6), [GuruTurbo1.0](https://labless.dev/runs/run_sub_cb8d49013b), and [pathway-tta](https://labless.dev/runs/run_sub_92673d64ef) scores are validated medians of three independent training seeds.
+The stack4_salient, robust-huelocal, GuruTurbo1.0, and pathway-tta rows are the median-seed checkpoints of their three-seed v2 validations.
 
 ### Baselines
 
@@ -155,9 +155,10 @@ Intensive preprocessing before model training starts, such as tile extraction, d
 - Every image tile used for training must be produced exclusively from the 12K TCGA WSIs. You can change tile extraction, filtering, sampling, curation, and preprocessing before the capped model-training run begins.
 - Public non-tile information is fair game: metadata, clinical/genomic labels, text, ontologies, annotations, or other non-image-tile signals from any public source may be used however you want.
 
-**Probe evaluation must be untouched**
-- All of `probe.py` and `benchmarking/` (note this means you *can* modify model.py however you wish!)
+**Probe evaluation and readout must be untouched**
+- All of `probe.py` and `benchmarking/`.
 - All probe config variables in `configs/main.yaml`.
+- The readout. The probe calls `model(x)` once per tile in eval mode and reads only `cls` and `patches` (CRoMa uses `cls` plus the mean of `patches`). That forward must be the same single pass the pretraining loss trained: final layer only, `embed_dim` wide, no extra views or passes, no eval-only branches, no statistics fitted after training, and nothing conditioned on the dataset or task. `probe.py` asserts single-pass execution, output shapes, and train/eval equality before probing; a run that passes the asserts but breaks this rule is marked invalid. The rest of `model.py` is yours to change.
 
 **Pretraining must not use pathology-specific pretrained models**
 Non-pathology pretrained models such as DINOv2 may be used for initialization, teachers, data curation, or preprocessing. Pathology-trained checkpoints such as H-optimus-0 or OpenMidnight may not initialize weights or guide training, but they may be used before and separately from training for TCGA-tile curation or preprocessing.
