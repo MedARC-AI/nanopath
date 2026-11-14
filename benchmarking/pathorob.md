@@ -4,7 +4,7 @@ Robustness measures whether biological similarity dominates acquisition-center
 similarity in the frozen representation. It contributes 15% of `final_score`;
 the five predictive families contribute the other 85%.
 
-## Data and fixed adapter
+## Data and readout
 
 | Cohort | Used patches | Slides | Biological classes | Centers | CRoMa m |
 |---|---:|---:|---:|---:|---:|
@@ -23,9 +23,11 @@ the [PathoROB paper](https://arxiv.org/abs/2507.17845), and the
 at commit `3f58d5e4bd9ecf74c34d0c76eb88d80cee9fb706`. The nanopath mirror retains the
 upstream labels and selected images under their original terms.
 
-The robustness probe uses one fixed adapter for every model, frozen baselines
-included: the final normalized CLS token concatenated with the mean normalized
-patch token. CRoMa L2-normalizes this vector before computing cosine distance.
+The robustness probe reads the same `probe_features()` vector as the tile and
+slide probes: the final-layer CLS token for nanopath models (also the CRoMa
+implementation's default) and each frozen baseline's published representation.
+CRoMa L2-normalizes this vector before computing cosine distance. Protocol v2
+instead read CLS concatenated with the mean patch token for every model.
 
 ## Cross-confounder margin
 

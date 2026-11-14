@@ -6,7 +6,7 @@ project:
   wandb_dir: /data/$USER/nanopath/wandb
 
 data:
-  # dataset_dir holds the Arrow shards (shard-NNNNN.arrpw) that train.py reads.
+  # dataset_dir holds the Arrow shards (shard-NNNNN.arrow) that train.py reads.
   # `prepare.py … download=True` populates it from the medarc/nanopath training mirror.
   dataset_dir: /data/nanopath_arrow
   split_seed: 42
