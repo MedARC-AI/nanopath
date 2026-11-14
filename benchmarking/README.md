@@ -22,12 +22,12 @@ cohort_croma  = median over tiles of (mean OS distance - mean SO distance)
                 / (mean OS distance + mean SO distance)
 robustness    = mean over PathoROB cohorts of (1 + cohort_croma) / 2
 
-final_score = 0.30 * classification + 0.15 * segmentation
-            + 0.175 * progression + 0.15 * mutation
-            + 0.075 * survival + 0.15 * robustness
+final_score = 0.40 * classification + 0.20 * segmentation
+            + 0.10 * progression + 0.10 * mutation
+            + 0.05 * survival + 0.15 * robustness
 ```
 
-Classification, segmentation, progression, mutation, survival, and robustness contribute 30%, 15%, 17.5%, 15%, 7.5%, and 15%, respectively.
+Classification, segmentation, progression, mutation, survival, and robustness contribute 40%, 20%, 10%, 10%, 5%, and 15%, respectively.
 
 ## Fixed suite
 

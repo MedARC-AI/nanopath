@@ -161,7 +161,7 @@ The public API redacts local machine paths, hostnames, users, repo roots, and
 local artifact paths from submitted rows.
 
 The final score weights classification, segmentation, progression, mutation,
-survival, and CRoMa robustness at 30%, 15%, 17.5%, 15%, 7.5%, and 15%.
+survival, and CRoMa robustness at 40%, 20%, 10%, 10%, 5%, and 15%.
 Labless rejects scores that do not match those submitted components.
 
 Agents can crawl the public experiment ledger directly with the JSON API:

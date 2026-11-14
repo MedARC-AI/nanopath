@@ -1,5 +1,5 @@
 # Inline downstream probes. Protocol v3 weights classification/segmentation/
-# progression/mutation/survival/robustness at 30/15/17.5/15/7.5/15 percent and
+# progression/mutation/survival/robustness at 40/20/10/10/5/15 percent and
 # fixes the nanopath readout to one eval forward per tile: final-layer CLS for
 # pooled probes and CRoMa, patch tokens for segmentation.
 #
@@ -35,8 +35,8 @@ Image.MAX_IMAGE_PIXELS = None  # Probe ROIs are trusted local pathology images, 
 BENCHMARKING_DIR = Path(__file__).resolve().parent / "benchmarking"
 PROBE_PROTOCOL_VERSION = 3
 SCORE_WEIGHTS = (
-    ("classification_mean_f1", 0.30), ("seg_mean_f1", 0.15), ("slide_mean_auc", 0.175),
-    ("auc_mean", 0.15), ("survival_mean_cindex", 0.075), ("robustness_mean", 0.15),
+    ("classification_mean_f1", 0.40), ("seg_mean_f1", 0.20), ("slide_mean_auc", 0.10),
+    ("auc_mean", 0.10), ("survival_mean_cindex", 0.05), ("robustness_mean", 0.15),
 )
 THUNDER_V2 = json.loads((BENCHMARKING_DIR / "thunder_v2.json").read_text())  # manifest unchanged since protocol v2
 assert all(set(spec) == {"root", "train", "val"} for family in ("classification", "segmentation") for spec in THUNDER_V2[family].values())
