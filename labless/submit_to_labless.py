@@ -28,7 +28,7 @@ import yaml
 API_URL = "https://api.labless.dev"
 PROJECT_SLUG = "nanopath-v2"
 NANOPATH_MAIN_REMOTE = "https://github.com/MedARC-AI/nanopath.git"
-NANOPATH_DEFAULT_BRANCH = "main"
+NANOPATH_DEFAULT_BRANCH = "main_v2"
 PRIMARY_METRIC = "final_score"
 PROBE_PROTOCOL_VERSION = 2
 LOCKED_PATHS = ("probe.py", "benchmarking/")

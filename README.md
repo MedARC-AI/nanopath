@@ -2,6 +2,8 @@
 
 ![nanopath logo](imgs/nanopath_logo.png)
 
+> **This is the legacy nanopath-evals v2 branch.** `main` now uses [v3](https://github.com/MedARC-AI/nanopath). Runs from this branch still submit to the legacy [v2 plot](https://labless.dev/nano-projects/nanopath?protocol=v2); an older v2 checkout needs this branch's `labless/submit_to_labless.py`.
+
 > **Sept 2026 update**: Our ~20 min. fast evaluation suite now adds more downstream datasets, removes explicitly TCGA-derived tasks, reworks the lightweight probing code, and reweights final score calculation. "nanopath-evals" is now a much more faithful proxy for performance on official benchmarks. However, this required resetting the Labless live leaderboard plot (original is still preserved but should not be hillclimbed on).
 
 `nanopath` is a super lean experimental harness for training tile-level computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). In ~1 hour it trains on 1 million pathology tiles on a single GPU and evaluates a broad suite of downstream probes spanning tile classification, segmentation, slide-level mutation/progression/survival, and robustness. The goal is to easily explore and iterate on research directions to see what works best on small-scale, then scale up the best performing training recipes with more data and larger compute.
@@ -43,7 +45,7 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
 
 ## Leaderboard
 
-<a href="https://labless.dev/nano-projects/nanopath-v2">
+<a href="https://labless.dev/nano-projects/nanopath?protocol=v2">
   <img src="https://api.labless.dev/api/nano-projects/nanopath-v2/plot.svg" alt="nanopath progress plot" width="1290">
 </a>
 
