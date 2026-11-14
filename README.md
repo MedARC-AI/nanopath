@@ -10,7 +10,7 @@ This repository is intentionally made to be compatible with [autoresearch](https
 
 **Want to get involved? Join us in the [MedARC Discord](https://discord.gg/tVR4TWnRM9) (find us in #path-fm)!**
 
-The current validated leader is [stack4_salient](https://github.com/MedARC-AI/nanopath/tree/stack4_salient_v3) by [@RyanKim17920](https://github.com/RyanKim17920), scoring **0.6722** under v3 ([Labless run](https://labless.dev/runs/run_v3_sub_6da523428f)).
+The current validated leader is [stack4_salient](https://github.com/MedARC-AI/nanopath/tree/stack4_salient_v3) by [@RyanKim17920](https://github.com/RyanKim17920), scoring **0.6747** under v3 ([Labless run](https://labless.dev/runs/run_sub_46f7ab4a38)).
 
 ## Quickstart
 
@@ -59,11 +59,11 @@ As you can see in the above correlation plots, our fast ~20 minute evaluation su
 
 ### nanopath models
 
-The `main` branch uses the `lr-and-curation` recipe. Scores are v3 re-evaluations of each model's validated v2 checkpoint. Only `main` and `stack4_salient_v3` are ported to v3; the other links are v2-era recipe branches.
+The `main` branch uses the `lr-and-curation` recipe. `main` and stack4_salient were retrained under v3; the other scores are v3 re-evaluations of each model's validated v2 checkpoint. Only `main` and `stack4_salient_v3` are ported to v3; the other links are v2-era recipe branches.
 
 | # | Description | final score | classification | segmentation | progression | mutation | survival | robustness | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | [stack4_salient](https://github.com/MedARC-AI/nanopath/tree/stack4_salient_v3) | **0.6722** | 0.7488 | 0.6011 | 0.6090 | 0.6239 | 0.6539 | 0.6429 | [@RyanKim17920](https://github.com/RyanKim17920) |
+| 1 | [stack4_salient](https://github.com/MedARC-AI/nanopath/tree/stack4_salient_v3) | **0.6747** | 0.7505 | 0.6067 | 0.6170 | 0.6266 | 0.6525 | 0.6416 | [@RyanKim17920](https://github.com/RyanKim17920) |
 | 2 | [robust-huelocal](https://github.com/MedARC-AI/nanopath/tree/robust-huelocal) | 0.6660 | 0.7423 | 0.5981 | 0.6511 | 0.6288 | 0.6179 | 0.6038 | [@anishdulal](https://github.com/anishdulal) |
 | 3 | [GuruTurbo1.0](https://github.com/MedARC-AI/nanopath/tree/GuruTurbo1.0) | 0.6652 | 0.7449 | 0.6027 | 0.6111 | 0.6296 | 0.6326 | 0.6069 | [@aajing](https://github.com/aajing) |
 | 4 | [jepa-fino](https://github.com/MedARC-AI/nanopath/tree/jepa-fino-v2) | 0.6648 | 0.7383 | 0.6024 | 0.6010 | 0.6194 | 0.6215 | 0.6392 | [@ml-and-ml](https://github.com/ml-and-ml) |
@@ -71,9 +71,9 @@ The `main` branch uses the `lr-and-curation` recipe. Scores are v3 re-evaluation
 | 6 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm-v2) | 0.6590 | 0.7387 | 0.5968 | 0.6351 | 0.5915 | 0.6115 | 0.6064 | [@anishdulal](https://github.com/anishdulal) |
 | 7 | [pathway-tta](https://github.com/MedARC-AI/nanopath/tree/pathway-tta) | 0.6564 | 0.7395 | 0.5988 | 0.6214 | 0.6060 | 0.6086 | 0.5846 | [@achi2023](https://github.com/achi2023) |
 | 8 | I-JEPA contig patch | 0.6562 | 0.7218 | 0.5877 | 0.6238 | 0.6151 | 0.6173 | 0.6342 | @NimaAsh |
-| 9 | [lr-and-curation](https://github.com/MedARC-AI/nanopath) | 0.6450 | 0.7048 | 0.5948 | 0.6047 | 0.6026 | 0.6201 | 0.6158 | @nevasini1 |
+| 9 | [lr-and-curation](https://github.com/MedARC-AI/nanopath) | 0.6425 | 0.7019 | 0.5977 | 0.5747 | 0.6009 | 0.6414 | 0.6168 | @nevasini1 |
 
-The stack4_salient, robust-huelocal, GuruTurbo1.0, and pathway-tta rows are the median-seed checkpoints of their three-seed v2 validations.
+The robust-huelocal, GuruTurbo1.0, and pathway-tta rows are the median-seed checkpoints of their three-seed v2 validations; stack4_salient is retrained with its median seed.
 
 ### Baselines
 
