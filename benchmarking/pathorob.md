@@ -23,11 +23,9 @@ the [PathoROB paper](https://arxiv.org/abs/2507.17845), and the
 at commit `3f58d5e4bd9ecf74c34d0c76eb88d80cee9fb706`. The nanopath mirror retains the
 upstream labels and selected images under their original terms.
 
-The robustness probe intentionally does not call a model's configurable
-`probe_features()`. Its fixed adapter concatenates the final normalized CLS
-token and the mean normalized patch token. CRoMa L2-normalizes this vector before
-computing cosine distance. This keeps the test comparable even when a nanopath
-recipe changes test-time layer or view aggregation for task probes.
+The robustness probe uses one fixed adapter for every model, frozen baselines
+included: the final normalized CLS token concatenated with the mean normalized
+patch token. CRoMa L2-normalizes this vector before computing cosine distance.
 
 ## Cross-confounder margin
 

@@ -22,7 +22,7 @@ data:
   tissue_thresh: 0.0
 
 model:
-  type: robust_norm_dinov2_vits14_reg
+  type: dinov2_vits14_reg
 
 train:
   seed: 1337

@@ -9,7 +9,6 @@
 import atexit
 import contextlib
 import fnmatch
-import io
 import json
 import math
 import os
@@ -23,20 +22,15 @@ from pathlib import Path
 
 import numpy as np
 import PIL
-import pyarrow as pa
-import pyarrow.compute as pc
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import wandb
 import yaml
-from PIL import Image
 from torch.utils.data import DataLoader
 from torch.utils.flop_counter import FlopCounterMode
-from torchvision import transforms
-from torchvision.transforms import functional as TF
 
-from dataloader import GPUAugment, patient_id_from_relpath, patient_in_val, TCGATileDataset, TILE_SIZE
+from dataloader import GPUAugment, TCGATileDataset, TILE_SIZE
 from model import DINOHead, GradScale, JEPAPredictor, ViT, load_pretrained
 from probe import (
     completed_probe_summary,
@@ -278,28 +272,9 @@ def main():
     step = 0
     batch_size = int(train_cfg["batch_size"])
     max_train_samples = int(train_cfg["max_train_samples"])
-    robust_norm_tiles = 6144
-    # Reserve both calibration draws inside the presentation cap before optimizing.
-    # Arrow shards are shuffled: lexical paths recover the original fixed panels.
-    tables = [pa.ipc.open_file(pa.memory_map(str(path), "r")).read_all() for path in sorted(Path(cfg["data"]["dataset_dir"]).glob("shard-*.arrow"))]
-    offsets = np.cumsum([0, *map(len, tables)])
-    order = pc.sort_indices(pa.concat_tables([table.select(["path"]) for table in tables])["path"]).to_numpy().astype(np.int64)
-    selected = order[(np.arange(200)[:, None] * math.ceil(len(order) / 200) + np.arange(64)).ravel()]
-    rows = [None] * len(selected)
-    # Gather only selected JPEGs per shard; never concatenate the 120 GB payload.
-    for shard, table in enumerate(tables):
-        positions = np.flatnonzero((selected >= offsets[shard]) & (selected < offsets[shard + 1]))
-        for position, row in zip(positions, table.select(["path", "jpeg"]).take(pa.array(selected[positions] - offsets[shard])).to_pylist()):
-            rows[position] = row
-    jpegs = [row["jpeg"] for i, row in enumerate(rows[:128 * 64]) if i % 64 < 48]
-    site_rows = []
-    for row in rows:
-        patient = patient_id_from_relpath(row["path"])
-        if patient in fino_meta["discrete"]["cancer"] and patient in fino_meta["discrete"]["tss"] and not patient_in_val(patient, cfg["data"]["split_seed"], cfg["data"]["val_fraction"]):
-            site_rows.append((row["jpeg"], fino_meta["discrete"]["cancer"][patient], fino_meta["discrete"]["tss"][patient]))
-    del rows, tables, table, order
-    calibration_tiles = robust_norm_tiles + len(site_rows)
-    train_sample_budget = max_train_samples - calibration_tiles
+    # stack4-salient reserved 18,085 calibration tiles inside the cap; v3 fits nothing after
+    # training but keeps that budget so the 7,671-step trajectory is unchanged.
+    train_sample_budget = max_train_samples - 18085
     examples_seen = 0
     visible_patch_presentations = 0
     train_flops = 0
@@ -832,83 +807,7 @@ def main():
             train_loader._iterator = None
         # Probes get their own short-lived checkpoint via run_probe_at; only persist latest.pt
         # at end-of-run when periodic saving is on (save_every set) so smoke runs leave nothing.
-        # Fit scanner-response directions after optimization so the training trajectory is unchanged.
-        started = time.monotonic()
-        assert len(jpegs) == robust_norm_tiles
-        resize = transforms.Compose([transforms.Resize((224, 224), antialias=True), transforms.ToTensor()])
-        mean = torch.tensor(cfg["data"]["mean"], device=device).view(1, 3, 1, 1)
-        std = torch.tensor(cfg["data"]["std"], device=device).view(1, 3, 1, 1)
-        generator = torch.Generator().manual_seed(555)
-        gamma = torch.empty(robust_norm_tiles, 3, 1, 1).uniform_(0.8, 1.25, generator=generator)
-        gain = torch.empty_like(gamma).uniform_(0.85, 1.18, generator=generator)
-        huesat = torch.empty(robust_norm_tiles, 2).uniform_(0, 1, generator=generator)
-
-        @torch.no_grad()
-        def robust_features(images):
-            with autocast:
-                tokens, taps = teacher_backbone._prepare_tokens((images.to(device) - mean) / std), []
-                for i, block in enumerate(teacher_backbone.blocks):
-                    tokens = block(tokens)
-                    if i in (2, 4, 6, 8, 11):
-                        taps.append(teacher_backbone.norm(tokens)[:, 0])
-                tokens = teacher_backbone.norm(tokens)
-            return torch.stack([tokens[:, 0], tokens[:, 1 + teacher_backbone.registers :].mean(1), *taps], 1).float().cpu()
-
-        bases, deltas = [], []
-        for start in range(0, robust_norm_tiles, batch_size):
-            base = torch.stack([resize(Image.open(io.BytesIO(jpeg)).convert("RGB")) for jpeg in jpegs[start : start + batch_size]])
-            base_features = robust_features(base)
-            views = (
-                base.clamp_min(1e-6) ** gamma[start : start + batch_size],
-                (base * gain[start : start + batch_size]).clamp(0, 1),
-                torch.stack([TF.adjust_saturation(TF.adjust_hue(tile, float((hs[0] - 0.5) * 0.1)), float(0.7 + hs[1] * 0.7)) for tile, hs in zip(base, huesat[start : start + batch_size])]),
-            )
-            bases.append(base_features)
-            deltas.extend(robust_features(view) - base_features for view in views)
-        base_features, delta_features = torch.cat(bases), torch.cat(deltas)
-        directions = torch.linalg.svd((delta_features - delta_features.mean(0)).movedim(1, 0).to(device), full_matrices=False)[2]
-        for model in (student_backbone, teacher_backbone):
-            model.rn_mu.copy_(base_features.mean(0)[:2]); model.rn_v.zero_()
-            model.rn_v[0, :32].copy_(directions[0, :32]); model.rn_v[1].copy_(directions[1, :256])
-            model.pf_mu.copy_(base_features.mean(0)[2:]); model.pf_v.copy_(directions[2:, :1])
-            model.rn_fitted.fill_(True); model.pf_fitted.fill_(True)
-        print(f"{console_prefix()} RobustNorm  [{step}]  fitted CLS/patch ranks 32/256 + per-tap rank 1 from {len(jpegs)} tiles in {time.monotonic() - started:.0f}s", flush=True)
-        # Within-cancer site LDA separates acquisition effects from cancer-type differences.
-        site_features = torch.cat([robust_features(torch.stack([resize(Image.open(io.BytesIO(jpeg)).convert("RGB")) for jpeg, _, _ in site_rows[start : start + batch_size]]))[:, :2] for start in range(0, len(site_rows), batch_size)]).double()
-        labels = np.array([(cancer, site) for _, cancer, site in site_rows])
-        for group in range(2):
-            features = site_features[:, group]
-            dim = features.shape[1]
-            between, within = torch.zeros(dim, dim, dtype=torch.float64), torch.zeros(dim, dim, dtype=torch.float64)
-            for cancer in np.unique(labels[:, 0]):
-                cancer_mean = features[labels[:, 0] == cancer].mean(0)
-                for site in np.unique(labels[labels[:, 0] == cancer, 1]):
-                    values = features[(labels[:, 0] == cancer) & (labels[:, 1] == site)]
-                    if len(values) < 20:
-                        continue
-                    delta = values.mean(0) - cancer_mean
-                    between += len(values) * torch.outer(delta, delta)
-                    centered = values - values.mean(0)
-                    within += centered.T @ centered
-            within = (0.9 * within + 0.1 * within.trace() / dim * torch.eye(dim, dtype=torch.float64)) / len(features)
-            whitening = torch.linalg.inv(torch.linalg.cholesky(within))
-            _, vectors = torch.linalg.eigh(whitening @ (between / len(features)) @ whitening.T)
-            directions = torch.linalg.qr(whitening.T @ vectors[:, -128:].flip(1))[0].T
-            for model in (student_backbone, teacher_backbone):
-                model.sb_mu[group].copy_(features.mean(0)); model.sb_v[group].copy_(directions)
-        # Fit typicality on raw taps, then standardize its distance after rank-one suppression.
-        taps = base_features[:, 2:].flatten(1).double()
-        ct_mu = taps.mean(0)
-        _, singular, vectors = torch.linalg.svd(taps - ct_mu, full_matrices=False)
-        ct_R, ct_lam = vectors[:64], singular[:64].square() / (len(taps) - 1) + 1e-6
-        projected = torch.cat([teacher_backbone._suppress(base_features[:, j + 2].double(), teacher_backbone.pf_mu[j].double().cpu(), teacher_backbone.pf_v[j].double().cpu()) for j in range(5)], -1)
-        typicality = -torch.sqrt((((projected - ct_mu) @ ct_R.T).square() / ct_lam).sum(-1).clamp_min(0) + 1e-12)
-        for model in (student_backbone, teacher_backbone):
-            model.ct_mu.copy_(ct_mu); model.ct_R.copy_(ct_R); model.ct_lam.copy_(ct_lam)
-            model.ct_ms.copy_(torch.stack([typicality.mean(), typicality.std() + 1e-8]))
-        print(f"{console_prefix()} Calibration  site rank 128 from {len(site_rows)} tiles; typicality rank 64 from {robust_norm_tiles} tiles", flush=True)
-        # Persist the fitted buffers even if this step already had a periodic save.
-        if save_checkpoints:
+        if save_checkpoints and step != last_saved_step:
             save_latest_checkpoint(step)
         run_probe_at(step, examples_seen)
     log_probe_results()
@@ -929,8 +828,7 @@ def main():
         "train_loop_wall_seconds": train_loop_wall_seconds,
         "stop_reason": stop_reason,
         "steps_completed": step,
-        "tile_presentations": examples_seen + calibration_tiles,
-        "calibration_tile_presentations": calibration_tiles,
+        "tile_presentations": examples_seen,
         "visible_patch_presentations": visible_patch_presentations,
         **final_unique_counts,
         "train_flops": train_flops,

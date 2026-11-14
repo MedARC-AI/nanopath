@@ -26,11 +26,11 @@ import yaml
 
 
 API_URL = "https://api.labless.dev"
-PROJECT_SLUG = "nanopath-v2"
+PROJECT_SLUG = "nanopath-v3"
 NANOPATH_MAIN_REMOTE = "https://github.com/MedARC-AI/nanopath.git"
 NANOPATH_DEFAULT_BRANCH = "main"
 PRIMARY_METRIC = "final_score"
-PROBE_PROTOCOL_VERSION = 2
+PROBE_PROTOCOL_VERSION = 3
 LOCKED_PATHS = ("probe.py", "benchmarking/")
 FULL_RUN_MIN_FLOPS = 1_000_000_000_000_000_000
 FULL_RUN_MAX_SAMPLES = 1_000_000
@@ -328,7 +328,7 @@ def resolve_main(opts: dict[str, str], dry_run: bool) -> dict[str, str]:
         project = opts.get("project", PROJECT_SLUG)
         status, main_ref = api_json(api_url, "GET", f"/api/nano-projects/{project}/main")
         if status == 404:
-            main_ref = {"run_id": "nanopath-v2"}
+            main_ref = {"run_id": PROJECT_SLUG}
         elif status >= 400:
             raise ValueError(main_ref.get("detail") or f"main lookup failed with HTTP {status}")
         if (project == PROJECT_SLUG and api_url == API_URL) or not main_ref.get("commit"):

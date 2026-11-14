@@ -56,9 +56,10 @@ entirely UKK, despite TCGA being one source in the head-training pool.
 
 ## Frozen embeddings
 
-Images use the model's fixed probe transform and normalization. The backbone
-runs once per split under fp16 autocast; the resulting `probe_features()` vectors
-are stored as float32 and shared by every head. The backbone is never updated.
+Images use the fixed probe transform (a square 224 resize for nanopath models)
+and the model's normalization. The backbone runs once per split under fp16
+autocast; the resulting final-layer CLS vectors (a frozen baseline's published
+`probe_features()`) are stored as float32 and shared by every head. The backbone is never updated.
 
 For dataset `d`, the benchmark computes three equally weighted head scores:
 
