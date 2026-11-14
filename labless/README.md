@@ -195,7 +195,8 @@ median run becomes validated leader if it beats the incumbent by at least
 mark the run whose commit is on `main`. Failed runs are not accepted.
 
 The v3 plot was seeded by re-evaluating retained v2 checkpoints with the v3
-readout; v2 runs without retained weights stay on the legacy v2 plot only.
+readout, with `main` and stack4_salient retrained; v2 runs without retained
+weights stay on the legacy v2 plot only.
 
 Submissions must provide measured `croma_mean` and satisfy
 `robustness_mean == (1 + croma_mean) / 2`.
