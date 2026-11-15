@@ -380,3 +380,7 @@ def main():
         write_dashboard(results_dir, cfg)
 
     print(f"dashboard saved to: {results_dir / 'dashboard.html'}")
+
+
+if __name__ == "__main__":
+    main()
