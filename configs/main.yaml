@@ -166,5 +166,5 @@ interpret:
     visible_probability: 0.5  # probability that a mask pixel is visible 
     uncertainty_threshold_scale: 1.0  # gamma of U-RELAX: the importance is kept where the uncertainty is below gamma times its median
   tsne:
-    num_tiles: 5000  # tiles evenly spaced through the extraction (a fixed stride, no randomness)
+    num_tiles: 100  # tiles evenly spaced through the extraction (a fixed stride, no randomness)
     perplexity: 10  # roughly the number of neighbours each point considers; the paper finds 5 to 50 robust
