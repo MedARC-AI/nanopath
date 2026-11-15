@@ -1,20 +1,45 @@
 # Interpretability module
 
-`python -m interpret.interpret configs/main.yaml` (from the repo root) reads the `interpret:` block of the config: it
+`python -m interpret.interpret configs/main.yaml checkpoint_path=/path/to/checkpoint.pt [baseline_checkpoint_path=/path/to/init.pt] activation_cache_dir=/path/to/interpret results_dir=/path/to/results` (from the repo root) reads the `interpret:` block of the config: it
 extracts the hooked activations of a seeded, stratified sample of a dataset into files (one `ActivationDataset` per layer, see Output), then runs the configured
-`methods` on them and saves their results and plots. Everything runs on one device, the GPU: `main()` picks it, moves the model and gives it to the activation datasets, whose `get_block` and the `DeviceLoader` (both in `data.py`) are the only places that move data to it,
+`methods` on them and saves their results and plots. When `baseline_checkpoint_path` is provided, both the baseline and trained checkpoints are analyzed and compared side-by-side in `dashboard.html`. Everything runs on one device, the GPU: `main()` picks it, moves the model and gives it to the activation datasets, whose `get_block` and the `DeviceLoader` (both in `data.py`) are the only places that move data to it,
 so the methods never move data themselves. A run needs a GPU, a
 Nanopath checkpoint (it carries its training `config`, its `step` and the `model_ema`/`model` weights),
 and `probe.dataset_roots` pointing at the data.
 
 **SECTIONS**:
+- [Running the rig](#running-the-rig)
 - [Methods](#methods)
 - [Config](#config-interpret-in-configsmainyaml)
 - [Output](#output)
+- [Integration into Labless](#nanopath-and-labless-flow)
 - [Hook contract](#hook-contract)
 - [Your to-do list to analyse a new model](#your-to-do-list-to-analyse-a-new-model)
 - [Extending the rig](#extending-the-rig)
 - [Notes](#notes)
+
+## Running the rig
+
+There is one interpretation rig and one input/output contract, not separate standalone and chained modes. Both callers provide the same settings YAML and the same required runtime paths: `checkpoint_path`, `activation_cache_dir`, and `results_dir`. The difference is only who chooses those paths.
+
+| Caller workflow | Runtime paths | Result |
+|---|---|---|
+| Standalone analysis | The user or agent explicitly supplies a saved checkpoint (and optionally an untrained baseline checkpoint), extraction-cache base, and a dedicated results directory for this invocation. | The rig analyzes the checkpoint(s) and writes extraction, results, effective config, and `dashboard.html` to the chosen locations. |
+| Chained after training | SLURM passes the enable/disable setting to `train.py`; after training and probes, `train.py` supplies the untrained baseline (`init.pt`), the final checkpoint (`latest.pt`), and run-local output locations. | The same rig analyzes both checkpoints, compares them side by side in `dashboard.html`, and writes results under that run's output directory. |
+
+The intended command shape is the same in both workflows:
+
+```bash
+python -m interpret.interpret configs/main.yaml \
+  checkpoint_path=/path/to/checkpoint.pt \
+  baseline_checkpoint_path=/path/to/init.pt \
+  activation_cache_dir=/path/to/interpret \
+  results_dir=/path/to/interpret/results
+```
+
+`baseline_checkpoint_path` is optional. When supplied (as `train.py` does automatically using `output_dir/init.pt`), the interpreter runs both checkpoints and generates a side-by-side comparison dashboard comparing the untrained baseline against the trained model. When omitted, it runs single-checkpoint analysis.
+
+`activation_cache_dir` is the base directory for temporary extracted activations, images, and labels, stored under `data/<hash>` and deleted after successful analysis. `results_dir` is the exact output directory for this invocation and contains `dashboard.html`; the interpreter replaces it at the start of each invocation, so use a dedicated results directory. In the chained workflow, `train.py` uses `${OUTPUT_DIR}/interpret` for the activation cache and `${OUTPUT_DIR}/interpret/results` for results. If interpretation is skipped, existing files are left untouched and no success flag is passed to the submitter. The settings YAML contains analysis choices, not a default checkpoint. Resolved runtime values are recorded in the effective config; the shared source YAML is not rewritten.
 
 ## Methods
 
@@ -143,7 +168,7 @@ SNE (the predecessor, assumed known) gives cluttered 2-D maps that are hard to o
 
 ## Config (`interpret:` in `configs/main.yaml`)
 
-- `checkpoint_path`, `model_weights` (the checkpoint key: `model_ema` for the teacher, `model` for the student): the model to analyse.
+- `model_weights` (the checkpoint key: `model_ema` for the teacher, `model` for the student): which weights to analyse. `checkpoint_path`, `activation_cache_dir`, and `results_dir` are required command-line paths, not YAML settings.
 - `dataset` + `datasets.<id>.stratification_dimension`: one dataset per run (classes in the source-dataset section of `data.py`). Available:
   `pathorob_camelyon` (PathoROB Camelyon tiles, root `probe.dataset_roots.pathorob`), with the metadata fields
   `biological_class`, `medical_center` and `slide_id` to stratify by. The sampler is sklearn's `resample` with
@@ -159,15 +184,15 @@ SNE (the predecessor, assumed known) gives cluttered 2-D maps that are hard to o
 - `tsne`: `num_tiles` (tiles evenly spaced through the extraction, a fixed stride with no randomness, the same tiles in every layer and for every checkpoint) and `perplexity` (roughly the number of neighbours each point considers). Every vector type of every kept layer gets its own 2-D map, and every label of the extraction gets one figure.
 
 Storage per sample is `kept_layers x 257 tokens x C x 4 bytes` (float32) plus the 0.6 MB input image; for ViT-S (C=384)
-that is about 3.4 MB at stride 2 and 2.2 MB at stride 4, so 10,000 samples take about 34 GB / 22 GB on disk. The extraction holds everything in RAM before saving it
-(as much as the files take on disk, plus the model and loader), so run it on a high-RAM runtime: it is a one-off operation per extraction.
+that is about 3.4 MB at stride 2 and 2.2 MB at stride 4, so 10,000 samples take about 34 GB / 22 GB on disk during analysis. The extraction holds everything in RAM before saving it
+(as much as the files take on disk, plus the model and loader), so run it on a high-RAM runtime. After a successful interpretation, the activation cache is deleted; final results, plots, and the dashboard remain.
 
 ## Output
 
 ```
-output_dir/                      # from the config
+activation_cache_dir/            # activation cache base; cache is temporary and deleted after success
   data/
-    <hash>/                      # hash of everything that determines the files (checkpoint + step, weights, dataset + its config, seed, num_samples, layer_stride)
+    <hash>/                      # hash of everything that determines the files (checkpoint + step, weights, dataset + its config, seed, num_samples, layer_stride); may remain if interrupted
       activations/
         <layer>_patch_tokens.pt  # (N, 256, C) float32, the patch tokens of that layer: the big files (about 3.9 GB each for 10,000 samples and C=384)
         <layer>_cls.pt           # (N, C) float32, the CLS token of that layer
@@ -178,24 +203,55 @@ output_dir/                      # from the config
       label_names.json           # {field: names}, the name of integer k is names[k] (sorted unique values of the sampled tiles; "0-25%" .. "75-100%" for the derived labels)
       info.json                  # settings, git commit, kept layers, sampled dataset indices; written last by the extraction (marks it complete)
       config.json                # the full config that produced these files, written right after a fresh extraction
-results_dir/                     # from the config, independent of output_dir (e.g. the extraction on node-local storage and the results on Drive)
-  <hash>_<methods>/            # one folder per extraction and set of methods (sorted by name), e.g. 8707bab631_cka_effective_rank
-    results.pt                 # the results of all methods: their outputs (the final numbers, curves, images and maps, not the intermediates), read with torch.load(path, weights_only=False)
-    dashboard.html             # the whole run on one page, to open with a double click (see below)
-    config.json                # the full config of the last run that wrote this folder
-    <method>/                  # the plots that method defines, e.g. cka/patch_mean_cka.png, effective_rank/patch_mean_effective_rank.png, layer_inversion/error.png, layer_inversion/collage.png and relax/image_<index>.png (one per analysed image) and tsne/<label>_tsne.png (one per label)
+results_dir/                     # exact output directory supplied for this invocation, independent of the extraction cache
+  results.pt                     # the results of all methods: their outputs (the final numbers, curves, images and maps, not the intermediates), read with torch.load(path, weights_only=False)
+  dashboard.html                 # the whole run on one page, to open with a double click (see below)
+  config.json                    # the effective config of this invocation, including runtime paths
+  <method>/                      # the plots that method defines, e.g. cka/patch_mean_cka.png, effective_rank/patch_mean_effective_rank.png, layer_inversion/error.png, layer_inversion/collage.png and relax/image_<index>.png (one per analysed image) and tsne/<label>_tsne.png (one per label)
+  baseline/                      # (optional, in comparison mode) results.pt and <method>/ plots for the baseline checkpoint
+  trained/                       # (optional, in comparison mode) results.pt and <method>/ plots for the trained checkpoint
 ```
 
-At the end of a run, `write_dashboard` (`utils.py`) writes `dashboard.html` into the results folder: the settings of the run, then for every method its plots (embedded in the file, so it can be moved or sent around) and the parts of its subsection of this README (papers, question, what the paper improves on, notes) as toggles. For RELAX, its card shows one row per image instead: the image, then each map over its own copy of the image with its own opacity slider, so they can be compared side by side (built from `results.pt`; its static figures stay in `relax/`). It splits a method's subsection at the lines starting with `Papers`, `Question`, `What the paper improves on` and `Notes on the paper(s)`.
+At the end of a run, `write_dashboard` (`utils.py`) writes `dashboard.html` into the results folder, then the interpreter attempts to delete the completed activation cache. The dashboard contains the settings of the run, then for every method its plots (embedded in the file, so it can be moved or sent around) and the parts of its subsection of this README (papers, question, what the paper improves on) as toggles. When running with both baseline and trained checkpoints, the dashboard displays a side-by-side two-column comparison (Untrained Baseline vs. Trained Model) for every method's plots and RELAX heatmaps. For RELAX, its card shows one row per image instead: the image, then each map over its own copy of the image with its own opacity slider, so they can be compared side by side (built from `results.pt`; its static figures stay in `relax/`). It splits a method's subsection at the lines starting with `Papers`, `Question`, and `What the paper improves on`.
 
-Row `i` of every file is the `i`-th sampled tile (`sampled_dataset_indices` in `info.json`), so the vectors, the image and the labels of an example sit at the same index by construction.
+During extraction, row `i` of every cache file is the `i`-th sampled tile (`sampled_dataset_indices` in `info.json`), so the vectors, image, and labels of an example sit at the same index by construction.
 Methods read one layer through `ActivationDataset(data_dir, layer, device)`, a `torch.utils.data.Dataset`: the constructor sends nothing to the device: the small tensors (`cls`, `patch_mean`, labels) are CPU tensors in memory, the two big files (`patch_tokens`, `image`) are opened only when enabled and memory-mapped (nothing is read until an item is fetched). Data leaves the dataset in two ways and both move it to the device (`__getitem__` itself returns one example as CPU tensors): `get_block(field, key)` returns a whole small block (`field` names a dict of the dataset, `"activations"` or `"labels"`, and `key` picks the block in it: `get_block("activations", "cls")`, `get_block("labels", "medical_center")`; what methods that need a whole layer or fold read; the big blocks are refused, they are memory-mapped so that they are never loaded whole), and `DeviceLoader(dataset, device, indices, batch_size, ...)` from `data.py` (a `DataLoader` over those examples that yields batches already on the device, the only way to read the big blocks, in batches)
 returns one example as `{"image", "cls", "patch_tokens", "patch_mean", "labels"}`, always with these keys in this order: `cls`, `patch_mean` (both `(C,)`) and `labels` (`{metadata field: integer}`) are always filled, while
 `image` and `patch_tokens` are only opened when enabled in the constructor (`ActivationDataset(data_dir, layer, device, patch_tokens=True, image=True)`) and are an empty tensor `torch.empty(0)` otherwise (empty means "not loaded").
 All tensors are private to the dataset. Only two facts are public attributes, so that methods never hard-code them: `.label_names` (`{metadata field: names}`, the name of integer k is names[k]) and `.vector_types` (`{vector type: description}` of the vectors every item holds); the number of examples is `len(dataset)` and the labels are read with `get_block("labels", field)`, or all at once with `get_block("labels", to_device=False)` (`to_device=False` skips the device move, for the few host-side callers like sklearn and printouts). `dataset[i]` is one example as CPU tensors. The loader stacks examples on the CPU, optionally in `num_workers` worker processes, and the main process moves each whole batch to the device once (workers cannot use the GPU), which is far cheaper than moving every example.
 
-An existing `data/<hash>/` directory is reused without re-extracting. If a run died, its `info.json` is missing and
-loading crashes: delete that `data/<hash>/` directory and rerun.
+## Integration into Labless
+
+This ordered protocol describes each handoff and its failure behavior.
+
+| Step | Action and data flow | Error handling |
+|---|---|---|
+| 1. Launch option | The SLURM launcher accepts `interpretability=false` and forwards the setting as a CLI argument; `train.py` defaults to interpretation enabled and also accepts the CLI override for direct runs. | Reject invalid values with a clear message. If explicitly disabled, print a notice, skip interpretation, and leave the existing training/evaluation and submission behavior unchanged. |
+| 2. Supply runtime paths | After training, `train.py` passes the completed checkpoint path (`latest.pt`), the untrained baseline checkpoint (`init.pt`), and run-local activation-cache/results paths as required CLI arguments alongside the checked-in `interpret:` settings. These interpreter arguments are internal to Nanopath and are not sent to Labless. | Missing required arguments fail before analysis starts. A bad checkpoint or output path is an interpretation-stage failure and does not invalidate completed training/evaluation. |
+| 3. Run interpretation | After training/evaluation, `train.py` invokes the standalone interpreter as a subprocess using the inputs defined in step 2. The interpreter runs both checkpoints, writes run-local analysis results, and generates a side-by-side comparison in `dashboard.html`. `train.py` then unlinks `init.pt`. | On a missing hook or another analysis error, print an actionable warning, keep details in the training process logs, and continue without an interpretation artifact. For a missing hook, name `register_interpretability_hooks` and point to the Hook contract. |
+| 4. Keep local-only results | If Labless auto-submit is not armed, interpretation still runs with the required CLI paths and leaves outputs under the run directory; the interpretation dashboard is not uploaded to W&B or Labless. Training's normal W&B logging is unchanged. | Interpretation remains supplementary; its failure must not invalidate training/evaluation results. No submission is attempted unless the user already opted into the existing Labless flow. |
+| 5. Handoff the dashboard to submission | After successful interpretation, `train.py` passes `interpretability_dashboard=true` to the existing submitter; otherwise the dashboard is omitted. | The submitter ignores existing dashboards unless the current interpreter process succeeds. |
+| 6. Publish and display the optional dashboard | The submitter uploads dashboard HTML to a W&B interpretation run grouped with the training run, then sends its URL as an `interpretability` artifact. The Labless API stores it and the run page displays its kind and clickable URL alongside the training result. | W&B publication failure omits the optional artifact but still allows a training-only submission. Labless API/auth/validation failures remain submission failures, not interpretation warnings. |
+
+### Known Integration Failure Modes
+
+These are the known limitations of the current design. We judge them infrequent enough to accept rather than add automatic retries, a second job, or more submission machinery; interpretation and submission failures may require manual recovery.
+
+| Failure mode | Current design consequence | Training/evaluation results intact locally? | Training/evaluation results in Labless? |
+|---|---|---|---|
+| Invalid interpret config, missing hook, or Python error | Training/evaluation remain complete. `train.py` warns and continues to a training-only Labless submission if auto-submit is armed; partial interpretation files may remain. | ✅ | ✅ |
+| GPU/CPU OOM or disk error confined to the interpreter | Same as an interpretation error above. If the event kills the whole SLURM job, see the job-level failure below. | ✅ | ✅ |
+| Extraction is interrupted before `info.json` is written | The partial cache remains. A retry will fail when it reads the missing completion marker; this fail-fast behavior is intentional. Manually delete the incomplete cache before retrying. | ✅ | ✅ |
+| Activation-cache cleanup fails after successful analysis | Results and dashboard remain complete, but the large cache remains and needs manual deletion. | ✅ | ✅ |
+| W&B dashboard upload raises a normal error | Local interpretation results remain complete. The submitter warns and continues to a training-only Labless submission; W&B may contain a partial run. | ✅ | ✅ |
+| Submitter process is killed during dashboard upload (for example, by OOM) | Local interpretation results remain complete, but the shell may stop before the Labless POST; the W&B run may be partial. Submit the training output manually. | ✅ | ❌ |
+| Labless rejects the submission after W&B upload | The W&B artifact may exist without a Labless run record. Retrying may create another W&B run. | ✅ | ❌ |
+| SLURM timeout, preemption, node loss, or job-wide OOM during interpretation | Training outputs are already complete, but `train.py` may never reach the single Labless submission. Interpretation files may be partial; submission requires manual recovery. | ✅ | ❌ |
+| Concurrent jobs share an activation cache directory or training output directory | Outputs can collide or be deleted. Each concurrent run needs distinct directories. | ⚠️ | ⚠️ |
+| Interpretation fails after replacing its results directory | Previous results are removed at invocation start; partial output from the failed attempt may remain. | ✅ | ✅ |
+
+`✅` means the training/evaluation results are intact/present, `❌` means they are absent, and `⚠️` means partial or uncertain. Labless outcomes assume auto-submit is armed and its POST succeeds unless the row describes a submission failure.
+
 
 ## Hook contract
 
@@ -250,5 +306,3 @@ Nothing else in the rig needs to change.
 
 The model input uses probe.py's eval transform plus the normalization that probe.py applies at its model-call sites
 (`evaluation_preprocess` in `interpret.py`). probe.py is locked, so that normalization is duplicated: keep the two in sync.
-
-**Reference run: the pretrained initialization.** Nanopath training starts from Meta's pretrained DINOv2 weights, so that checkpoint is the natural reference for every interpretability method. Run it with the same dataset, seed and extraction settings as the fine-tuned checkpoints, so that all runs see the same tiles. Comparing the two isolates what the pathology training changed: which layers keep or lose pixel information, how the representation geometry moved, and where the model looks. This is a controlled before/after (same architecture, same starting weights), but it shows what changed, not whether the change is good. That is for the probes and downstream benchmarks to say.

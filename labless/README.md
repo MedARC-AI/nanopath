@@ -21,15 +21,19 @@ RUN_DIR=$PWD/data/main/my-run
 3. Uses the local `output_dir/labless_source` snapshot written by `train.py` and
    diffs that source against the current main commit for `train.py`, `model.py`,
    `dataloader.py`, `prepare.py`, and the config YAML used by the run.
-4. Records hardware, Python version, optional W&B run link, and the full changed
-   path list from the saved source snapshot.
-5. Writes the submission payload to `output_dir/labless_submission.json`.
-6. Opens GitHub's device sign-in flow, or uses the preauthorized token file
+4. Records hardware, Python version, the W&B run link, and the full changed
+  path list from the saved source snapshot.
+5. If called with `interpretability_dashboard=true`, uploads
+  `output_dir/interpret/results/dashboard.html` to a grouped W&B interpretation
+  run and adds its URL as a labeled Labless artifact. `train.py` passes
+  this flag only after interpretation succeeds.
+6. Writes the submission payload to `output_dir/labless_submission.json`.
+7. Opens GitHub's device sign-in flow, or uses the preauthorized token file
    written by `submit/train_1gpu.sbatch`, and posts it to the Labless nanopath
    project.
 
 The labless backend stores the submission as a run with saved source context and
-an optional W&B run link. It derives the public contributor from the verified
+W&B links for training and, when available, interpretation. It derives the public contributor from the verified
 GitHub login, rejects scoped OAuth tokens, and accepts at most 100 submissions per
 login per 24 hours. The website fetches the API data and the SVG plot from
 `api.labless.dev`, so the run appears in the project log, run table, and plot
@@ -106,6 +110,7 @@ Arguments are `key=value`; there is no `argparse`.
 | `run_name` | Short plot label, 20 characters or fewer. |
 | `notes` | Starting recipe, main change, and why it might affect probes. |
 | `wandb_url` | Optional W&B run URL for linking the external dashboard; private or unlisted W&B URLs are accepted because labless only validates URL shape. |
+| `interpretability_dashboard` | Optional `true` flag; uploads `output_dir/interpret/results/dashboard.html` when the caller confirms interpretation succeeded. |
 | `tier` | `full` or `baseline`; inferred when omitted. |
 | `hardware` | Override detected hardware string. |
 | `source_dir` / `source_commit` | Dry-run repair knobs only; real submissions use `output_dir/labless_source` and summary git metadata. |
@@ -152,7 +157,7 @@ The payload intentionally makes the run inspectable. It includes:
 - source snapshot id, optional git remote, commit, full changed source path list,
   changed review files, and a capped review-file snapshot for server-built diffs
 - hardware, Python version, and optional GPU summary
-- W&B run URL
+- W&B run URL and, when supplied, the interpretation W&B run URL
 
 The public API redacts local machine paths, hostnames, users, repo roots, and
 local artifact paths from submitted rows.

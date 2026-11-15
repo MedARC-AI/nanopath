@@ -3,6 +3,7 @@ import os
 import sys
 import math
 import random
+import shutil
 import json
 import hashlib
 import subprocess
@@ -103,7 +104,7 @@ def derive_labels(rgb):
 
 # Samples tiles (stratified, from the generators seeded in main()) and writes the extraction (layout in README.md): the labels (metadata fields, plus labels derived from the pixels during the pass), then one pass of the model over the tiles that collects the activations and the images.
 # info.json is written last, so it marks a complete run. `settings` determines the files (hashed in main, saved in info.json).
-def extract_activations(model, dataset, transform, settings, extract_cfg, output_dir):
+def extract_activations(model, dataset, transform, settings, extract_cfg, activation_dir):
     # Seeded subsample that keeps the proportions of the dataset's stratification dimension (a metadata field).
     dimension = settings["dataset_config"]["stratification_dimension"]
     values = [metadata[dimension] for _, metadata in dataset.records]
@@ -116,8 +117,8 @@ def extract_activations(model, dataset, transform, settings, extract_cfg, output
     )
     num_samples = len(sampled_indices)
 
-    (output_dir / "activations").mkdir(parents=True)
-    (output_dir / "precomputed").mkdir()
+    (activation_dir / "activations").mkdir(parents=True)
+    (activation_dir / "precomputed").mkdir()
 
     # LABELS: every metadata field as integers (its sorted unique values become 0, 1, 2, ...) plus the names to map them back. Row i is the i-th sampled tile, like in every other file.
     sampled_metadata = [dataset.records[sampled_index][1] for sampled_index in sampled_indices]
@@ -192,14 +193,14 @@ def extract_activations(model, dataset, transform, settings, extract_cfg, output
         labels[measure_name] = torch.bucketize(values, quartile_edges)  # (N,) 0 = lowest quarter, 3 = highest quarter
         label_names[measure_name] = ["0-25%", "25-50%", "50-75%", "75-100%"]  # human readable version of the ints in labels
     
-    torch.save(labels, output_dir / "labels.pt")
-    (output_dir / "label_names.json").write_text(json.dumps(label_names))
+    torch.save(labels, activation_dir / "labels.pt")
+    (activation_dir / "label_names.json").write_text(json.dumps(label_names))
 
     for layer, layer_tensors in tensors.items():
-        torch.save(layer_tensors["patch_tokens"], output_dir / "activations" / f"{layer}_patch_tokens.pt")
-        torch.save(layer_tensors["cls"], output_dir / "activations" / f"{layer}_cls.pt")
-        torch.save(layer_tensors["patch_mean"], output_dir / "precomputed" / f"{layer}_patch_mean.pt")
-    torch.save(images, output_dir / "images.pt")
+        torch.save(layer_tensors["patch_tokens"], activation_dir / "activations" / f"{layer}_patch_tokens.pt")
+        torch.save(layer_tensors["cls"], activation_dir / "activations" / f"{layer}_cls.pt")
+        torch.save(layer_tensors["patch_mean"], activation_dir / "precomputed" / f"{layer}_patch_mean.pt")
+    torch.save(images, activation_dir / "images.pt")
 
     extraction_info = {
         **settings,
@@ -208,7 +209,7 @@ def extract_activations(model, dataset, transform, settings, extract_cfg, output
         "kept_layers": kept_layer_names,
         "sampled_dataset_indices": sampled_indices,
     }
-    (output_dir / "info.json").write_text(json.dumps(extraction_info))
+    (activation_dir / "info.json").write_text(json.dumps(extraction_info))
 
 
 # -------------------------------------------------------------------------------------------------
@@ -222,7 +223,6 @@ def evaluation_preprocess(train_cfg):
     mean = torch.tensor(train_cfg["data"]["mean"]).view(3, 1, 1)
     std = torch.tensor(train_cfg["data"]["std"]).view(3, 1, 1)
     return transforms.Compose([transform, transforms.Lambda(lambda tile: (tile, (tile - mean) / std))])
-
 
 
 # Loads a Nanopath checkpoint and returns the model (eval mode, on the CPU), the training config its preprocessing comes
@@ -249,40 +249,32 @@ def set_seeds(seed):
     torch.backends.cudnn.allow_tf32 = False
 
 
-# Everything computes on ONE device (the GPU). main() picks it, moves the model and gives it to the activation datasets, which hold their tensors on it,
-# so the methods never move data between devices.
-def main():
-
-    # ---- SETUP ----
-    device = "cuda"
-    # Usage (from the repo root): python -m interpret.interpret configs/main.yaml
-    cfg = yaml.safe_load(os.path.expandvars(Path(sys.argv[1]).read_text()))
-    icfg = cfg["interpret"]
-
-    # SEEDING POLICY: the one seed of the config is set here, once, for every random number generator (python, numpy, torch on the CPU and the GPU), and nothing else in the rig seeds.
-    # The extraction sampler, the methods and the libraries they call (sklearn draws from numpy's) all draw from these generators, so a run is reproduced by its config.json (the same config, so the same order of methods).
-    # only exception: the fold splitter of Probe (probe_base.py) gets the seed as random_state, so that all variants of a method share their folds (the decoders of the layer inversion are compared
-    # on the same splits, and its collage shows the same tiles in every column).
-    set_seeds(icfg["seed"])  # before the first CUDA operation
-    model, train_cfg, checkpoint_step = load_model(icfg["checkpoint_path"], icfg["model_weights"])
+def run_pipeline(checkpoint_path, results_dir, activation_cache_dir, cfg, icfg, device, dataset, transform, extract_cfg):
+    model, train_cfg, checkpoint_step = load_model(checkpoint_path, icfg["model_weights"])
     model = model.to(device)
-    # The final Lambda puts each image on `device`, so the extractor never moves anything itself.
-    transform = transforms.Compose([evaluation_preprocess(train_cfg), transforms.Lambda(lambda images: [tile.to(device) for tile in images])])
-    print(f"Loaded checkpoint from {icfg['checkpoint_path']}")
+    if not hasattr(model, "register_interpretability_hooks"):
+        print(
+            "\n============================================================\n"
+            "INTERPRETABILITY HOOK NOT IMPLEMENTED\n"
+            "Implement register_interpretability_hooks(self, storage_dict) for this model.\n"
+            "See the hook contract in interpret/README.md.\n"
+            "============================================================",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise AttributeError("model is missing register_interpretability_hooks")
+    print(f"Loaded checkpoint from {checkpoint_path}")
 
     dataset_cfg = icfg["datasets"][icfg["dataset"]]
-    dataset = load_dataset(icfg["dataset"], cfg["probe"]["dataset_roots"])
-
-    # Extractions are cached in output_dir/data/<hash of settings> (layout in README.md; the results go to results_dir, independent of output_dir); if a run died, info.json is
+    # Extractions are cached in activation_cache_dir/data/<hash of settings> (layout in README.md; results go to results_dir); if a run died, info.json is
     # missing and loading crashes below: delete that directory and rerun.
-    extract_cfg = icfg["extract"]
     settings = {
-        "checkpoint_path": icfg["checkpoint_path"], "checkpoint_step": checkpoint_step, "model_weights": icfg["model_weights"],
-        "dataset": icfg["dataset"], "dataset_config": dataset_cfg,
+        "checkpoint_path": checkpoint_path, "checkpoint_step": checkpoint_step, "model_weights": icfg["model_weights"],
+        "dataset": icfg["dataset"], "dataset_root": str(dataset.root), "dataset_config": dataset_cfg,
         "seed": icfg["seed"], "num_samples": extract_cfg["num_samples"], "layer_stride": extract_cfg["layer_stride"],
     }
     settings_hash = hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()[:10]
-    data_dir = Path(icfg["output_dir"]) / "data" / settings_hash
+    data_dir = activation_cache_dir / "data" / settings_hash
 
     # ---- EXTRACTION ----
     if data_dir.exists():
@@ -293,15 +285,9 @@ def main():
         (data_dir / "config.json").write_text(json.dumps(cfg, indent=2))  # the full config that produced these files (a reused extraction keeps its own)
 
     kept_layers = json.loads((data_dir / "info.json").read_text())["kept_layers"]  # in forward-pass order
-
-    # ---- ANALYSIS ----
-    # One results folder per extraction and set of methods, so other extractions or method subsets don't overwrite it.
-    sorted_method_names = sorted(icfg["methods"])
-    methods_label = "_".join(sorted_method_names)
-    results_dir = Path(icfg["results_dir"]) / f"{settings_hash}_{methods_label}"
-    results_dir.mkdir(parents=True, exist_ok=True)
     (results_dir / "config.json").write_text(json.dumps(cfg, indent=2))  # the full config of this run
 
+    # ---- ANALYSIS ----
     results = {}
     for method_name in icfg["methods"]:
         print(f"Running {method_name}...")
@@ -340,9 +326,57 @@ def main():
 
     # the results of all methods, saved together: the complete paper trail of the run (read it back with torch.load(path, weights_only=False), since the results also hold numpy floats)
     torch.save(results, results_dir / "results.pt")
+    # remove activations as otherwise we risk piling up GBs of activation data on cluster in case people run interpretability with many different checkpoints
+    shutil.rmtree(data_dir)
 
-    write_dashboard(results_dir, data_dir, cfg)
+
+# Everything computes on ONE device (the GPU). main() picks it, moves the model and gives it to the activation datasets, which hold their tensors on it,
+# so the methods never move data between devices.
+def main():
+
+    # ---- SETUP ----
+    device = "cuda"
+    # Usage: python -m interpret.interpret CONFIG.yaml checkpoint_path=... activation_cache_dir=... results_dir=... [baseline_checkpoint_path=...]
+    cfg = yaml.safe_load(Path(sys.argv[1]).read_text())
+    icfg = cfg["interpret"]
+    for arg in sys.argv[2:]:
+        key, value = arg.split("=", 1)
+        icfg[key] = value
+    results_dir = Path(icfg["results_dir"])
+    activation_cache_dir = Path(icfg["activation_cache_dir"])
+    if results_dir.exists():  # if output files exits at this path wipe them rather then writing new files next to them
+        shutil.rmtree(results_dir)
+    results_dir.mkdir(parents=True)
+
+    # SEEDING POLICY: the one seed of the config is set here, once, for every random number generator (python, numpy, torch on the CPU and the GPU), and nothing else in the rig seeds.
+    # The extraction sampler, the methods and the libraries they call (sklearn draws from numpy's) all draw from these generators, so a run is reproduced by its config.json (the same config, so the same order of methods).
+    # only exception: the fold splitter of Probe (probe_base.py) gets the seed as random_state, so that all variants of a method share their folds (the decoders of the layer inversion are compared
+    # on the same splits, and its collage shows the same tiles in every column).
+    set_seeds(icfg["seed"])  # before the first CUDA operation
+    # Load model config for eval transform from primary checkpoint
+    _, train_cfg, _ = load_model(icfg["checkpoint_path"], icfg["model_weights"])
+    # The final Lambda puts each image on `device`, so the extractor never moves anything itself.
+    transform = transforms.Compose([evaluation_preprocess(train_cfg), transforms.Lambda(lambda images: [tile.to(device) for tile in images])])
+
+    dataset = load_dataset(icfg["dataset"], cfg["probe"]["dataset_roots"])
+    extract_cfg = icfg["extract"]
+
+    baseline_path = icfg.get("baseline_checkpoint_path")
+    if baseline_path:
+        baseline_results_dir = results_dir / "baseline"
+        trained_results_dir = results_dir / "trained"
+        baseline_results_dir.mkdir(parents=True, exist_ok=True)
+        trained_results_dir.mkdir(parents=True, exist_ok=True)
+
+        print("=== running baseline analysis ===")
+        run_pipeline(baseline_path, baseline_results_dir, activation_cache_dir, cfg, icfg, device, dataset, transform, extract_cfg)
+
+        print("=== running trained model analysis ===")
+        run_pipeline(icfg["checkpoint_path"], trained_results_dir, activation_cache_dir, cfg, icfg, device, dataset, transform, extract_cfg)
+
+        write_dashboard(results_dir, cfg, baseline_dir=baseline_results_dir, trained_dir=trained_results_dir)
+    else:
+        run_pipeline(icfg["checkpoint_path"], results_dir, activation_cache_dir, cfg, icfg, device, dataset, transform, extract_cfg)
+        write_dashboard(results_dir, cfg)
+
     print(f"dashboard saved to: {results_dir / 'dashboard.html'}")
-
-if __name__ == "__main__":
-    main()

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import wandb
 import yaml
 
 
@@ -121,6 +122,23 @@ def main() -> int:
     env = collect_environment(opts)
     wandb_url = checked_wandb_url(summary, opts)
     artifacts = [{"kind": "wandb", "uri": wandb_url}] if wandb_url else []
+    # locate interpretability dashboard and upload to wandb if found
+    dashboard_path = output_dir / "interpret" / "results" / "dashboard.html"
+
+    if opts.get("interpretability_dashboard") == "true" and not dry_run and not validation_errors:
+        try:
+            training_wandb = summary["wandb"]
+            training_name = training_wandb.get("name") or run_label or training_wandb["id"]
+            interpretability_run = wandb.init(
+                entity=training_wandb["entity"], project=training_wandb["project"],
+                name=f"{training_name}-interpret", job_type="interpretability", group=training_wandb["id"],
+            )
+            interpretability_run.log({"dashboard": wandb.Html(dashboard_path.read_text())})
+            interpretability_url = interpretability_run.url
+            interpretability_run.finish()
+            artifacts.append({"kind": "interpretability", "uri": interpretability_url})
+        except Exception as error:
+            print(f"warning: W&B dashboard upload failed; submitting without the interpretation artifact ({error})", file=sys.stderr)
     github_token = ""
     github_login = os.environ.get("GITHUB_USER") or getpass.getuser()
     if not dry_run and not validation_errors:

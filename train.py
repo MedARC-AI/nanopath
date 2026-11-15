@@ -49,18 +49,23 @@ def console_prefix(): return f"{time.strftime('%H:%M:%S')} {os.environ.get('SLUR
 # expandvars is necessary to resolve `$USER` for checked-in configs.
 def load_config():
     if len(sys.argv) < 2:
-        raise ValueError("usage: python train.py <config.yaml> [output_dir=<path>] [seed=<int>]")
+        raise ValueError("usage: python train.py <config.yaml> [output_dir=<path>] [seed=<int>] [interpretability=<true|false>]")
     cfg = yaml.safe_load(os.path.expandvars(Path(sys.argv[1]).read_text()))
     cfg["config_path"] = str(Path(sys.argv[1]).resolve())
-    # Run identity and confirmation seed are the only CLI overrides; recipes stay in YAML.
+    cfg["interpretability"] = True  # run interpretability unless overridden via command line arguments
+    
+    # Run identity, seed, and interpretation are CLI overrides; recipes stay in YAML.
     for arg in sys.argv[2:]:
         key, _, value = arg.partition("=")
         if key == "output_dir":
             cfg["project"]["output_dir"] = os.path.expandvars(value)
         elif key == "seed":
             cfg["train"]["seed"] = int(value)
+        elif key == "interpretability":
+            assert value in {"true", "false"}, f"interpretability must be 'true' or 'false', got {value!r}"
+            cfg["interpretability"] = (value == "true")
         else:
-            raise ValueError(f"unsupported override {arg!r}; use output_dir=<path> or seed=<int>")
+            raise ValueError(f"unsupported override {arg!r}; use output_dir=<path>, seed=<int>, or interpretability=true|false")
     dataset_dir = Path(cfg["data"]["dataset_dir"])
     if not any(dataset_dir.glob("shard-*.arrow")):
         raise FileNotFoundError(
@@ -112,23 +117,22 @@ def maybe_arm_labless_autosubmit(cfg, repo_dir):
     return token_path
 
 
-def finish_labless_autosubmit(token_path, output_dir, repo_dir):
+def finish_labless_autosubmit(token_path, output_dir, repo_dir, interpretability_succeeded):
     token_file = Path(token_path) if token_path else None
     if token_file is None or not token_file.exists():
         return
     token = json.loads(token_file.read_text())
-    status = subprocess.run(
-        [
-            sys.executable,
-            str(repo_dir / "labless" / "submit_to_labless.py"),
-            f"output_dir={output_dir.resolve()}",
-            f"run_name={token['run_name']}",
-            f"notes={token['notes']}",
-            f"github_token_file={token_file}",
-        ],
-        cwd=repo_dir,
-        check=False,
-    ).returncode
+    submit_args = [
+        sys.executable,
+        str(repo_dir / "labless" / "submit_to_labless.py"),
+        f"output_dir={output_dir.resolve()}",
+        f"run_name={token['run_name']}",
+        f"notes={token['notes']}",
+        f"github_token_file={token_file}",
+    ]
+    if interpretability_succeeded:
+        submit_args.append("interpretability_dashboard=true")
+    status = subprocess.run(submit_args, cwd=repo_dir, check=False).returncode
     token_file.unlink(missing_ok=True)
     if status == 2:
         print(f"{console_prefix()} Labless  auto-submit skipped because the completed run did not satisfy submission restrictions.", flush=True)
@@ -220,7 +224,7 @@ def update_ema(student_module, teacher_module, momentum):
 
 
 # Orchestrates one pretraining run: setup, train+probe loop, checkpoint, summary.
-def main():
+def run_training_and_eval():
     cfg = load_config()
     repo_dir = Path(__file__).resolve().parent
     labless_autosubmit_file = maybe_arm_labless_autosubmit(cfg, repo_dir)
@@ -541,6 +545,11 @@ def main():
     last_console_monotonic = time.monotonic()
     data_wait_started_at = time.monotonic()
     autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if train_cfg["bf16"] else contextlib.nullcontext()
+
+    # save untrained backbone (step 0 weights) so interpretability can compare against a baseline
+    if cfg["interpretability"] and resume_path is None:
+        torch.save(checkpoint_payload(step, full=False), output_dir / "init.pt")
+
     # Per-step FLOPs are measured once via FlopCounterMode on the first wrapped step (forward +
     # backward + opt.step) and reused for every subsequent step since the shapes don't change.
     # Counts the EMA teacher forward + DINO/iBOT projection heads, not just the backbone, so the
@@ -776,7 +785,38 @@ def main():
     for key, value in summary.items():
         wandb_run.summary[key] = value
     wandb_run.finish()
-    finish_labless_autosubmit(labless_autosubmit_file, output_dir, repo_dir)
+    return cfg, repo_dir, output_dir, labless_autosubmit_file
+
+
+def main():
+    cfg, repo_dir, output_dir, labless_autosubmit_file = run_training_and_eval()
+    
+    interpretability_succeeded = False
+    if not cfg["interpretability"]:
+        print(f"{console_prefix()} interpretability disabled - skipping it.", flush=True)
+    else:
+        torch.cuda.empty_cache()
+
+        checkpoint_path = output_dir / "latest.pt"
+        baseline_path = output_dir / "init.pt"
+        cache_path = output_dir / "interpret"
+        results_dir = output_dir / "interpret" / "results"
+        
+        args = [
+            sys.executable, "-m", "interpret.interpret", cfg["config_path"],
+            f"checkpoint_path={checkpoint_path}", 
+            f"baseline_checkpoint_path={baseline_path}",
+            f"activation_cache_dir={cache_path}",
+            f"results_dir={results_dir}",
+        ]
+
+        interpretability_succeeded = subprocess.run(args, cwd=repo_dir, check=False).returncode == 0
+        baseline_path.unlink(missing_ok=True)  # rm baseline model weights after interpret has finished
+        
+        if not interpretability_succeeded:
+            print(f"{console_prefix()} WARNING: interpretability failed - check logs.", file=sys.stderr, flush=True)
+        
+    finish_labless_autosubmit(labless_autosubmit_file, output_dir, repo_dir, interpretability_succeeded)
 
 
 if __name__ == "__main__":

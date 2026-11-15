@@ -20,7 +20,8 @@ from PIL import Image
 # function and returns only the transformed image; we also expose the metadata: slide_id, biological_class, medical_center.
 class PathoRobCamelyonDataset(torch.utils.data.Dataset):
     def __init__(self, root):
-        table = pa.concat_tables([pq.read_table(f) for f in sorted((root / "camelyon").glob("data/*.parquet"))])
+        self.root = Path(root)
+        table = pa.concat_tables([pq.read_table(f) for f in sorted((self.root / "camelyon").glob("data/*.parquet"))])
         images = [r["bytes"] for r in table.column("image").to_pylist()]
         metadata = table.select(["slide_id", "biological_class", "medical_center"]).to_pylist()
         self.records = list(zip(images, metadata))
