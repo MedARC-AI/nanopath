@@ -19,7 +19,7 @@ from prepare import tissue_mask
 
 # Maximum dimension (width/height) for images embedded in the dashboard HTML.
 # Downscaling keeps dashboard.html lightweight (a few MBs instead of tens of MBs) while maintaining visual clarity.
-DASHBOARD_MAX_IMAGE_DIM = 600
+DASHBOARD_MAX_IMAGE_DIM = 1500
 
 
 def encode_image_base64(image_or_bytes):
@@ -184,7 +184,7 @@ def write_dashboard(results_dir, cfg, baseline_dir=None, trained_dir=None):
         method_text_match = re.search(rf"^### {method_name}\n(.*?)(?=^##|\Z)", readme, re.S | re.M)
         if method_text_match:
             method_text = method_text_match.group(1)
-            for part in re.split(r"(?m)^(?=Papers|Question|What the paper improves on)", method_text):
+            for part in re.split(r"(?m)^(?=Papers|Question)", method_text):
                 if part.strip() and not part.strip().startswith("Notes on the paper"):
                     title, _, part_body = part.partition(":")
                     body += f"<details><summary>{title}</summary>{markdown.markdown(part_body, extensions=['tables'])}</details>"

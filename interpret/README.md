@@ -212,7 +212,7 @@ results_dir/                     # exact output directory supplied for this invo
   trained/                       # (optional, in comparison mode) results.pt and <method>/ plots for the trained checkpoint
 ```
 
-At the end of a run, `write_dashboard` (`utils.py`) writes `dashboard.html` into the results folder, then the interpreter attempts to delete the completed activation cache. The dashboard contains the settings of the run, then for every method its plots (embedded in the file, so it can be moved or sent around) and the parts of its subsection of this README (papers, question, what the paper improves on) as toggles. When running with both baseline and trained checkpoints, the dashboard displays a side-by-side two-column comparison (Untrained Baseline vs. Trained Model) for every method's plots and RELAX heatmaps. For RELAX, its card shows one row per image instead: the image, then each map over its own copy of the image with its own opacity slider, so they can be compared side by side (built from `results.pt`; its static figures stay in `relax/`). It splits a method's subsection at the lines starting with `Papers`, `Question`, and `What the paper improves on`.
+At the end of a run, `write_dashboard` (`utils.py`) writes `dashboard.html` into the results folder, then the interpreter attempts to delete the completed activation cache. The dashboard contains the settings of the run, then for every method its plots (embedded in the file, so it can be moved or sent around) and the parts of its subsection of this README (papers, question) as toggles. When running with both baseline and trained checkpoints, the dashboard displays a side-by-side two-column comparison (Untrained Baseline vs. Trained Model) for every method's plots and RELAX heatmaps. For RELAX, its card shows one row per image instead: the image, then each map over its own copy of the image with its own opacity slider, so they can be compared side by side (built from `results.pt`; its static figures stay in `relax/`). It splits a method's subsection at the lines starting with `Papers` and `Question`.
 
 During extraction, row `i` of every cache file is the `i`-th sampled tile (`sampled_dataset_indices` in `info.json`), so the vectors, image, and labels of an example sit at the same index by construction.
 Methods read one layer through `ActivationDataset(data_dir, layer, device)`, a `torch.utils.data.Dataset`: the constructor sends nothing to the device: the small tensors (`cls`, `patch_mean`, labels) are CPU tensors in memory, the two big files (`patch_tokens`, `image`) are opened only when enabled and memory-mapped (nothing is read until an item is fetched). Data leaves the dataset in two ways and both move it to the device (`__getitem__` itself returns one example as CPU tensors): `get_block(field, key)` returns a whole small block (`field` names a dict of the dataset, `"activations"` or `"labels"`, and `key` picks the block in it: `get_block("activations", "cls")`, `get_block("labels", "medical_center")`; what methods that need a whole layer or fold read; the big blocks are refused, they are memory-mapped so that they are never loaded whole), and `DeviceLoader(dataset, device, indices, batch_size, ...)` from `data.py` (a `DataLoader` over those examples that yields batches already on the device, the only way to read the big blocks, in batches)
@@ -284,10 +284,10 @@ of the returned list cannot be checked by the rig: they are promises by the impl
 
 ## Your to-do list to analyse a new model
 
-- [ ] Implement `register_interpretability_hooks` on your model, following the contract above.
-- [ ] If your model is not a Nanopath checkpoint, update `load_model` in `interpret.py` so it loads and builds your model
-  and returns `(model, train_cfg, step)`: `train_cfg` is the config its preprocessing reads (`data.mean`, `data.std`,
-  the probe transform policy) and `step` goes into the cache hash.
+- [ ] Implement `register_interpretability_hooks(self, storage_dict) -> list[str]` on your model, following the contract above.
+- [ ] If your model is not a standard Nanopath ViT checkpoint, update `load_model` in `interpret.py` so it loads and builds your model
+  and returns `(model, train_cfg, step)`.
+- [ ] Ensure your model's forward pass returns `{"cls": (B, C), "patches": (B, N, C)}` so attribution methods like RELAX can evaluate embeddings.
 
 Nothing else in the rig needs to change.
 

@@ -55,6 +55,8 @@ class RELAX:
     # shows up in the similarity. The registers are left out.
     def _embed(self, input_images):  # (batch, 3, H, W) -> (batch, C + num_patches * C)
         outputs = self._model(input_images)
+        if not isinstance(outputs, dict) or "cls" not in outputs or "patches" not in outputs:
+            raise AttributeError("model forward() must return a dict with 'cls' and 'patches' (see interpret/README.md)")
         cls_token = outputs["cls"]  # (batch, C)
         patch_tokens = outputs["patches"]  # (batch, num_patches, C)
         batch_size = patch_tokens.shape[0]

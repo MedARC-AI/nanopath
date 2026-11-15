@@ -252,6 +252,7 @@ def set_seeds(seed):
 def run_pipeline(checkpoint_path, results_dir, activation_cache_dir, cfg, icfg, device, dataset, transform, extract_cfg):
     model, train_cfg, checkpoint_step = load_model(checkpoint_path, icfg["model_weights"])
     model = model.to(device)
+    
     if not hasattr(model, "register_interpretability_hooks"):
         print(
             "\n============================================================\n"
@@ -263,6 +264,7 @@ def run_pipeline(checkpoint_path, results_dir, activation_cache_dir, cfg, icfg, 
             flush=True,
         )
         raise AttributeError("model is missing register_interpretability_hooks")
+    
     print(f"Loaded checkpoint from {checkpoint_path}")
 
     dataset_cfg = icfg["datasets"][icfg["dataset"]]

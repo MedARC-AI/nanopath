@@ -126,7 +126,7 @@ interpret:
     pathorob_camelyon:
       stratification_dimension: biological_class # sample field the sampler stratifies over
   extract:
-    num_samples: 10000 # stratified subsample of the dataset
+    num_samples: 100 # stratified subsample of the dataset
     batch_size: 128
     num_workers: 2 # image decoding only
     layer_stride: 4 # every n-th layer, counted from the last
@@ -161,7 +161,7 @@ interpret:
   relax:
     num_masks: 3000  # random masks per image (the paper picks 3000)
     mask_batch_size: 256
-    num_images: 40  # tiles evenly spaced through the dataset 
+    num_images: 20  # tiles evenly spaced through the dataset 
     grid_side_length: 7  # inital mask size (used for sampling)
     visible_probability: 0.5  # probability that a mask pixel is visible 
     uncertainty_threshold_scale: 1.0  # gamma of U-RELAX: the importance is kept where the uncertainty is below gamma times its median
