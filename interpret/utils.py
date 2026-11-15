@@ -17,18 +17,12 @@ from PIL import Image
 
 from prepare import tissue_mask
 
-# Maximum dimension (width/height) for images embedded in the dashboard HTML.
-# Downscaling keeps dashboard.html lightweight (a few MBs instead of tens of MBs) while maintaining visual clarity.
-DASHBOARD_MAX_IMAGE_DIM = 1500
-
 
 def encode_image_base64(image_or_bytes):
-    image = Image.open(io.BytesIO(image_or_bytes)) if isinstance(image_or_bytes, (bytes, bytearray)) else image_or_bytes
-    if DASHBOARD_MAX_IMAGE_DIM and max(image.size) > DASHBOARD_MAX_IMAGE_DIM:
-        image = image.copy()
-        image.thumbnail((DASHBOARD_MAX_IMAGE_DIM, DASHBOARD_MAX_IMAGE_DIM), Image.Resampling.LANCZOS)
+    if isinstance(image_or_bytes, (bytes, bytearray)):
+        return base64.b64encode(image_or_bytes).decode()
     buffer = io.BytesIO()
-    image.save(buffer, format="PNG", optimize=True)
+    image_or_bytes.save(buffer, format="PNG")
     return base64.b64encode(buffer.getvalue()).decode()
 
 # Style of the dashboard: the browser's own light/dark colors, a readable column, plots side by side.
@@ -159,7 +153,7 @@ def write_dashboard(results_dir, cfg, baseline_dir=None, trained_dir=None):
             t_head, t_debug = _render_method_plots(trained_dir, method_name, trained_res, prefix=f"t_{method_name}")
 
             plots_html = f"""
-            <div class='two-col-header'><div>Untrained Baseline (Init)</div><div>Trained Model (Final)</div></div>
+            <div class='two-col-header'><div>Untrained Baseline</div><div>Trained Model</div></div>
             <div class='two-col'>
                 <div class='col'>{b_head}</div>
                 <div class='col'>{t_head}</div>
