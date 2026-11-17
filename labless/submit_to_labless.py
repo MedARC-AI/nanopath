@@ -539,7 +539,8 @@ def checked_wandb_url(summary: dict[str, Any], opts: dict[str, str]) -> str:
     if url:
         parsed = urlparse(url)
         parts = [part for part in parsed.path.split("/") if part]
-        if parsed.scheme != "https" or parsed.netloc != "wandb.ai" or len(parts) != 4 or parts[2] != "runs":
+        valid_host = parsed.netloc in {"wandb.ai", "forge.coreweave.com"}
+        if parsed.scheme != "https" or not valid_host or len(parts) != 4 or parts[2] != "runs":
             raise ValueError("wandb_url must be a W&B run URL like https://wandb.ai/<entity>/<project>/runs/<run_id>")
         return str(url)
     return ""
