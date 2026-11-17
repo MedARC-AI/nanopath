@@ -122,11 +122,10 @@ def main() -> int:
     env = collect_environment(opts)
     wandb_url = checked_wandb_url(summary, opts)
     artifacts = [{"kind": "wandb", "uri": wandb_url}] if wandb_url else []
-    # locate interpretability dashboard and upload to wandb if found
-    dashboard_path = output_dir / "interpret" / "results" / "dashboard.html"
 
     if opts.get("interpretability_dashboard") == "true" and not dry_run and not validation_errors:
         try:
+            dashboard_path = output_dir / "interpret" / "results" / "dashboard.html"
             training_wandb = summary["wandb"]
             training_name = training_wandb.get("name") or run_label or training_wandb["id"]
             interpretability_run = wandb.init(
