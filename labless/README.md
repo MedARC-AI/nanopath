@@ -94,7 +94,8 @@ python baselines/dinov2_small_baseline.py configs/main.yaml
 ```
 
 The submit script detects `summary.family == "baseline"` and marks the run as
-`tier=baseline`. Labless uses GenBio-PathFM and Virchow as pathology references;
+`tier=baseline`. Baseline runs start unvalidated like any other; a maintainer marks
+them reference. Labless uses GenBio-PathFM and Virchow as pathology references;
 DINOv2 giant and small provide natural-image references. Other baselines,
 including GigaPath, can stay in the repo README without becoming Labless
 reference rows. The nanopath leaderboard still ranks validated completed full
@@ -128,7 +129,9 @@ payload locally without signing in or posting.
 ## Validation rules
 
 The benchmark score is only meaningful when evaluation stays fixed. The script
-marks submissions invalid if the saved source snapshot changed:
+marks submissions invalid if the saved source snapshot's locked paths differ from
+current GitHub `main`, including changes committed on your branch, so pull `main`
+when it changes them. These paths are locked:
 
 - `probe.py`
 - anything under `benchmarking/`
@@ -163,13 +166,13 @@ The public API redacts local machine paths, hostnames, users, repo roots, and
 local artifact paths from submitted rows.
 
 The final score weights classification, segmentation, progression, mutation,
-survival, and CRoMa robustness at 30%, 15%, 17.5%, 15%, 7.5%, and 15%.
+survival, and CRoMa robustness at 40%, 20%, 10%, 10%, 5%, and 15%.
 Labless rejects scores that do not match those submitted components.
 
 Agents can crawl the public experiment ledger directly with the JSON API:
 
 ```bash
-curl -fsS "https://api.labless.dev/api/nano-projects/nanopath-v2/experiment-log?limit=100" \
+curl -fsS "https://api.labless.dev/api/nano-projects/nanopath-v3/experiment-log?limit=100" \
   | jq '.runs[] | {run_id, title, validation, metric_value, summary}'
 ```
 
@@ -193,14 +196,12 @@ and raw data are not posted.
 New completed full runs appear as `unvalidated`. A maintainer reruns promising
 candidates three times with different randomly selected training seeds. The
 median run becomes validated leader if it beats the incumbent by at least
-0.004; `robust-norm-s9876` is the approved exception. Maintainers separately
+0.004. Maintainers separately
 mark the run whose commit is on `main`. Failed runs are not accepted.
 
-Historical v2 runs without retained weights are marked as estimates. Their
-robustness is the original quality-adjusted value minus 0.3063356348369218, the
-mean difference measured on the six plotted nanopath checkpoints (SD 0.01637).
-The five predictive components are unchanged and the new six-family weights
-are applied. Estimated points are labeled with ≈ and cannot establish a leader.
-New submissions must provide measured `croma_mean` and satisfy
-`robustness_mean == (1 + croma_mean) / 2`; historical estimates are a maintainer
-migration exception. Original scores remain available in each run's metrics.
+The v3 plot was seeded by re-evaluating retained v2 checkpoints with the v3
+readout, with `main` and stack4_salient retrained; v2 runs without retained
+weights stay on the legacy v2 plot only.
+
+Submissions must provide measured `croma_mean` and satisfy
+`robustness_mean == (1 + croma_mean) / 2`.

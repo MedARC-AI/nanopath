@@ -2,7 +2,7 @@
 
 ![nanopath logo](imgs/nanopath_logo.png)
 
-> **Sept 2026 update**: Our ~20 min. fast evaluation suite now adds more downstream datasets, removes explicitly TCGA-derived tasks, reworks the lightweight probing code, and reweights final score calculation. "nanopath-evals" is now a much more faithful proxy for performance on official benchmarks. However, this required resetting the Labless live leaderboard plot (original is still preserved but should not be hillclimbed on).
+> **Nov 2026 update**: nanopath-evals v3 keeps the v2 datasets but fixes the readout: one forward pass per tile, final-layer CLS and patch tokens, no test-time augmentation or feature aggregation (see [what you must not change](#what-you-must-not-change-for-a-leaderboard-submission)). It also reweights `final_score` from 30/15/17.5/15/7.5/15 to 40/20/10/10/5/15. The Labless plot was reset to v3 and seeded by re-evaluating retained v2 checkpoints; the v2 and v1 plots are preserved but should not be hillclimbed on (v2 code can still submit from the [`main_v2`](https://github.com/MedARC-AI/nanopath/tree/main_v2) branch).
 
 `nanopath` is a super lean experimental harness for training tile-level computational pathology foundation models, inspired by [nanochat](https://github.com/karpathy/nanochat). In ~1 hour it trains on 1 million pathology tiles on a single GPU and evaluates a broad suite of downstream probes spanning tile classification, segmentation, slide-level mutation/progression/survival, and robustness. The goal is to easily explore and iterate on research directions to see what works best on small-scale, then scale up the best performing training recipes with more data and larger compute.
 
@@ -10,7 +10,7 @@ This repository is intentionally made to be compatible with [autoresearch](https
 
 **Want to get involved? Join us in the [MedARC Discord](https://discord.gg/tVR4TWnRM9) (find us in #path-fm)!**
 
-The current validated leader is [stack4_salient](https://github.com/MedARC-AI/nanopath/tree/stack4-salient) by [@RyanKim17920](https://github.com/RyanKim17920), with a median score of **0.6810** across three training seeds ([Labless run](https://labless.dev/runs/run_sub_6da523428f)).
+The current validated leader is [stack4_salient](https://github.com/MedARC-AI/nanopath/tree/stack4_salient_v3) by [@RyanKim17920](https://github.com/RyanKim17920), scoring **0.6747** under v3 ([Labless run](https://labless.dev/runs/run_sub_46f7ab4a38)).
 
 ## Quickstart
 
@@ -43,13 +43,13 @@ W&B can run online or offline, but set that up before submitting a noninteractiv
 
 ## Leaderboard
 
-<a href="https://labless.dev/nano-projects/nanopath-v2">
-  <img src="https://api.labless.dev/api/nano-projects/nanopath-v2/plot.svg" alt="nanopath progress plot" width="1290">
+<a href="https://labless.dev/nano-projects/nanopath-v3">
+  <img src="https://api.labless.dev/api/nano-projects/nanopath-v3/plot.svg" alt="nanopath progress plot" width="1290">
 </a>
 
-`final_score` weights classification, segmentation, progression, mutation, survival, and CRoMa robustness at 30%, 15%, 17.5%, 15%, 7.5%, and 15%. These columns summarize a 20-dataset suite derived from [THUNDER](https://mics-lab.github.io/thunder/), [PathoBench](https://github.com/mahmoodlab/patho-bench), [LEOPARD](https://leopard.grand-challenge.org/), [PathoROB](https://arxiv.org/abs/2507.17845), and [CRoMa](https://github.com/clemsgrs/croma), with modifications to keep single-GPU evaluation lightweight and use train/validation-only data. See [benchmarking/README.md](benchmarking/README.md) for the full protocol and provenance caveats.
+`final_score` weights classification, segmentation, progression, mutation, survival, and CRoMa robustness at 40%, 20%, 10%, 10%, 5%, and 15%. These columns summarize a 20-dataset suite derived from [THUNDER](https://mics-lab.github.io/thunder/), [PathoBench](https://github.com/mahmoodlab/patho-bench), [LEOPARD](https://leopard.grand-challenge.org/), [PathoROB](https://arxiv.org/abs/2507.17845), and [CRoMa](https://github.com/clemsgrs/croma), with modifications to keep single-GPU evaluation lightweight and use train/validation-only data. See [benchmarking/README.md](benchmarking/README.md) for the full protocol and provenance caveats.
 
-Nanopath models should be submitted to [Labless](https://labless.dev). `main` corresponds to this repository's main recipe. For promotion, [@PaulScotti](https://github.com/PaulScotti) retrains an unvalidated candidate three times with different randomly selected RNG seeds; its median run becomes the validated `leader` if it beats the incumbent by at least 0.004. `robust-norm-s9876` is the approved exception.
+Nanopath models should be submitted to [Labless](https://labless.dev). `main` corresponds to this repository's main recipe. For promotion, [@PaulScotti](https://github.com/PaulScotti) retrains an unvalidated candidate three times with different randomly selected RNG seeds; its median run becomes the validated `leader` if it beats the incumbent by at least 0.004.
 
 ![nanopath final score compared with held-out official evaluations](imgs/threepanel-v2.png)
 
@@ -59,40 +59,40 @@ As you can see in the above correlation plots, our fast ~20 minute evaluation su
 
 ### nanopath models
 
-The `main` branch uses the `lr-and-curation` recipe. Model links below select the corresponding training recipe; clone with `--branch <branch-name>` to use that recipe with nanopath-evals v2.
+The `main` branch uses the `lr-and-curation` recipe. `main` and stack4_salient were retrained under v3; the other scores are v3 re-evaluations of each model's validated v2 checkpoint. Only `main` and `stack4_salient_v3` are ported to v3; the other links are v2-era recipe branches.
 
 | # | Description | final score | classification | segmentation | progression | mutation | survival | robustness | Contributors |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | [stack4_salient](https://github.com/MedARC-AI/nanopath/tree/stack4-salient) | **0.6810** | 0.7332 | 0.6105 | 0.7107 | 0.6410 | 0.6525 | 0.6671 | [@RyanKim17920](https://github.com/RyanKim17920) |
-| 2 | [robust-huelocal](https://github.com/MedARC-AI/nanopath/tree/robust-huelocal) | 0.6675 | 0.7350 | 0.5986 | 0.6884 | 0.6455 | 0.6131 | 0.6261 | [@anishdulal](https://github.com/anishdulal) |
-| 3 | [GuruTurbo1.0](https://github.com/MedARC-AI/nanopath/tree/GuruTurbo1.0) | 0.6597 | 0.7518 | 0.6030 | 0.6365 | 0.6289 | 0.6301 | 0.6046 | [@aajing](https://github.com/aajing) |
-| 4 | [pathway-tta](https://github.com/MedARC-AI/nanopath/tree/pathway-tta) | 0.6491 | 0.7557 | 0.6020 | 0.5993 | 0.6128 | 0.6242 | 0.5896 | [@achi2023](https://github.com/achi2023) |
-| 5 | [jepa-fino](https://github.com/MedARC-AI/nanopath/tree/jepa-fino-v2) | 0.6483 | 0.7384 | 0.6016 | 0.6010 | 0.6190 | 0.6210 | 0.6132 | [@ml-and-ml](https://github.com/ml-and-ml) |
-| 6 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm-v2) | 0.6465 | 0.7507 | 0.6024 | 0.6073 | 0.5885 | 0.6010 | 0.6088 | [@anishdulal](https://github.com/anishdulal) |
-| 7 | I-JEPA contig patch | 0.6463 | 0.7219 | 0.5993 | 0.6238 | 0.6148 | 0.6172 | 0.6143 | @NimaAsh |
-| 8 | block-strided-cls | 0.6448 | 0.7477 | 0.6039 | 0.5738 | 0.6066 | 0.6335 | 0.6069 | @RyanKim17920 |
-| 9 | [lr-and-curation](https://github.com/MedARC-AI/nanopath) | 0.6349 | 0.7048 | 0.5940 | 0.6045 | 0.6025 | 0.6199 | 0.6114 | @nevasini1 |
+| 1 | [stack4_salient](https://github.com/MedARC-AI/nanopath/tree/stack4_salient_v3) | **0.6747** | 0.7505 | 0.6067 | 0.6170 | 0.6266 | 0.6525 | 0.6416 | [@RyanKim17920](https://github.com/RyanKim17920) |
+| 2 | [robust-huelocal](https://github.com/MedARC-AI/nanopath/tree/robust-huelocal) | 0.6660 | 0.7423 | 0.5981 | 0.6511 | 0.6288 | 0.6179 | 0.6038 | [@anishdulal](https://github.com/anishdulal) |
+| 3 | [GuruTurbo1.0](https://github.com/MedARC-AI/nanopath/tree/GuruTurbo1.0) | 0.6652 | 0.7449 | 0.6027 | 0.6111 | 0.6296 | 0.6326 | 0.6069 | [@aajing](https://github.com/aajing) |
+| 4 | [jepa-fino](https://github.com/MedARC-AI/nanopath/tree/jepa-fino-v2) | 0.6648 | 0.7383 | 0.6024 | 0.6010 | 0.6194 | 0.6215 | 0.6392 | [@ml-and-ml](https://github.com/ml-and-ml) |
+| 5 | block-strided-cls | 0.6619 | 0.7362 | 0.5963 | 0.6047 | 0.6056 | 0.6376 | 0.6353 | @RyanKim17920 |
+| 6 | [robust-norm](https://github.com/MedARC-AI/nanopath/tree/robust-norm-v2) | 0.6590 | 0.7387 | 0.5968 | 0.6351 | 0.5915 | 0.6115 | 0.6064 | [@anishdulal](https://github.com/anishdulal) |
+| 7 | [pathway-tta](https://github.com/MedARC-AI/nanopath/tree/pathway-tta) | 0.6564 | 0.7395 | 0.5988 | 0.6214 | 0.6060 | 0.6086 | 0.5846 | [@achi2023](https://github.com/achi2023) |
+| 8 | I-JEPA contig patch | 0.6562 | 0.7218 | 0.5877 | 0.6238 | 0.6151 | 0.6173 | 0.6342 | @NimaAsh |
+| 9 | [lr-and-curation](https://github.com/MedARC-AI/nanopath) | 0.6425 | 0.7019 | 0.5977 | 0.5747 | 0.6009 | 0.6414 | 0.6168 | @nevasini1 |
 
-The [stack4_salient](https://labless.dev/runs/run_sub_6da523428f), [robust-huelocal](https://labless.dev/runs/run_sub_2e5c3d80c6), [GuruTurbo1.0](https://labless.dev/runs/run_sub_cb8d49013b), and [pathway-tta](https://labless.dev/runs/run_sub_92673d64ef) scores are validated medians of three independent training seeds.
+The robust-huelocal, GuruTurbo1.0, and pathway-tta rows are the median-seed checkpoints of their three-seed v2 validations; stack4_salient is retrained with its median seed.
 
 ### Baselines
 
 | # | Name | Description | final score | classification | segmentation | progression | mutation | survival | robustness |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|
-| 1 | GenBio-PathFM | GenBio-PathFM ViT-G/16 | **0.6926** | 0.8213 | 0.6100 | 0.6630 | 0.6232 | 0.6312 | 0.6525 |
-| 2 | UNI-2-h | MahmoodLab UNI-2-h ViT-H/14 | 0.6876 | 0.8161 | 0.6323 | 0.6771 | 0.6408 | 0.6105 | 0.5837 |
-| 3 | Midnight-12K | Kaiko Midnight-12K ViT-G/14 | 0.6865 | 0.7761 | 0.6326 | 0.6669 | 0.6170 | 0.6100 | 0.6918 |
-| 4 | H-optimus-0 | H-optimus-0 ViT-G/14-reg | 0.6785 | 0.8082 | 0.5916 | 0.6683 | 0.6485 | 0.6059 | 0.5838 |
-| 5 | H0-mini | Bioptimus H0-mini ViT-B/14-reg | 0.6774 | 0.7956 | 0.6371 | 0.6387 | 0.6026 | 0.5945 | 0.6429 |
-| 6 | Virchow | Paige/Microsoft Virchow ViT-H/14 | 0.6761 | 0.7728 | 0.6326 | 0.6460 | 0.6291 | 0.6173 | 0.6379 |
-| 7 | GigaPath | Prov-GigaPath tile encoder ViT-G/16 | 0.6659 | 0.7948 | 0.6197 | 0.6663 | 0.6130 | 0.5802 | 0.5492 |
-| 8 | GigaPath-Flash | Prov-GigaPath-Flash tile encoder ViT-S/16 | 0.6496 | 0.7742 | 0.5569 | 0.6592 | 0.5796 | 0.6122 | 0.5703 |
-| 9 | Kaiko-S/16 | Kaiko pathology ViT-S/16 | 0.6420 | 0.7737 | 0.6060 | 0.6025 | 0.5539 | 0.5907 | 0.5741 |
-| 10 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.6327 | 0.6640 | 0.6306 | 0.6435 | 0.5829 | 0.6058 | 0.6229 |
-| 11 | DINOv2-G/14 | Meta DINOv2-G/14-reg | 0.6043 | 0.6804 | 0.5753 | 0.5320 | 0.6038 | 0.6288 | 0.5534 |
-| 12 | DINOv2-L/14 | Meta DINOv2-L/14-reg | 0.5975 | 0.6632 | 0.5667 | 0.5445 | 0.6005 | 0.6009 | 0.5540 |
-| 13 | DINOv2-S/14 | Meta DINOv2-S/14-reg | 0.5943 | 0.6480 | 0.5665 | 0.5352 | 0.6202 | 0.6220 | 0.5437 |
-| 14 | DINOv2-B/14 | Meta DINOv2-B/14-reg | 0.5920 | 0.6500 | 0.5691 | 0.5364 | 0.6062 | 0.6015 | 0.5449 |
+| 1 | GenBio-PathFM | GenBio-PathFM ViT-G/16 | **0.7085** | 0.8213 | 0.6100 | 0.6630 | 0.6232 | 0.6312 | 0.6518 |
+| 2 | UNI-2-h | MahmoodLab UNI-2-h ViT-H/14 | 0.7014 | 0.8161 | 0.6323 | 0.6771 | 0.6408 | 0.6105 | 0.5745 |
+| 3 | Midnight-12K | Kaiko Midnight-12K ViT-G/14 | 0.6996 | 0.7761 | 0.6326 | 0.6669 | 0.6170 | 0.6100 | 0.6918 |
+| 4 | H0-mini | Bioptimus H0-mini ViT-B/14-reg | 0.6960 | 0.7956 | 0.6371 | 0.6387 | 0.6026 | 0.5945 | 0.6429 |
+| 5 | Virchow | Paige/Microsoft Virchow ViT-H/14 | 0.6897 | 0.7728 | 0.6326 | 0.6460 | 0.6291 | 0.6173 | 0.6379 |
+| 6 | H-optimus-0 | H-optimus-0 ViT-G/14-reg | 0.6897 | 0.8082 | 0.5916 | 0.6683 | 0.6485 | 0.6059 | 0.5737 |
+| 7 | GigaPath | Prov-GigaPath tile encoder ViT-G/16 | 0.6797 | 0.7948 | 0.6197 | 0.6663 | 0.6130 | 0.5802 | 0.5391 |
+| 8 | Kaiko-S/16 | Kaiko pathology ViT-S/16 | 0.6619 | 0.7737 | 0.6060 | 0.6025 | 0.5539 | 0.5907 | 0.5735 |
+| 9 | GigaPath-Flash | Prov-GigaPath-Flash tile encoder ViT-S/16 | 0.6579 | 0.7742 | 0.5569 | 0.6592 | 0.5796 | 0.6122 | 0.5493 |
+| 10 | OpenMidnight | OpenMidnight ViT-G/14-reg | 0.6356 | 0.6640 | 0.6306 | 0.6435 | 0.5829 | 0.6058 | 0.6062 |
+| 11 | DINOv2-G/14 | Meta DINOv2-G/14-reg | 0.6143 | 0.6804 | 0.5753 | 0.5320 | 0.6038 | 0.6288 | 0.5469 |
+| 12 | DINOv2-L/14 | Meta DINOv2-L/14-reg | 0.6050 | 0.6632 | 0.5667 | 0.5445 | 0.6005 | 0.6009 | 0.5454 |
+| 13 | DINOv2-S/14 | Meta DINOv2-S/14-reg | 0.6006 | 0.6480 | 0.5665 | 0.5352 | 0.6202 | 0.6220 | 0.5430 |
+| 14 | DINOv2-B/14 | Meta DINOv2-B/14-reg | 0.5993 | 0.6500 | 0.5691 | 0.5364 | 0.6062 | 0.6015 | 0.5408 |
 
 Baseline rows are frozen reference checkpoints evaluated with the same probe suite. They help calibrate the plot, but pathology-specific baselines are not valid initialization points for nanopath leaderboard submissions. The reference scripts live in `baselines/`.
 
@@ -155,18 +155,13 @@ Intensive preprocessing before model training starts, such as tile extraction, d
 - Every image tile used for training must be produced exclusively from the 12K TCGA WSIs. You can change tile extraction, filtering, sampling, curation, and preprocessing before the capped model-training run begins.
 - Public non-tile information is fair game: metadata, clinical/genomic labels, text, ontologies, annotations, or other non-image-tile signals from any public source may be used however you want.
 
-**Probe evaluation must be untouched**
-- All of `probe.py` and `benchmarking/` (note this means you *can* modify model.py however you wish!)
+**Probe evaluation and readout must be untouched**
+- All of `probe.py` and `benchmarking/`.
 - All probe config variables in `configs/main.yaml`.
+- The readout. The probe calls `model(x)` once per tile in eval mode and reads only `cls` (classification, slide and CRoMa probes) and `patches` (segmentation). That forward must be the same single pass the pretraining loss trained: final layer only, `embed_dim` wide, no extra views or passes, no eval-only branches, no statistics fitted after training, and nothing conditioned on the dataset or task. `probe.py` asserts single-pass execution, output shapes, and train/eval equality before probing; a run that passes the asserts but breaks this rule is marked invalid. The rest of `model.py` is yours to change.
 
 **Pretraining must not use pathology-specific pretrained models**
 Non-pathology pretrained models such as DINOv2 may be used for initialization, teachers, data curation, or preprocessing. Pathology-trained checkpoints such as H-optimus-0 or OpenMidnight may not initialize weights or guide training, but they may be used before and separately from training for TCGA-tile curation or preprocessing.
-
-### Labless for live tracking
-
-Full training runs auto-submit to the labless live tracker if certain criteria are met (see [How to submit to the leaderboard](#how-to-submit-to-the-leaderboard)).
-
-The script reads `summary.json` and `metrics.jsonl`, reviews `output_dir/labless_source` rather than your current working tree, and posts the local payload in `labless_submission.json` after GitHub device sign-in succeeds. W&B can be online or offline; online runs add a public W&B link, while source review always comes from the local snapshot. `AGENTS.md` and `CLAUDE.md` are excluded from Labless source packaging. The labless website, run log, and plot update automatically.
 
 ## Repository layout
 
@@ -231,21 +226,7 @@ pack_from_jpeg_dir(jpeg_dir, jpeg_dir / 'manifest.txt', Path('/data/nanopath_arr
 Packing computes tissue fractions from the saved JPEG bytes and includes the required metadata.
 Point `data.dataset_dir` in both configs at the packed Arrow directory before training.
 
-## Running
-
-Smoke (short training + full probe):
-
-```bash
-./submit/train_1gpu.sbatch configs/smoke.yaml
-# or directly on a GPU machine: `python train.py configs/smoke.yaml`
-```
-
-Full main `nanopath` recipe:
-
-```bash
-./submit/train_1gpu.sbatch configs/main.yaml
-# or directly on a GPU machine: `python train.py configs/main.yaml`
-```
+## Running on SLURM
 
 `submit/train_1gpu.sbatch` is a prompt-aware launcher when run directly: it collects Labless run name, notes, and GitHub device login before submitting itself to SLURM, then auto-submits eligible completed full runs. Calling `sbatch submit/train_1gpu.sbatch ...` bypasses that prompt and trains without auto-submit. `configs/main.yaml` is sized for an 80 GB H100 at `train.batch_size: 128`. On smaller cards you can set `train.activation_checkpointing: true` and lower `train.batch_size` if you OOM.
 
@@ -274,7 +255,7 @@ uv sync --no-group simd --group pillow
 - labless source snapshot: `project.output_dir/labless_source`.
 - labless submission payload: `project.output_dir/labless_submission.json`.
 - labless auto-submit token: `${project.output_dir}.labless_autosubmit.json` while a prompt-armed SLURM job is running; the launcher removes it after the post-run submission attempt.
-- checkpoints: rolling `latest.pt` written every `train.save_every` steps under `project.output_dir`, plus one final save at end of run. `save_every: null` (smoke) disables both; probes always get their own short-lived checkpoint regardless.
+- checkpoints: rolling `latest.pt` written every `train.save_every` steps under `project.output_dir`, then replaced with backbone-only `final.pt` (not resumable) after successful completion. Set `train.keep_full_checkpoint: true` to retain full state. `save_every: null` disables persistent saves; probes use short-lived checkpoints regardless.
 
 ## Acknowledgements
 

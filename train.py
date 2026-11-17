@@ -224,7 +224,7 @@ def update_ema(student_module, teacher_module, momentum):
 
 
 # Orchestrates one pretraining run: setup, train+probe loop, checkpoint, summary.
-def run_training_and_eval():
+def main():
     cfg = load_config()
     repo_dir = Path(__file__).resolve().parent
     labless_autosubmit_file = maybe_arm_labless_autosubmit(cfg, repo_dir)
@@ -785,12 +785,8 @@ def run_training_and_eval():
     for key, value in summary.items():
         wandb_run.summary[key] = value
     wandb_run.finish()
-    return cfg, repo_dir, output_dir, labless_autosubmit_file
 
-
-def main():
-    cfg, repo_dir, output_dir, labless_autosubmit_file = run_training_and_eval()
-    
+    # run interpretability analysis unless disabled
     interpretability_succeeded = False
     if not cfg["interpretability"]:
         print(f"{console_prefix()} interpretability disabled - skipping it.", flush=True)
@@ -801,7 +797,7 @@ def main():
         baseline_path = output_dir / "init.pt"
         cache_path = output_dir / "interpret"
         results_dir = output_dir / "interpret" / "results"
-        
+
         args = [
             sys.executable, "-m", "interpret.interpret", cfg["config_path"],
             f"checkpoint_path={checkpoint_path}", 
@@ -812,11 +808,27 @@ def main():
 
         interpretability_succeeded = subprocess.run(args, cwd=repo_dir, check=False).returncode == 0
         baseline_path.unlink(missing_ok=True)  # rm baseline model weights after interpret has finished
-        
+
         if not interpretability_succeeded:
             print(f"{console_prefix()} WARNING: interpretability failed - check logs.", file=sys.stderr, flush=True)
-        
+
     finish_labless_autosubmit(labless_autosubmit_file, output_dir, repo_dir, interpretability_succeeded)
+    # Keep recovery state until evaluation and submission succeed, then retain only
+    # the evaluated backbone. Publish and verify its weights before deleting latest.pt.
+    if save_checkpoints and step > 0 and not train_cfg.get("keep_full_checkpoint", False):
+        state_key = {"ema": "model_ema", "model": "model"}[cfg["probe"]["model_weights"]]
+        backbone = {"model_ema": teacher_backbone, "model": student_backbone}[state_key]
+        payload = {state_key: cpu_state(backbone), "config": cfg, "step": step,
+                   "examples_seen": examples_seen, "checkpoint_type": "backbone_only"}
+        final_path = output_dir / "final.pt"
+        temporary = final_path.with_suffix(".pt.tmp")
+        torch.save(payload, temporary)
+        saved = torch.load(temporary, map_location="cpu", weights_only=False)
+        assert saved[state_key].keys() == payload[state_key].keys()
+        assert all(torch.equal(value, saved[state_key][key]) for key, value in payload[state_key].items())
+        os.replace(temporary, final_path)
+        latest_checkpoint_path.unlink()
+        print(f"{console_prefix()} Checkpoint  retained backbone: final.pt; removed full training state", flush=True)
 
 
 if __name__ == "__main__":

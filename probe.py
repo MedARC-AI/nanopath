@@ -1,5 +1,7 @@
-# Inline downstream probes. Protocol v2 weights classification/segmentation/
-# progression/mutation/survival/robustness at 30/15/17.5/15/7.5/15 percent.
+# Inline downstream probes. Protocol v3 weights classification/segmentation/
+# progression/mutation/survival/robustness at 40/20/10/10/5/15 percent and
+# fixes the nanopath readout to one eval forward per tile: final-layer CLS for
+# pooled probes and CRoMa, patch tokens for segmentation.
 #
 # train.py can snapshot a probe checkpoint at each FLOP milestone to run
 # this file as a subprocess (`python probe.py req.json`), whereby training pauses,
@@ -31,13 +33,12 @@ Image.MAX_IMAGE_PIXELS = None  # Probe ROIs are trusted local pathology images, 
 
 
 BENCHMARKING_DIR = Path(__file__).resolve().parent / "benchmarking"
-PROBE_PROTOCOL_VERSION = 2
+PROBE_PROTOCOL_VERSION = 3
 SCORE_WEIGHTS = (
-    ("classification_mean_f1", 0.30), ("seg_mean_f1", 0.15), ("slide_mean_auc", 0.175),
-    ("auc_mean", 0.15), ("survival_mean_cindex", 0.075), ("robustness_mean", 0.15),
+    ("classification_mean_f1", 0.40), ("seg_mean_f1", 0.20), ("slide_mean_auc", 0.10),
+    ("auc_mean", 0.10), ("survival_mean_cindex", 0.05), ("robustness_mean", 0.15),
 )
-THUNDER_V2 = json.loads((BENCHMARKING_DIR / "thunder_v2.json").read_text())
-assert THUNDER_V2["protocol_version"] == PROBE_PROTOCOL_VERSION
+THUNDER_V2 = json.loads((BENCHMARKING_DIR / "thunder_v2.json").read_text())  # manifest unchanged since protocol v2
 assert all(set(spec) == {"root", "train", "val"} for family in ("classification", "segmentation") for spec in THUNDER_V2[family].values())
 EMBED_BATCH_SIZE = 512
 # Fork preserves local dataset classes and configured roots on Python 3.14.
@@ -105,7 +106,7 @@ def console_prefix():
     return f"{time.strftime('%H:%M:%S')} {os.environ.get('SLURM_JOB_ID', str(os.getpid()))}"
 
 
-# Keep all protocol-v2 sidecar files under one probe directory.
+# Keep all probe sidecar files under one probe directory.
 def probe_paths(output_dir):
     probe_dir = Path(output_dir) / "probe"
     return {
@@ -141,7 +142,7 @@ def prepare_probe_state(cfg, output_dir):
         path.mkdir(parents=True, exist_ok=True)
     groups = {request_key: [str(x) for x in cfg["probe"].get(cfg_key, [])] for request_key, (cfg_key, _) in TASK_FIELDS.items()}
     data = {
-        "version": 18,
+        "version": 20,
         "probe_protocol_version": PROBE_PROTOCOL_VERSION,
         "family": str(cfg["project"]["family"]),
         "count": int(cfg["probe"]["count"]),
@@ -347,8 +348,8 @@ def embed_classification_dataset(model, mean, std, dataset, split, device, trans
     embs, labels = [], []
     # THUNDER's published adapter extracts frozen tile embeddings in fp16.
     autocast = torch.autocast(device_type="cuda", dtype=torch.float16)
-    # probe_features() supplies each encoder's published frozen representation;
-    # none of the DINO/iBOT training heads are involved.
+    # probe_features() is final-layer CLS for nanopath models and each baseline's published
+    # frozen representation; none of the DINO/iBOT training heads are involved.
     with torch.no_grad():
         for x, y in loader:
             x = x.to(device, non_blocking=True)
@@ -463,19 +464,6 @@ def embed_segmentation_dataset(model, mean, std, dataset, split, device, transfo
                         images = torch.stack(batch_images).to(device)
                         with autocast:
                             batch_feats = model.encode_image((images - mean) / std)
-                        # Preserve model-defined test-time feature aggregation while preventing an
-                        # upsampled token grid from multiplying the shared decoder's quadratic cost.
-                        # Ordinary outputs are unchanged; expanded spatial grids are area-pooled to
-                        # the encoder's native patch grid while every aggregated channel is retained.
-                        if hasattr(model, "patch_size"):
-                            native_h, native_w = images.shape[-2] // model.patch_size, images.shape[-1] // model.patch_size
-                            if batch_feats.shape[1] != native_h * native_w:
-                                side = int(batch_feats.shape[1] ** 0.5)
-                                assert side * side == batch_feats.shape[1]
-                                batch_feats = F.adaptive_avg_pool2d(
-                                    batch_feats.transpose(1, 2).reshape(len(images), batch_feats.shape[-1], side, side),
-                                    (native_h, native_w),
-                                ).flatten(2).transpose(1, 2)
                         batch_feats = batch_feats.float()
                         batch_scales = batch_feats.abs().amax(dim=-1, keepdim=True).clamp_min_(1e-12).div_(127).to(torch.float16)
                         feats.append(torch.clamp(torch.round(batch_feats / batch_scales.float()), -127, 127).to(torch.int8).cpu())
@@ -611,8 +599,8 @@ def croma_score(embeddings, meta, device):
     }
 
 
-# CRoMa over held-out Camelyon + Tolkach ESCA. The adapter remains fixed to PathoROB's
-# final CLS plus mean patch tokens rather than the model-defined pooled probe features.
+# CRoMa over held-out Camelyon + Tolkach ESCA, on the same probe_features() readout as the
+# tile and slide probes: final-layer CLS for nanopath models.
 def inline_pathorob(model, mean, std, device, transform):
     import io
     import numpy as np
@@ -643,8 +631,7 @@ def inline_pathorob(model, mean, std, device, transform):
             for batch in loader:
                 x = batch.to(device, non_blocking=True)
                 with autocast:
-                    o = model((x - mean) / std)
-                    feat = torch.cat([o["cls"], o["patches"].mean(dim=1)], dim=-1)
+                    feat = model.probe_features((x - mean) / std)
                 embs.append(feat.float().cpu().numpy())
         out[name] = croma_score(np.concatenate(embs), meta, device)
     return out, time.monotonic() - started_at
@@ -730,6 +717,7 @@ def inline_pathobench_survival(model, mean, std, dataset, device, transform):
     from sklearn.exceptions import ConvergenceWarning
     from sklearn.preprocessing import StandardScaler
     from sksurv.linear_model import CoxnetSurvivalAnalysis
+    from sksurv.metrics import concordance_index_censored
 
     started_at = time.monotonic()
     spec = json.loads((BENCHMARKING_DIR / f"{dataset}.json").read_text())
@@ -803,17 +791,16 @@ def inline_pathobench_survival(model, mean, std, dataset, device, transform):
             scaler = StandardScaler().fit(X[tr])
             X_train = scaler.transform(X[tr])
             X_val = scaler.transform(X[va])
-            alpha_max = CoxnetSurvivalAnalysis(
+            head = CoxnetSurvivalAnalysis(
                 l1_ratio=SURVIVAL_COXNET_L1_RATIO, n_alphas=2,
                 alpha_min_ratio=0.99, max_iter=SURVIVAL_COXNET_MAX_ITER,
-            ).fit(X_train, y[tr]).alphas_[0]
+            ).fit(X_train, y[tr])
+            alpha_max = head.alphas_[0]
+            # Warm-start decreasing penalties; cold weak-penalty fits can stall on wide embeddings.
+            head.set_params(alphas=alpha_max * np.asarray([1.0, *reversed(SURVIVAL_COXNET_ALPHA_FRACTIONS)])).fit(X_train, y[tr])
             for fraction in SURVIVAL_COXNET_ALPHA_FRACTIONS:
                 alpha = alpha_max * fraction
-                head = CoxnetSurvivalAnalysis(
-                    alphas=[alpha], l1_ratio=SURVIVAL_COXNET_L1_RATIO,
-                    max_iter=SURVIVAL_COXNET_MAX_ITER,
-                ).fit(X_train, y[tr])
-                folds.append({"alpha_fraction": fraction, "alpha": float(alpha), "alpha_max": float(alpha_max), "val_cindex": float(head.score(X_val, y[va])), "train_cases": len(tr), "val_cases": len(va)})
+                folds.append({"alpha_fraction": fraction, "alpha": float(alpha), "alpha_max": float(alpha_max), "val_cindex": float(concordance_index_censored(pool_events[va], pool_days[va], head.predict(X_val, alpha=alpha))[0]), "train_cases": len(tr), "val_cases": len(va)})
     val_cindex = float(np.mean([f["val_cindex"] for f in folds]))
     return {
         "val_cindex": val_cindex,
@@ -989,11 +976,8 @@ def slide_linear_auc_metrics(embs, labels):
 
 # Worker entry point launched by queue_probe_job(); owns model loading and probe aggregation.
 def worker_probe_transforms(cfg):
-    # Frozen baselines set transform_policy explicitly; Nanopath training runs fall back to model.py.
-    policy = cfg["probe"].get("transform_policy")
-    if policy is None:
-        from model import probe_transforms
-        return probe_transforms()
+    # Frozen baselines set transform_policy explicitly; nanopath checkpoints are always square_224.
+    policy = cfg["probe"].get("transform_policy", "square_224")
     from torchvision import transforms
     from torchvision.transforms import InterpolationMode
     image = {
@@ -1045,6 +1029,21 @@ def run_probe_job(request_path):
         # Recipes can compare live model weights or EMA weights without changing probe code.
         state_key = {"ema": "model_ema", "model": "model"}[str(cfg["probe"]["model_weights"])]
         model.load_state_dict(checkpoint[state_key], strict=True)
+        # Protocol v3 readout: probes see only model(x)["cls"] and model(x)["patches"]. On a fixed
+        # batch, every weight-carrying module must run once per pass on exactly these 4 tiles, the
+        # outputs must be final-width tokens on the native grid, and eval must equal train mode.
+        model.probe_features, model.encode_image = (lambda x: model(x)["cls"]), (lambda x: model(x)["patches"])
+        x, calls = torch.randn(4, 3, 224, 224, generator=torch.Generator().manual_seed(0)).to(device), defaultdict(list)
+        hooks = [m.register_forward_hook(lambda m, a, o, n=n: calls[n].append(len(a[0]))) for n, m in model.named_modules() if next(m.parameters(recurse=False), None) is not None]
+        with torch.no_grad():
+            out, ref = model(x), model.train()(x)
+        model.eval()
+        for hook in hooks:
+            hook.remove()
+        bad = {n: c for n, c in calls.items() if c != [4, 4]}
+        assert not bad, f"v3 readout: one forward pass per tile, but these modules saw other batch sizes: {bad}"
+        assert out["cls"].shape == (4, model.embed_dim) and out["patches"].shape == (4, (224 // model.patch_size) ** 2, model.embed_dim), "v3 readout: final-layer CLS and patch tokens only"
+        assert all(torch.equal(out[k], ref[k]) for k in ("cls", "patches")), "v3 readout: eval forward must equal the training forward"
     del checkpoint
     model.to(device)
     for param in model.parameters():

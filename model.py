@@ -14,7 +14,6 @@ from functools import partial
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision import transforms
 
 
 # (dim, depth, heads, pretrain_grid, patch, ffn, pos_has_cls, weight URL[, registers]) per variant.
@@ -24,13 +23,6 @@ VIT_VARIANTS = {
     "dinov2_vitl14_reg": (1024, 24, 16, 37, 14, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitl14/dinov2_vitl14_reg4_pretrain.pth"),
     "dinov2_vitg14_reg": (1536, 40, 24, 37, 14, "swiglu", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitg14/dinov2_vitg14_reg4_pretrain.pth"),
 }
-
-
-def probe_transforms():
-    # Default for Nanopath-trained checkpoints; baseline scripts override this in their request config.
-    transform = transforms.Compose([transforms.Resize((224, 224), antialias=True), transforms.ToTensor()])
-    # Keep the two return slots because probe.py separates tile-image and slide/patch-bag probes.
-    return transform, transform
 
 
 # Stochastic depth: keep_prob bernoulli on the residual branch, scaled to preserve mean.
@@ -158,7 +150,8 @@ class ViT(nn.Module):
             return torch.cat([x[:, :1], regs, x[:, 1:]], dim=1)
         return torch.cat([cls, regs, x + self._interpolate_pos_embed(h, w)], dim=1)
 
-    # Return semantic token groups used by train.py and probe.py.
+    # Return semantic token groups used by train.py and probe.py. probe.py reads `cls` and `patches`
+    # from one eval pass per tile and asserts this forward is single-pass and identical in train mode.
     # `checkpoint=True` re-runs each block under torch.utils.checkpoint to trade compute for memory;
     # useful when the 1-GPU batch of 128 (2 globals + 8 locals) does not fit in 80 GB.
     def forward(self, x, masks=None, checkpoint=False):
@@ -194,11 +187,10 @@ class ViT(nn.Module):
             module.register_forward_hook(partially_applied_hook)
         return list(modules)
 
-    # Default probe contract: encode_image returns patches for segmentation
-    # and probe_features returns CLS for pooled probes. Recipes may override either method
-    # to define their test-time feature aggregation without changing the locked probe suite.
-    def encode_image(self, x, checkpoint=False):
-        return self(x, checkpoint=checkpoint)["patches"]
+    # Readout used by the frozen baselines built on this ViT. For nanopath checkpoints probe.py
+    # replaces both with forward()'s `patches` and `cls`, so overriding them has no effect.
+    def encode_image(self, x):
+        return self(x)["patches"]
 
     def probe_features(self, x):
         return self(x)["cls"]

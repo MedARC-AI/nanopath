@@ -11,9 +11,14 @@ The first is an implementation-parity check. The second is post-freeze evidence
 about proxy fidelity, not permission to tune weights or datasets against test
 outcomes.
 
+The records below were measured under protocol v2, whose robustness probe read
+CLS concatenated with the mean patch token and whose final score weighted the
+six families 30/15/17.5/15/7.5/15. They have not been repeated for v3's CLS-only
+robustness readout and weights.
+
 The selected THUNDER manifest SHA-256 is
 `fc9a92587f78078c1d3c880f95a795ff229affb61c67de1a7886221dc99a0b8b`.
-The 30/15/17.5/15/7.5/15 weights are a fixed scoring-policy choice.
+The 40/20/10/10/5/15 weights are a fixed scoring-policy choice.
 
 ## Leakage and manifest audit
 
@@ -112,8 +117,7 @@ H100, not a promise for arbitrary hardware.
 
 A maintainer reruns promising candidates with three different randomly
 selected training seeds. The median run must beat the incumbent by at least
-**0.004** to become the validated leader. The discovery run is excluded;
-`robust-norm-s9876` is the approved exception. This is a fixed promotion
+**0.004** to become the validated leader. The discovery run is excluded. This is a fixed promotion
 policy, not a margin recalculated from each candidate's measured variance.
 
 ### Progression stability
@@ -122,10 +126,10 @@ Across six three-seed groups (18 completed checkpoints), UCLA's pooled
 within-group sample SD is 0.011269. The groups cover related main,
 robust-norm and drop-local recipes on the same 90-slide cohort.
 Observed within-group AUC ranges are 0.015750–0.025879, contributing
-0.002756–0.004529 to the weighted score. Repeated splits do not eliminate
+0.001575–0.002588 to the weighted score. Repeated splits do not eliminate
 training-seed variability or the need for independent training runs.
 
-Seven 1,000-repeat checks yield weighted SD 0.00030–0.00050 across disjoint
+Seven 1,000-repeat checks yield weighted SD 0.00017–0.00029 across disjoint
 100-repeat blocks. One hundred complete-protocol label permutations each
 for main and UNI2-h average 0.48908 and 0.49258 AUC. The 300-fit head takes
 about 3 seconds for main and at most 27 seconds across the 20 reference
@@ -172,22 +176,25 @@ Across those 12 pre-existing composite rows, the final score never places a
 studied nanopath checkpoint above GigaPath or H-Optimus-0 when the composite
 places it below that baseline.
 
-An expanded 22-model table adds H0-mini, DINOv2-S/B/L/G, Kaiko-S/16, and
+An expanded 24-model table adds H0-mini, DINOv2-S/B/L/G, Kaiko-S/16, and
 GigaPath-Flash, plus the validated GuruTurbo1.0 (seed 3539) and robust-huelocal
-(seed 7974) medians:
+(seed 7974) medians, and the unvalidated
+[joint-power8-s22665](https://labless.dev/runs/run_sub_8ffed95604) and
+[PCGrad (seed 20344)](https://labless.dev/runs/run_sub_f2d430a19a) discovery checkpoints:
 
-| Comparison, 22 models | Pearson | Kendall |
+| Comparison, 24 models | Pearson | Kendall |
 |---|---:|---:|
-| Classification / THUNDER | 0.986 | 0.948 |
-| Segmentation / THUNDER | 0.869 | 0.735 |
-| Final score / THUNDER classification + segmentation | 0.907 | 0.740 |
-| Final score / HEST | 0.801 | 0.636 |
-| Final score / CPTAC classification | 0.800 | 0.697 |
+| Classification / THUNDER | 0.983 | 0.935 |
+| Segmentation / THUNDER | 0.868 | 0.698 |
+| Final score / THUNDER classification + segmentation | 0.827 | 0.638 |
+| Final score / HEST | 0.623 | 0.464 |
+| Final score / CPTAC classification | 0.807 | 0.688 |
 
 The exact comparison input is
 [proxy-fidelity data](proxy_fidelity_v2.csv). Final scores use the assembled
 fixed result, including PanNuke and both SegPath tasks. THUNDER segmentation
-uses complete same-checkpoint results for all 22 models.
+uses complete same-checkpoint results for all 24 models. The README figures
+highlight PCGrad in red and joint-power8 in green.
 
 ## Random-feature null audit
 

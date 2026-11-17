@@ -36,7 +36,8 @@ are inference inputs, not additional labels. SurGen and LEOPARD use at most 768
 raster/source-spaced tiles per slide to bound runtime; UCLA and CPTAC-PDA use
 their full prepared grids.
 
-For every task, the frozen encoder's `probe_features()` runs under fp16 autocast
+For every task, the frozen encoder's final-layer CLS readout (a frozen
+baseline's published `probe_features()`) runs under fp16 autocast
 and the resulting float32 tile vectors are averaged to slides. Survival then
 averages multiple slide vectors belonging to the same case. No attention MIL
 model or end-to-end finetuning is used.
@@ -77,9 +78,11 @@ validation cases. Within each fold:
 
 1. Fit `StandardScaler` on training cases only and transform train/validation.
 2. Estimate the fold's CoxNet `alpha_max` on training data.
-3. Fit three separate CoxNet heads at `0.1`, `0.2`, and `0.7` times that
-   `alpha_max`, with `l1_ratio=0.5` and `max_iter=100000`.
-4. Report Harrell's validation c-index for every fraction.
+3. Fit one descending CoxNet path at `1.0`, `0.7`, `0.2`, and `0.1` times that
+   `alpha_max`, with `l1_ratio=0.5` and `max_iter=100000`. Each solution initializes
+   the next; this avoids unstable cold starts on wide, correlated embeddings.
+4. Report Harrell's validation c-index at the exact fitted `0.1`, `0.2`, and
+   `0.7` fractions. The `1.0` anchor is not scored.
 
 `survival_mean_cindex` averages every dataset × alpha fraction × fold c-index.
 No best alpha is selected. Convergence warnings and numerical errors fail the
@@ -102,5 +105,5 @@ It does mean the final score is not completely domain-independent of CPTAC.
 Consequently, correlation with official CPTAC classification is treated as
 post-freeze external validation of transfer and ordering, not as an untouched
 estimate of generalization to an unseen institution or organ. CPTAC-PDA
-survival contributes half of the 7.5%-weighted survival family, or 3.75% of the
+survival contributes half of the 5%-weighted survival family, or 2.5% of the
 final scalar.

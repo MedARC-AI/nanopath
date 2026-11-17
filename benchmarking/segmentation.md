@@ -35,11 +35,11 @@ terms continue to govern the mirrored selected assets.
 
 ## Dense feature cache
 
-The frozen encoder runs under fp16 autocast. `encode_image()` supplies patch
-tokens, register tokens are removed, and all remaining model-defined feature
-channels are retained. A recipe may concatenate layers or views. If that also
-expands the spatial token grid, adaptive area pooling returns it to the native
-`image_size / patch_size` grid so decoder attention does not grow quadratically.
+The frozen encoder runs under fp16 autocast. The decoder input is the
+final-layer patch tokens on the native `image_size / patch_size` grid, with CLS
+and register tokens removed: `model(x)["patches"]` for nanopath models and the
+published `encode_image()` adapter for frozen baselines. This matches THUNDER,
+whose segmentation probe consumes the same final-layer spatial tokens.
 
 Each patch vector is cached as signed int8 with its own fp16 absolute-maximum
 scale and dequantized in decoder batches. This is a storage/runtime device, not
