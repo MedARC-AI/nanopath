@@ -114,7 +114,7 @@ probe:
     surgen: /data/surgen
     ucla_lung: /data/ucla-lung
 
-# Interpretability rig, see interpret/README.md
+# interpretability module, see interpret/README.md
 interpret:
   seed: 42 # the one seed: samplers and all random number generators
   checkpoint_path: null  # required at invocation time; model to be evaluated in interpret
