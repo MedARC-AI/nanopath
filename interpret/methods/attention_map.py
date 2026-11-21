@@ -51,7 +51,7 @@ class AttentionMap:
                 self._assert_attn(attn)
                 attn = attn.squeeze(0).cpu()  # remove singleton batch_dim again; CPU, as the results contract requires
 
-                rgb_image = transformed[0]  # (3, H, W) in [0, 1]
+                rgb_image = transformed[0].cpu()  # (3, H, W) in [0, 1]
                 tiles_results[idx] = {"rgb": rgb_image, "attn": attn}
 
         self.results = {"tiles": tiles_results, "tile_indices": self._tile_indices}
