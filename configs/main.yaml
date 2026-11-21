@@ -93,26 +93,26 @@ probe:
   robustness_datasets:
     - pathorob
   dataset_roots:
-    bach: /data/thunder-data/bach
-    bracs: /data/thunder-data/bracs
-    break_his: /data/thunder-data/break_his
-    crc: /data/thunder-data/crc
-    esca: /data/thunder-data/esca
-    mhist: /data/thunder-data/mhist
-    pcam: /data/thunder-data/patch_camelyon
-    spider_breast: /data/thunder-data/spider_breast
-    spider_colorectal: /data/thunder-data/spider_colorectal
-    spider_skin: /data/thunder-data/spider_skin
-    spider_thorax: /data/thunder-data/spider_thorax
-    wilds: /data/thunder-data/wilds
-    pannuke: /data/thunder-data/pannuke
-    segpath_epithelial: /data/thunder-data/segpath_epithelial
-    segpath_lymphocytes: /data/thunder-data/segpath_lymphocytes
-    cptac_pda_os: /data/CPTAC-PDA
-    leopard_bcr: /data/leopard_bcr
-    pathorob: /data/pathorob
-    surgen: /data/surgen
-    ucla_lung: /data/ucla-lung
+    bach: /content/drive/MyDrive/nanopath/probes/bach
+    bracs: /content/drive/MyDrive/nanopath/probes/bracs
+    break_his: /content/drive/MyDrive/nanopath/probes/break_his
+    crc: /content/drive/MyDrive/nanopath/probes/crc
+    esca: /content/drive/MyDrive/nanopath/probes/esca
+    mhist: /content/drive/MyDrive/nanopath/probes/mhist
+    pcam: /content/drive/MyDrive/nanopath/probes/pcam
+    spider_breast: /content/drive/MyDrive/nanopath/probes/spider_breast
+    spider_colorectal: /content/drive/MyDrive/nanopath/probes/spider_colorectal
+    spider_skin: /content/drive/MyDrive/nanopath/probes/spider_skin
+    spider_thorax: /content/drive/MyDrive/nanopath/probes/spider_thorax
+    wilds: /content/drive/MyDrive/nanopath/probes/wilds
+    pannuke: /content/drive/MyDrive/nanopath/probes/pannuke
+    segpath_epithelial: /content/drive/MyDrive/nanopath/probes/segpath_epithelial
+    segpath_lymphocytes: /content/drive/MyDrive/nanopath/probes/segpath_lymphocytes
+    cptac_pda_os: /content/drive/MyDrive/nanopath/probes/cptac_pda_os
+    leopard_bcr: /content/drive/MyDrive/nanopath/probes/leopard_bcr
+    pathorob: /content/drive/MyDrive/nanopath/probes/pathorob
+    surgen: /content/drive/MyDrive/nanopath/probes/surgen
+    ucla_lung: /content/drive/MyDrive/nanopath/probes/ucla_lung
 
 # interpretability module, see interpret/README.md
 interpret:
@@ -126,11 +126,11 @@ interpret:
     pathorob_camelyon:
       stratification_dimension: biological_class # sample field the sampler stratifies over
   extract:
-    num_samples: 10000 # stratified subsample of the dataset
+    num_samples: 1000 # stratified subsample of the dataset
     batch_size: 128
     num_workers: 2 # image decoding only
     layer_stride: 4 # every n-th layer, counted from the last
-  methods: [effective_rank, cka, linear_probe, layer_inversion, relax, tsne]
+  methods: [attention_map]
   cka:
     max_samples: 10000 # random subset of the extracted examples (at most this many); the tables are n x n
   linear_probe:
