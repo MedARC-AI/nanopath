@@ -10,6 +10,7 @@
 # (~15 lines) so we have zero runtime dependency on the dinov2 codebase.
 
 from functools import partial
+import math
 
 import torch
 import torch.nn as nn
@@ -49,10 +50,15 @@ class Attention(nn.Module):
         self.qkv = nn.Linear(dim, dim * 3, bias=True)
         self.proj = nn.Linear(dim, dim, bias=True)
 
-    def forward(self, x):
+    def get_qkv(self, x):
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.heads, C // self.heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
+        return q, k, v
+
+    def forward(self, x):
+        B, N, C = x.shape
+        q, k, v = self.get_qkv(x)
         out = F.scaled_dot_product_attention(q, k, v).transpose(1, 2).reshape(B, N, C)
         return self.proj(out)
 
@@ -169,12 +175,35 @@ class ViT(nn.Module):
         }
 
     # Forward hook body for the interpretability rig: stores the patch and CLS tokens of a layer's output.
-    # PyTorch passes (module, inputs, output) to every hook; only `output` is needed here.
-    def _store_tokens(self, storage_dict, name, _module, _inputs, output):
-        storage_dict[name] = {
-            "cls": output[:, 0, :].unsqueeze(1).detach(),  # need unsqueeze because we are indexing instead of slicing
-            "patch": output[:, 1 + self.registers :, :].detach(),
-        }
+    # On the last block, records the softmaxed CLS-to-patch attention weights per head.
+    def _store_information(self, storage_dict, name, module, inputs, output):
+        cls_token = output[:, 0, :].unsqueeze(1).detach()  # need unsqueeze because we are indexing instead of slicing
+        patch_tokens = output[:, 1 + self.registers :, :].detach()
+        data = {"cls": cls_token, "patch": patch_tokens}
+
+        if module is self.blocks[-1]:
+            # replay the forward pass of the Block until we obtain the attention weights
+
+            # as can be seen in Block we first need to apply LayerNorm
+            # inputs is PyTorch's tuple of positional args - in this case (x,) ie inputs[0] is the input tensor x
+            tokens_entering_attn = module.norm1(inputs[0])
+
+            queries, keys, _values = module.attn.get_qkv(tokens_entering_attn)  # all have shape (B, heads, seq_len, head_dim)
+            head_dim = queries.shape[-1]
+
+            # swap dimensions to prepare the matmul: inner dimensions have to match ie make head_dim and head_dim match
+            keys = keys.transpose(2, 3)  # (B, heads, head_dim, seq_len)
+            # B and heads are the dims over which the matmul is parallelized over as matmul only operates on the last two dims 
+            # of the tensors - ie matmul computation only occurs between (seq_len, head_dim) x (head_dim, seq_len).
+            # outer dimensions of tensors in matmul computation (= seq_len and seq_len) define size of matmul ouput.
+            scores = queries @ keys  # (B, heads, seq_len, seq_len)
+            scaled = scores / math.sqrt(head_dim)  # (B, heads, seq_len, seq_len)
+            attention_weights = F.softmax(scaled, dim=-1)  # (B, heads, seq_len, seq_len)
+
+            cls_to_patches = attention_weights[:, :, 0, 1 + self.registers :]
+            data["attn"] = cls_to_patches.detach()
+
+        storage_dict[name] = data
 
     def register_interpretability_hooks(self, storage_dict):
         # Returns the hooked layer keys in forward order; the contract is in interpret/README.md.
@@ -182,8 +211,8 @@ class ViT(nn.Module):
         for i, block in enumerate(self.blocks):
             modules[f"block_{i}"] = block
         modules["norm"] = self.norm  # last: it is the representation the probes consume
-        for name, module in modules.items():
-            partially_applied_hook = partial(self._store_tokens, storage_dict, name)  # PyTorch supplies the remaining args
+        for name, module in modules.items():  # the modules are the instances of the Block class (last module is nn.LayerNorm)
+            partially_applied_hook = partial(self._store_information, storage_dict, name)  # PyTorch supplies the remaining args
             module.register_forward_hook(partially_applied_hook)
         return list(modules)
 

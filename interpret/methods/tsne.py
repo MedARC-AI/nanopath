@@ -6,6 +6,8 @@ from matplotlib.figure import Figure
 from sklearn.manifold import TSNE
 from tqdm import tqdm
 
+from interpret.utils import strided_indices
+
 
 class TSNEMaps:
     def __init__(self, activation_datasets, method_cfg):
@@ -18,8 +20,7 @@ class TSNEMaps:
         num_tiles = method_cfg["num_tiles"]
         num_examples = len(first_dataset)
         assert num_tiles <= num_examples, f"tsne.num_tiles is {num_tiles}, but the extraction has only {num_examples} tiles"
-        stride = num_examples // num_tiles
-        self._tile_indices = list(range(0, num_tiles * stride, stride))
+        self._tile_indices = strided_indices(num_examples, num_tiles)
 
         # the labels of the selected tiles (the same in every layer), which the plots colour the maps by
         all_labels = first_dataset.get_block("labels", to_device=False)  # {field: (N,) integers}

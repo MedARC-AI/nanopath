@@ -18,6 +18,11 @@ from PIL import Image
 from prepare import tissue_mask
 
 
+def strided_indices(total_count, sample_count):
+    stride = total_count // sample_count
+    return list(range(0, sample_count * stride, stride))
+
+
 def encode_image_base64(image_or_bytes):
     if isinstance(image_or_bytes, (bytes, bytearray)):
         return base64.b64encode(image_or_bytes).decode()
@@ -126,7 +131,7 @@ def _render_method_plots(results_dir, method_name, results=None, prefix="plot"):
 
 
 # Writes results_dir/dashboard.html, to open with a double click: the settings of the run, then one section per method with its plots (embedded in the file,
-# so it can be moved or sent around) and the parts of that method's subsection of README.md (papers, questions, notes, ...) as toggles.
+# so it can be moved or sent around) and the questions and papers of that method's subsection of README.md as toggles (its notes on the paper(s) are private and left out of the dashboard).
 def write_dashboard(results_dir, cfg, baseline_dir=None, trained_dir=None):
     icfg = cfg["interpret"]
     readme = (Path(__file__).resolve().parent / "README.md").read_text()
@@ -178,7 +183,7 @@ def write_dashboard(results_dir, cfg, baseline_dir=None, trained_dir=None):
         method_text_match = re.search(rf"^### {method_name}\n(.*?)(?=^##|\Z)", readme, re.S | re.M)
         if method_text_match:
             method_text = method_text_match.group(1)
-            for part in re.split(r"(?m)^(?=Papers|Question)", method_text):
+            for part in re.split(r"(?m)^(?=Papers|Questions?|Notes on the paper)", method_text):
                 if part.strip() and not part.strip().startswith("Notes on the paper"):
                     title, _, part_body = part.partition(":")
                     body += f"<details><summary>{title}</summary>{markdown.markdown(part_body, extensions=['tables'])}</details>"

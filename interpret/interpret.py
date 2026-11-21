@@ -29,6 +29,7 @@ from interpret.methods.linear_probe import LinearProbe
 from interpret.methods.layer_inversion import LayerInversion
 from interpret.methods.relax import RELAX
 from interpret.methods.tsne import TSNEMaps
+from interpret.methods.attention_map import AttentionMap
 
 
 # -------------------------------------------------------------------------------------------------
@@ -312,6 +313,8 @@ def run_pipeline(checkpoint_path, results_dir, activation_cache_dir, cfg, icfg, 
         elif method_name == "tsne":
             activation_datasets = {layer: ActivationDataset(data_dir, layer, device) for layer in kept_layers}
             method = TSNEMaps(activation_datasets, icfg[method_name])
+        elif method_name == "attention_map":
+            method = AttentionMap(dataset, transform, model, device, icfg[method_name])
         else:
             raise KeyError(f"Unknown method '{method_name}'; add it to the method dispatch in main() of interpret/interpret.py")
         method.run()

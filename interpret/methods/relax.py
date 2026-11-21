@@ -8,6 +8,8 @@ from matplotlib.figure import Figure
 from torchvision import transforms
 from tqdm import tqdm
 
+from interpret.utils import strided_indices
+
 
 class RELAX:
     def __init__(self, dataset, transform, model, device, method_cfg):
@@ -20,8 +22,7 @@ class RELAX:
         # the images to analyse: num_images tiles evenly spaced through the dataset (a fixed stride, no randomness), so that every run and every checkpoint is analysed on the same tiles
         num_images = method_cfg["num_images"]
         assert num_images <= len(dataset), f"relax.num_images is {num_images}, but the dataset has only {len(dataset)} images"
-        stride = len(dataset) // num_images
-        self._image_indices = list(range(0, num_images * stride, stride))
+        self._image_indices = strided_indices(len(dataset), num_images)
 
         self.results = None
 
