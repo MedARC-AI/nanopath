@@ -22,7 +22,8 @@ from interpret.data import load_dataset, ActivationDataset
 
 # Headless plotting (figures are only saved to files): Colab exports MPLBACKEND=<notebook backend>, which is not installed in the venv.
 os.environ["MPLBACKEND"] = "agg"
-from interpret.utils import write_dashboard, tissue_masks
+from interpret.dashboard import write_dashboard
+from interpret.utils import tissue_masks
 from interpret.methods.effective_rank import EffectiveRank
 from interpret.methods.cka import CKA
 from interpret.methods.linear_probe import LinearProbe

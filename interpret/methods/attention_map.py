@@ -49,7 +49,7 @@ class AttentionMap:
 
                 attn = storage[last_block_name]["attn"]
                 self._assert_attn(attn)
-                attn = attn.squeeze(0)  # remove singleton batch_dim again
+                attn = attn.squeeze(0).cpu()  # remove singleton batch_dim again; CPU, as the results contract requires
 
                 rgb_image = transformed[0]  # (3, H, W) in [0, 1]
                 tiles_results[idx] = {"rgb": rgb_image, "attn": attn}
