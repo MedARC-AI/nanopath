@@ -130,7 +130,7 @@ interpret:
     batch_size: 128
     num_workers: 2 # image decoding only
     layer_stride: 4 # every n-th layer, counted from the last
-  methods: [attention_map]
+  methods: [attention_map, relax]
   cka:
     max_samples: 10000 # random subset of the extracted examples (at most this many); the tables are n x n
   linear_probe:

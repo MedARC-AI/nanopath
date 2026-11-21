@@ -15,11 +15,11 @@ from matplotlib import colormaps
 from PIL import Image
 
 
-def encode_image_base64(image_or_bytes):
+def encode_image_base64(image_or_bytes, format="PNG"):
     if isinstance(image_or_bytes, (bytes, bytearray)):
         return base64.b64encode(image_or_bytes).decode()
     buffer = io.BytesIO()
-    image_or_bytes.save(buffer, format="PNG")
+    image_or_bytes.save(buffer, format=format)
     return base64.b64encode(buffer.getvalue()).decode()
 
 # Style of the dashboard: the browser's own light/dark colors, a readable column, plots side by side.
@@ -42,26 +42,25 @@ summary:hover { opacity: .7; }
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; align-items: start; }
 .col { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
 pre { overflow-x: auto; }
-.layer-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; width: 100%; margin-bottom: 1.5rem; }
+.layer-row { display: grid; gap: 0.75rem; width: 100%; margin-bottom: 1.5rem; }
 .panel { display: flex; flex-direction: column; gap: .3rem; min-width: 0; font-size: .85rem; }
-.layers { position: relative; width: 100%; }
-.layers img { display: block; width: 100%; max-width: none; background: none; box-shadow: none; border-radius: 0; }
-.layers img + img { position: absolute; top: 0; left: 0; }
+.layers { width: 100%; background-size: 100% 100%; }
+.layers img { display: block; width: 100%; image-rendering: pixelated; }
 .scale { display: inline-block; width: 6rem; height: .7rem; border-radius: 3px; }
 """
 
 
-# A row of panels, one per layer: each is the input with that layer over it at half opacity, and a slider that fades the layer from 0 (only the input) to 100. The layer is
-# a (name, PNG, colour scale text) tuple, the colour scale is the CSS gradient of its colormap.
-def layer_row_html(image_png, layers, gradient):
-    image_tag = f"<img src='data:image/png;base64,{image_png}' alt='image'>"
+# One panel per layer: the input (embedded once per row as a CSS background) with the layer over it at half opacity, and a slider that sets the layer's opacity.
+# A layer is a (id, name, PNG, colour scale text) tuple; the colour scale is the CSS gradient of its colormap.
+def layer_row_html(row_id, image_jpeg, layers, gradient):
+    style = f"<style>.{row_id} {{ background-image: url(data:image/jpeg;base64,{image_jpeg}); }}</style>"
     panels = ""
     for layer_id, name, layer_png, scale_text in layers:
         overlay = f"<img id='{layer_id}' src='data:image/png;base64,{layer_png}' alt='{name}' style='opacity: 0.5'>"
         slider = f"<input type='range' min='0' max='100' value='50' oninput=\"document.getElementById('{layer_id}').style.opacity = this.value / 100\">"
         scale = f"<span><span class='scale' style='background: {gradient}'></span> {scale_text}</span>"
-        panels += f"<div class='panel'><div class='layers'>{image_tag}{overlay}</div><b>{name}</b>{slider}{scale}</div>"
-    return f"<div class='layer-row'>{panels}</div>"
+        panels += f"<div class='panel'><div class='layers {row_id}'>{overlay}</div><b>{name}</b>{slider}{scale}</div>"
+    return f"{style}<div class='layer-row' style='grid-template-columns: repeat({len(layers)}, 1fr)'>{panels}</div>"
 
 
 def colormap_gradient(name):
@@ -77,7 +76,7 @@ def relax_layers_html(relax_results, prefix="relax"):
     for image_index in relax_results["image_indices"]:
         maps = relax_results["maps"][image_index]
         image_channels_last = maps["image"].permute(1, 2, 0).numpy()  # (H, W, 3) in [0, 1]
-        image_png = encode_image_base64(Image.fromarray((image_channels_last * 255).round().astype(np.uint8)))
+        image_jpeg = encode_image_base64(Image.fromarray((image_channels_last * 255).round().astype(np.uint8)), format="JPEG")
         layers = []
         for map_name in ("importance", "uncertainty", "thresholded_importance"):
             values = maps[map_name].numpy()  # (H, W)
@@ -91,29 +90,28 @@ def relax_layers_html(relax_results, prefix="relax"):
             rgba[:, :, 3] = is_shown  # transparent where not shown
             layer_png = encode_image_base64(Image.fromarray((rgba * 255).round().astype(np.uint8)))
             layers.append((f"{prefix}_{image_index}_{map_name}", f"image {image_index}: {map_name.replace('_', ' ')}", layer_png, f"{low:.3g} to {high:.3g}"))
-        page_part += layer_row_html(image_png, layers, colormap_gradient("coolwarm"))
+        page_part += layer_row_html(f"{prefix}_{image_index}", image_jpeg, layers, colormap_gradient("coolwarm"))
     return page_part
 
 
-# The attention maps for the dashboard, one row per tile with one layer per head of the last block: the CLS-to-patch attention, upsampled (nearest, so each patch stays a square)
-# to the tile's size, with one colour scale shared by the heads of a tile.
+# The attention maps for the dashboard, one row per tile with one layer per head of the last block: the CLS-to-patch attention on the patch grid, which the browser
+# stretches over the tile with pixelated rendering (each patch stays a square), with one colour scale shared by the heads of a tile.
 def attention_layers_html(attention_results, prefix="attention"):
     colormap = colormaps["Blues"]
     page_part = ""
     for tile_index in attention_results["tile_indices"]:
         tile = attention_results["tiles"][tile_index]
         image = tile["rgb"].permute(1, 2, 0).numpy()  # (H, W, 3) in [0, 1]
-        image_png = encode_image_base64(Image.fromarray((image * 255).round().astype(np.uint8)))
+        image_jpeg = encode_image_base64(Image.fromarray((image * 255).round().astype(np.uint8)), format="JPEG")
         heads, num_patches = tile["attn"].shape
-        grid = tile["attn"].reshape(heads, 1, int(num_patches ** 0.5), -1)  # (heads, 1, g, g) for the upsampling
-        low, high = grid.min().item(), grid.max().item()
-        normalized = (grid - low) / (high - low)
-        upsampled = torch.nn.functional.interpolate(normalized, size=image.shape[:2], mode="nearest")[:, 0].numpy()  # (heads, H, W) in [0, 1]
+        grid = tile["attn"].reshape(heads, int(num_patches ** 0.5), -1).numpy()  # (heads, g, g)
+        low, high = grid.min(), grid.max()
+        normalized = (grid - low) / (high - low)  # [0, 1] shared by the heads of this tile
         layers = []
-        for head, values in enumerate(upsampled):
+        for head, values in enumerate(normalized):
             layer_png = encode_image_base64(Image.fromarray((colormap(values) * 255).round().astype(np.uint8)))
             layers.append((f"{prefix}_{tile_index}_head_{head}", f"tile {tile_index}: head {head}", layer_png, f"{low:.3g} to {high:.3g}"))
-        page_part += layer_row_html(image_png, layers, colormap_gradient("Blues"))
+        page_part += layer_row_html(f"{prefix}_{tile_index}", image_jpeg, layers, colormap_gradient("Blues"))
     return page_part
 
 
