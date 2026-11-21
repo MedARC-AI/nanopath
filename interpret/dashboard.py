@@ -42,7 +42,7 @@ summary:hover { opacity: .7; }
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; align-items: start; }
 .col { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
 pre { overflow-x: auto; }
-.layer-row { display: grid; gap: 0.75rem; width: 100%; margin-bottom: 1.5rem; }
+.layer-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; width: 100%; margin-bottom: 1.5rem; }
 .panel { display: flex; flex-direction: column; gap: .3rem; min-width: 0; font-size: .85rem; }
 .layers { width: 100%; background-size: 100% 100%; }
 .layers img { display: block; width: 100%; image-rendering: pixelated; }
@@ -60,7 +60,7 @@ def layer_row_html(row_id, image_jpeg, layers, gradient):
         slider = f"<input type='range' min='0' max='100' value='50' oninput=\"document.getElementById('{layer_id}').style.opacity = this.value / 100\">"
         scale = f"<span><span class='scale' style='background: {gradient}'></span> {scale_text}</span>"
         panels += f"<div class='panel'><div class='layers {row_id}'>{overlay}</div><b>{name}</b>{slider}{scale}</div>"
-    return f"{style}<div class='layer-row' style='grid-template-columns: repeat({len(layers)}, 1fr)'>{panels}</div>"
+    return f"{style}<div class='layer-row'>{panels}</div>"
 
 
 def colormap_gradient(name):
