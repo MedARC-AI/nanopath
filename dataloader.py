@@ -63,6 +63,14 @@ def patient_id_from_relpath(rel):
     return "-".join(rel.split("/", 1)[0].split("-")[:3])
 
 
+# Per-pixel stain concentrations (hematoxylin, eosin, DAB) of `x` (..., 3, H, W) in [0, 1], returned as (..., H, W, 3).
+def rgb_to_hed(x, hed_from_rgb):
+    rgb = x.movedim(-3, -1).clamp_min(1e-6)
+    hed = (torch.log(rgb) / LOG_1E6) @ hed_from_rgb.to(dtype=x.dtype)
+    hed = hed.clamp_min(0.0)
+    return hed
+
+
 # Lightweight stain-space jitter; this is the stain augmentation hook for pretraining tiles.
 class HEDJitter(nn.Module):
     # Store conversion matrices as buffers so transforms move with the module dtype/device if needed.
@@ -74,9 +82,7 @@ class HEDJitter(nn.Module):
 
     # Perturb HED channels, then convert back to RGB while the crop is still in [0, 1].
     def forward(self, x):
-        rgb = x.movedim(-3, -1).clamp_min(1e-6)
-        hed = (torch.log(rgb) / LOG_1E6) @ self.hed_from_rgb.to(dtype=x.dtype)
-        hed = hed.clamp_min(0.0)
+        hed = rgb_to_hed(x, self.hed_from_rgb)
         shape = (*x.shape[:-3], 1, 1, 3)
         shift = torch.randn(shape, dtype=x.dtype, device=x.device) * self.sigma
         scale = 1.0 + torch.randn(shape, dtype=x.dtype, device=x.device) * self.sigma

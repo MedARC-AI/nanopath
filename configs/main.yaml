@@ -93,23 +93,80 @@ probe:
   robustness_datasets:
     - pathorob
   dataset_roots:
-    bach: /data/thunder-data/bach
-    bracs: /data/thunder-data/bracs
-    break_his: /data/thunder-data/break_his
-    crc: /data/thunder-data/crc
-    esca: /data/thunder-data/esca
-    mhist: /data/thunder-data/mhist
-    pcam: /data/thunder-data/patch_camelyon
-    spider_breast: /data/thunder-data/spider_breast
-    spider_colorectal: /data/thunder-data/spider_colorectal
-    spider_skin: /data/thunder-data/spider_skin
-    spider_thorax: /data/thunder-data/spider_thorax
-    wilds: /data/thunder-data/wilds
-    pannuke: /data/thunder-data/pannuke
-    segpath_epithelial: /data/thunder-data/segpath_epithelial
-    segpath_lymphocytes: /data/thunder-data/segpath_lymphocytes
-    cptac_pda_os: /data/CPTAC-PDA
-    leopard_bcr: /data/leopard_bcr
-    pathorob: /data/pathorob
-    surgen: /data/surgen
-    ucla_lung: /data/ucla-lung
+    bach: /content/drive/MyDrive/nanopath/probes/bach
+    bracs: /content/drive/MyDrive/nanopath/probes/bracs
+    break_his: /content/drive/MyDrive/nanopath/probes/break_his
+    crc: /content/drive/MyDrive/nanopath/probes/crc
+    esca: /content/drive/MyDrive/nanopath/probes/esca
+    mhist: /content/drive/MyDrive/nanopath/probes/mhist
+    pcam: /content/drive/MyDrive/nanopath/probes/pcam
+    spider_breast: /content/drive/MyDrive/nanopath/probes/spider_breast
+    spider_colorectal: /content/drive/MyDrive/nanopath/probes/spider_colorectal
+    spider_skin: /content/drive/MyDrive/nanopath/probes/spider_skin
+    spider_thorax: /content/drive/MyDrive/nanopath/probes/spider_thorax
+    wilds: /content/drive/MyDrive/nanopath/probes/wilds
+    pannuke: /content/drive/MyDrive/nanopath/probes/pannuke
+    segpath_epithelial: /content/drive/MyDrive/nanopath/probes/segpath_epithelial
+    segpath_lymphocytes: /content/drive/MyDrive/nanopath/probes/segpath_lymphocytes
+    cptac_pda_os: /content/drive/MyDrive/nanopath/probes/cptac_pda_os
+    leopard_bcr: /content/drive/MyDrive/nanopath/probes/leopard_bcr
+    pathorob: /content/drive/MyDrive/nanopath/probes/pathorob
+    surgen: /content/drive/MyDrive/nanopath/probes/surgen
+    ucla_lung: /content/drive/MyDrive/nanopath/probes/ucla_lung
+
+# interpretability module, see interpret/README.md
+interpret:
+  seed: 42 # the one seed: samplers and all random number generators
+  checkpoint_path: null  # required at invocation time; model to be evaluated in interpret
+  activation_cache_dir: null  # required at invocation time; extracted activations are stored under data/<hash>
+  results_dir: null  # required at invocation time; analysis results are stored here
+  model_weights: model_ema # checkpoint key: model_ema (teacher) or model (student)
+  dataset: pathorob_camelyon
+  datasets:
+    pathorob_camelyon:
+      stratification_dimension: biological_class # sample field the sampler stratifies over
+  extract:
+    num_samples: 1000 # stratified subsample of the dataset
+    batch_size: 128
+    num_workers: 2 # image decoding only
+    layer_stride: 4 # every n-th layer, counted from the last
+  methods: [attention_map, relax]
+  cka:
+    max_samples: 10000 # random subset of the extracted examples (at most this many); the tables are n x n
+  linear_probe:
+    targets: [biological_class, medical_center, brightness, tissue_brightness, tissue_fraction, hematoxylin, eosin] 
+    lrs: [1.0e-3] 
+    weight_decays: [0.0]
+    epochs: 25 
+    batch_size: 512
+    num_workers: 8  # DataLoader worker processes that fetch the batches of the probe in parallel (CPU cores minus 1)
+    leakage_group: slide_id  # metadata field whose values are never split across train and validation 
+    folds: 2
+  layer_inversion:
+    decoders: [linear, transformer]
+    transformer: # the blocks of the transformer decoder, with the encoder's block settings
+      depth: 4
+      head_dim: 64
+      mlp_ratio: 4.0
+      drop_path: 0.0
+    lrs: [1.0e-3] 
+    weight_decays: [0.0] # a weight decay would also pull the output bias (which we rely on for compensating the omitted standardization of the target images)
+    epochs: 25 
+    batch_size: 512
+    num_workers: 8
+    stratify: biological_class # metadata field the folds are stratified on
+    leakage_group: slide_id # metadata field whose values are never split across train and validation
+    folds: 2
+    num_collage_rows: 40  # rows of the collage 
+  relax:
+    num_masks: 3000  # random masks per image (the paper picks 3000)
+    mask_batch_size: 256
+    num_images: 20  # tiles evenly spaced through the dataset 
+    grid_side_length: 7 # initial mask size (used for sampling)
+    visible_probability: 0.5  # probability that a mask pixel is visible 
+    uncertainty_threshold_scale: 1.0  # gamma of U-RELAX: the importance is kept where the uncertainty is below gamma times its median
+  tsne:
+    num_tiles: 5000  # tiles evenly spaced through the extraction (a fixed stride, no randomness)
+    perplexity: 10  # roughly the number of neighbours each point considers; the paper finds 5 to 50 robust
+  attention_map:
+    num_tiles: 16  # tiles evenly spaced through the dataset to evaluate attention patterns on

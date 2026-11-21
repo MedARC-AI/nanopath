@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import wandb
 import yaml
 
 
@@ -121,6 +122,22 @@ def main() -> int:
     env = collect_environment(opts)
     wandb_url = checked_wandb_url(summary, opts)
     artifacts = [{"kind": "wandb", "uri": wandb_url}] if wandb_url else []
+
+    if opts.get("interpretability_dashboard") == "true" and not dry_run and not validation_errors:
+        try:
+            dashboard_path = output_dir / "interpret" / "results" / "dashboard.html"
+            training_wandb = summary["wandb"]
+            training_name = training_wandb.get("name") or run_label or training_wandb["id"]
+            interpretability_run = wandb.init(
+                entity=training_wandb["entity"], project=training_wandb["project"],
+                name=f"{training_name}-interpret", job_type="interpretability", group=training_wandb["id"],
+            )
+            interpretability_run.log({"dashboard": wandb.Html(dashboard_path.read_text())})
+            interpretability_url = interpretability_run.url
+            interpretability_run.finish()
+            artifacts.append({"kind": "interpretability", "uri": interpretability_url})
+        except Exception as error:
+            print(f"warning: W&B dashboard upload failed; submitting without the interpretation artifact ({error})", file=sys.stderr)
     github_token = ""
     github_login = os.environ.get("GITHUB_USER") or getpass.getuser()
     if not dry_run and not validation_errors:
@@ -523,7 +540,8 @@ def checked_wandb_url(summary: dict[str, Any], opts: dict[str, str]) -> str:
     if url:
         parsed = urlparse(url)
         parts = [part for part in parsed.path.split("/") if part]
-        if parsed.scheme != "https" or parsed.netloc != "wandb.ai" or len(parts) != 4 or parts[2] != "runs":
+        valid_host = parsed.netloc in {"wandb.ai", "forge.coreweave.com"}
+        if parsed.scheme != "https" or not valid_host or len(parts) != 4 or parts[2] != "runs":
             raise ValueError("wandb_url must be a W&B run URL like https://wandb.ai/<entity>/<project>/runs/<run_id>")
         return str(url)
     return ""

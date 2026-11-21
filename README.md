@@ -29,7 +29,7 @@ python prepare.py download=True
 # or directly on a GPU machine: python train.py configs/smoke.yaml
 
 # train and evaluate the current nanopath recipe
-# auto-submits to Labless if config passes submission requirements and you provide run name/notes & GitHub login
+# train.py runs interpretability analysis by default and submits eligible interactive runs through the shared Labless submitter
 RUN_DIR=$PWD/data/main/my-run
 ./submit/train_1gpu.sbatch configs/main.yaml output_dir=$RUN_DIR
 # or directly on a GPU machine: python train.py configs/main.yaml output_dir=$RUN_DIR
@@ -112,7 +112,7 @@ RUN_DIR=$PWD/data/main/my-run
 The pipeline is:
 
 1. Run `./submit/train_1gpu.sbatch ...` or `python train.py ...` to start your training run. For full runs, the launcher asks for a short `run_name`, an optional experiment note naming the unique change and why, and GitHub device sign-in before scheduling the GPU job. Leaving the run name blank or failing to sign in will lead to skipping labless submission.
-2. Let `train.py` finish the final probe. The run directory will contain `summary.json`, `metrics.jsonl`, and the source snapshot written at launch under `labless_source/`. The submitter writes `labless_submission.json`, checks the run caps and locked benchmark surface, posts to `api.labless.dev`, and shows the run as `unvalidated` until maintainer validation.
+2. `train.py` runs training and the final probe, then runs interpretability analysis by default (`interpretability=false` skips it). For Labless-authorized runs, after interpretation it submits once; a produced dashboard is uploaded to W&B and linked in the Labless record. Interpretation or W&B upload failure does not block submission of the completed training run. The run directory contains `summary.json`, `metrics.jsonl`, and the source snapshot written at launch under `labless_source/`; the submitter writes `labless_submission.json`, checks the run caps and locked benchmark surface, and posts to `api.labless.dev`.
 
 Manual submission is still available for direct `python train.py` runs or copied output directories:
 

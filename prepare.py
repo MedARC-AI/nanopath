@@ -176,13 +176,18 @@ def prepare_tiles(sample_list, dataset_dir, split_seed):
     )
 
 
+# Tissue pixels of one tile `rgb` (3, H, W) in [0, 1]: white and grey background has a low saturation.
+def tissue_mask(rgb):
+    sat = (rgb.amax(0) - rgb.amin(0)) / (rgb.amax(0) + 1e-6)
+    return sat > 0.07
+
+
 # Measure decoded JPEG pixels exactly as the training loader did before caching.
 def tissue_fraction(jpeg):
     with Image.open(io.BytesIO(jpeg)) as img:
         tile = img.convert("RGB")
     rgb = v2.functional.to_image(tile).float() / 255
-    sat = (rgb.amax(0) - rgb.amin(0)) / (rgb.amax(0) + 1e-6)
-    return float((sat > 0.07).float().mean())
+    return float(tissue_mask(rgb).float().mean())
 
 
 # Pack a JPEG-on-disk dataset (the output of prepare_tiles: per-slide subdirs
